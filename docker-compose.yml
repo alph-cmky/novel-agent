@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  novel-agent:
+    build: .
+    container_name: novel-agent
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - BUDGET_MODEL=${BUDGET_MODEL:-deepseek-chat}
+      - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
+    volumes:
+      - ./novel-data:/app/novel-data
+      - ./traces:/app/traces
+    stdin_open: true
+    tty: true
+
+  chainlit:
+    build: .
+    container_name: novel-agent-ui
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - BUDGET_MODEL=${BUDGET_MODEL:-deepseek-chat}
+      - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
+    volumes:
+      - ./novel-data:/app/novel-data
+      - ./traces:/app/traces
+    command: uv run chainlit run novel_agent/api/app.py --host 0.0.0.0 --port 8000

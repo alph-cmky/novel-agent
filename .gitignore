@@ -1,0 +1,32 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data
+*.db
+chroma_data/
+
+# Environment
+.env
+.env.local
+
+# Traces
+traces/
+
+# Novel data
+novel-data/
