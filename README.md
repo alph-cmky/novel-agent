@@ -57,69 +57,6 @@ graph TD
 | `novella` | 3000 | 平衡发展，高潮在 60-70% 处 |
 | `long` | 3000 | 渐进展开，多线并进，伏笔长线回收 |
 
-## 设计决策
-
-### 为什么用 StateGraph 而非 MessageGraph？
-
-写小说需要**结构化状态**，而不仅仅是消息历史。每个 Agent 贡献不同类型的数据：草稿内容、评分、提取的实体、一致性报告。StateGraph 提供：
-
-- **类型化共享状态**（`NovelState`），所有节点可读写，对比 MessageGraph 只能追加消息
-- **条件路由**，根据评分、严重问题数量、重试次数决定下一步，线性消息传递无法做到
-- **检查点**（`MemorySaver`），支持暂停/恢复和未来回放
-
-### 为什么需要反馈闭环（而非线性 O→W→E→C→完成）？
-
-没有反馈的话，失败的章节会用**同样的 prompt** 重写——Writer 永远不知道哪里出了问题。Orchestrator Review 节点分析 Editor/Continuity 报告，生成具体可执行的重写指导：
-
-```
-失败 → Orchestrator 分析："角色语气不一致" →
-  Writer 收到："第1章设定主角是愤世嫉俗的性格，这一章突然变得乐观积极。
-  重写时保持愤世嫉俗的语气，让转变有铺垫。"
-```
-
-这就是 Agent 和脚本的区别：系统在重试之前**推理失败原因**。
-
-### 为什么用 `interrupt()` 实现 Human-in-the-loop？
-
-`human_review_node` 使用 LangGraph 的 `interrupt()` **暂停**图执行。调用方（CLI 或 Chainlit）捕获 `GraphInterrupt`，向人类展示草稿和报告，然后用 `Command(resume=feedback)` 恢复执行。
-
-这个模式展示了：
-- **非阻塞图执行**——图不是轮询等待，而是挂起
-- **结构化反馈**——人类输入回流到 Agent 流水线（Orchestrator Review → Writer）
-- **双界面**——同一个图、同一个 interrupt，不同 UI（CLI 交互式 vs. Chainlit 按钮式）
-
-### 为什么选 ChromaDB 做长期记忆？
-
-- **原生向量存储**：章节以向量形式存储，支持语义检索。Writer 的 `search_context` 工具通过相似度搜索查询"角色 X 在前文章节发生了什么"
-- **零依赖**：嵌入式模式，无需独立服务，随 Python 进程运行
-- **取舍**：不如 pgvector/Weaviate 适合 1000+ 章的超长篇，但目标场景完全够用。`hosted` 扩展组提供了 pgvector 迁移路径
-
-### 为什么双模型路由？
-
-创作需要强模型（GPT-4、Claude）。结构化分析（审查、一致性检查、实体提取）用便宜模型（DeepSeek、GPT-4o-mini）即可。`ModelRouter` 按任务分配：
-
-| TaskClass | 模型 | Temperature | 用途 |
-|-----------|------|-------------|------|
-| `CREATIVE` | `QUALITY_MODEL` | 0.9 | Writer |
-| `STRUCTURAL` | `BUDGET_MODEL` | 0.3 | Orchestrator |
-| `REVIEW` | `BUDGET_MODEL` | 0.1 | Editor, Continuity |
-| `EXTRACTION` | `BUDGET_MODEL` | 0.1 | Worldbuilding |
-
-关键设计：`resolve()` **每次调用时**读取环境变量，而非初始化时——支持运行时切换模型无需重启。
-
-### 为什么 3 层输出校验？
-
-LLM 的 JSON 输出不可靠。校验流水线（`schema/parser.py` + `schema/validator.py`）处理：
-1. **直接解析** — 合法的 JSON
-2. **Markdown 提取** — ``` 代码块中的 JSON（instruct 模型常见）
-3. **正则兜底** — 从非结构化文本中提取键值对
-4. **强制转换** — 修复常见问题（字符串分数 → int、缺少列表包装）
-5. **默认值** — 缺失字段填入安全默认值
-
-### 为什么 Writer 要调工具？
-
-Writer 不只是生成文本——它使用 `search_context` 工具在写作前查询 ChromaDB 获取相关前文片段。这对长篇小说至关重要：Writer 无法在上下文中容纳 50+ 章内容，但可以检索当前章节需要的关键信息。
-
 ## 快速开始
 
 ### 环境要求
