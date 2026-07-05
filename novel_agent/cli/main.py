@@ -134,20 +134,42 @@ def cli():
     "--chapter-words", "-w", default=3000, type=int,
     help="Target words per chapter",
 )
+@click.option(
+    "--mode", "-m", default=None,
+    type=click.Choice([
+        "linear", "unit_arc", "hybrid",
+        "multi_perspective", "ensemble",
+    ]),
+    help="Narrative mode (default: linear)",
+)
+@click.option(
+    "--perspective", "-p", default="",
+    type=click.Choice([
+        "first_person", "third_person_limited",
+        "third_person_omniscient", "multi_perspective", "ensemble",
+    ]),
+    help="Narrative perspective",
+)
 @click.option("--dir", "-d", default=None, help="Project directory")
 def init(
     name: str, title: str, genre: str,
-    length: str, chapter_words: int, dir: str | None,
+    length: str, chapter_words: int,
+    mode: str | None, perspective: str, dir: str | None,
 ):
     """Initialize a new novel project."""
     mgr = _get_manager(dir)
     pid = mgr.init_project(
         name=name, title=title or name, genre=genre,
         story_length=length, target_chapter_words=chapter_words,
+        narrative_mode=mode, narrative_perspective=perspective,
     )
     project_dir = Path(dir) if dir else DEFAULT_PROJECT_DIR
     click.echo(f"Project '{name}' created (id={pid})")
     click.echo(f"  Length: {length}, Chapter words: {chapter_words}")
+    if mode:
+        click.echo(f"  Mode: {mode}")
+    if perspective:
+        click.echo(f"  Perspective: {perspective}")
     click.echo(f"  Data directory: {project_dir.absolute()}")
 
 
@@ -207,6 +229,8 @@ def write(
         "chapter_outline": outline,
         "story_length": story_length,
         "target_chapter_words": target_words,
+        "narrative_mode": proj.get("narrative_mode") if proj else None,
+        "narrative_perspective": proj.get("narrative_perspective", "") if proj else "",
         "draft_content": "",
         "editor_report": {},
         "continuity_report": {},
@@ -315,6 +339,8 @@ def quick(
         proj = mgr.get_project(project_id)
 
     target_words = chapter_words or (proj.get("target_chapter_words", 3000) if proj else 3000)
+    narrative_mode = proj.get("narrative_mode") if proj else None
+    narrative_perspective = proj.get("narrative_perspective", "") if proj else ""
     click.echo(f"Quick write Chapter {chapter} ({target_words} words)...")
 
     ctx = mgr.build_context(project_id, chapter)
@@ -330,6 +356,8 @@ def quick(
         chapter_store=mgr.chapter_store,
         project_id=project_id,
         target_chapter_words=target_words,
+        narrative_mode=narrative_mode,
+        narrative_perspective=narrative_perspective,
     )
 
     async def _write():

@@ -23,6 +23,16 @@ EDITOR_SYSTEM_PROMPT = """你是一个资深网文编辑，擅长审稿和识别
 - 情感标签堆砌（"他感到愤怒、悲伤、绝望"）→ 扣分
 - 过度使用"——"破折号 → 叙事中扣分，对白中可接受
 
+## 叙事模式感知
+
+根据项目的 narrative_mode 调整评分标准：
+
+- **linear（线性）**：标准5维度评分
+- **unit_arc（单元剧）**：降低"主线推进"权重。单元内部剧情自洽即可，单元结尾章恢复正常主线要求
+- **multi_perspective（多视角）**：不做 POV 一致性惩罚。不同 POV 的信息不对称是叙事手法而非缺陷
+- **ensemble（群像）**：关注主要角色出场平衡，连续3章未提及某主要角色时提示但不扣分
+- 在审查时请注意当前叙事模式，据此调整 verdict 判定
+
 ## 工具
 
 使用 detect_ai_flavor 工具对正文进行规则扫描。
@@ -63,17 +73,25 @@ class EditorAgent(BaseAgent):
     def system_prompt(self) -> str:
         return EDITOR_SYSTEM_PROMPT
 
-    async def review(self, chapter_number: int, draft_content: str) -> tuple[dict, TraceStep]:
+    async def review(
+        self, chapter_number: int, draft_content: str,
+        narrative_mode: str | None = None,
+    ) -> tuple[dict, TraceStep]:
         """Review a chapter draft.
 
         Returns (report_dict, trace).
         """
+        mode_hint = ""
+        if narrative_mode:
+            mode_hint = f"\n当前叙事模式：{narrative_mode}。请根据叙事模式调整评分标准。\n"
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": (
-                    f"请审查第{chapter_number}章的正文。\n\n"
+                    f"请审查第{chapter_number}章的正文。\n"
+                    f"{mode_hint}\n"
                     f"## 正文\n{draft_content}\n\n"
                     f"先用 detect_ai_flavor 工具扫描正文，然后给出完整的审查报告。"
                     f"只输出JSON，不要其他内容。"

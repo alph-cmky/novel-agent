@@ -10,9 +10,16 @@ Orchestrator → Writer → Editor → Continuity → [
 ]
 """
 
+import asyncio
+import sqlite3
+from pathlib import Path
 from typing import Literal
 
+import aiosqlite
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
@@ -33,8 +40,7 @@ router = ModelRouter()
 
 MAX_RETRIES = 3
 CONTINUITY_PASS_SCORE = 80       # pass to worldbuilding
-EDITOR_APPROVE_SCORE = 60        # minimum for human approval
-CONTINUITY_APPROVE_SCORE = 60    # minimum for human approval
+EDITOR_APPROVE_SCORE = 60        # minimum editor score for auto-approval
 
 
 def _config_for(task: TaskClass) -> AgentConfig:
@@ -65,6 +71,7 @@ async def orchestrator_node(state: NovelState) -> dict:
             pass
 
     target_words = state.get("target_chapter_words", 3000)
+    narrative_mode = state.get("narrative_mode")
 
     strategy = await orchestrator.analyze(
         chapter_number=state.get("chapter_number", 1),
@@ -74,6 +81,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         world_context=state.get("world_context", ""),
         story_length=story_length,
         target_chapter_words=target_words,
+        narrative_mode=narrative_mode,
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -95,6 +103,22 @@ async def orchestrator_node(state: NovelState) -> dict:
         hint = f"[本章涉及设定: {extra_world}]"
         world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
 
+    # Inject new context_needed fields (Phase 0)
+    persp_specific = context_needed.get("perspective_specific", "")
+    if persp_specific:
+        char_ctx = (
+            f"{char_ctx}\n[视角特定信息: {persp_specific}]"
+            if char_ctx else f"[视角特定信息: {persp_specific}]"
+        )
+
+    cross_timeline = context_needed.get("cross_timeline_references", [])
+    if cross_timeline:
+        timeline_hint = f"[跨时间线参考: {', '.join(cross_timeline)}]"
+        world_ctx = (
+            f"{world_ctx}\n{timeline_hint}"
+            if world_ctx else timeline_hint
+        )
+
     return {
         "orchestrator_strategy": strategy,
         "character_context": char_ctx,
@@ -103,36 +127,92 @@ async def orchestrator_node(state: NovelState) -> dict:
     }
 
 
-async def writer_node(state: NovelState) -> dict:
-    """Writer Agent generates (or rewrites) chapter content."""
+async def writer_node(state: NovelState, config: RunnableConfig | None = None) -> dict:
+    """Writer Agent generates (or rewrites) chapter content.
+
+    When config contains a stream_queue (asyncio.Queue), uses write_stream()
+    and pushes chunks to the queue for SSE delivery.
+    """
     target_words = state.get("target_chapter_words", 3000)
     story_length = state.get("story_length", "long")
 
     length_cfg = get_length_config(story_length)
-    max_tokens = max(length_cfg.max_tokens, int(target_words * 2))
+    # Reasoning models need extra token budget for thinking phase
+    max_tokens = max(length_cfg.max_tokens, int(target_words * 3))
 
-    config = _config_for(TaskClass.CREATIVE)
-    config.max_tokens = max_tokens
-    store = ChapterStore(state.get("persist_dir", "./novel-data/chroma_data"))
+    agent_config = _config_for(TaskClass.CREATIVE)
+    agent_config.max_tokens = max_tokens
+    _persist = state.get("persist_dir", "./novel-data")
+    store = ChapterStore(_persist + "/chroma_data")
     project_id = state.get("project_id", "")
 
+    narrative_mode = state.get("narrative_mode")
+    narrative_perspective = state.get("narrative_perspective", "")
+
     writer = WriterAgent(
-        config=config,
+        config=agent_config,
         chapter_store=store,
         project_id=project_id,
         target_chapter_words=target_words,
+        narrative_mode=narrative_mode,
+        narrative_perspective=narrative_perspective,
     )
-    content, trace = await writer.write(
+
+    stream_queue: asyncio.Queue | None = None
+    if config and config.get("configurable"):
+        stream_queue = config["configurable"].get("stream_queue")
+
+    # Handle structured rewrite_instructions (str | dict)
+    raw_instructions = state.get("rewrite_instructions", "")
+    constraints = {}
+    if isinstance(raw_instructions, dict):
+        rewrite_text = raw_instructions.get("instructions", "")
+        constraints = raw_instructions.get("constraints", {})
+    else:
+        rewrite_text = raw_instructions
+
+    # Merge constraints.strategy_override into orchestrator_strategy
+    strategy = state.get("orchestrator_strategy", {})
+    if constraints.get("strategy_override"):
+        cs = strategy.setdefault("chapter_strategy", {})
+        cs.update(constraints["strategy_override"])
+
+    write_args = dict(
         chapter_number=state.get("chapter_number", 1),
         outline=state.get("chapter_outline", ""),
         character_context=state.get("character_context", ""),
         world_context=state.get("world_context", ""),
         recent_summary=state.get("recent_summary", ""),
         target_chapter_words=target_words,
-        rewrite_instructions=state.get("rewrite_instructions", ""),
+        rewrite_instructions=rewrite_text,
+        orchestrator_strategy=state.get("orchestrator_strategy", {}),
     )
 
-    tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
+    if stream_queue is not None:
+        collected: list[str] = []
+        async for chunk in writer.write_stream(**write_args):
+            collected.append(chunk)
+            await stream_queue.put(("chunk", chunk))
+
+        content = "".join(collected)
+
+        # Fallback: reasoning models may use all tokens for thinking,
+        # leaving content empty. Retry with non-streaming write() which
+        # uses higher effective token budget via tool-calling flow.
+        if not content.strip():
+            print("  [Writer] Stream returned empty, falling back to non-streaming...")
+            content, trace = await writer.write(**write_args)
+            if content.strip():
+                # Push the full content as one chunk so the frontend gets it
+                await stream_queue.put(("chunk", content))
+            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
+        else:
+            trace = writer._latest_trace
+            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
+    else:
+        content, trace = await writer.write(**write_args)
+        tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
+
     retry = state.get("retry_count", 0) + 1
     label = f"(retry {retry})" if retry > 1 else ""
     print(f"  [Writer] {len(content)} chars {label} (target: {target_words}w, tokens: {tok_info})")
@@ -149,6 +229,7 @@ async def editor_node(state: NovelState) -> dict:
     report, _ = await editor.review(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
+        narrative_mode=state.get("narrative_mode"),
     )
     score = report.get("overall_score", 0)
     print(f"  [Editor] {score}/100 — {report.get('verdict', '?')}")
@@ -158,7 +239,8 @@ async def editor_node(state: NovelState) -> dict:
 async def continuity_node(state: NovelState) -> dict:
     """Continuity Agent audits cross-chapter consistency."""
     config = _config_for(TaskClass.REVIEW)
-    store = ChapterStore(state.get("persist_dir", "./novel-data/chroma_data"))
+    _persist = state.get("persist_dir", "./novel-data")
+    store = ChapterStore(_persist + "/chroma_data")
     project_id = state.get("project_id", "")
 
     auditor = ContinuityAgent(
@@ -167,6 +249,7 @@ async def continuity_node(state: NovelState) -> dict:
     report, _ = await auditor.audit(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
+        narrative_mode=state.get("narrative_mode"),
     )
     score = report.get("overall_score", 0)
     criticals = [
@@ -180,9 +263,8 @@ async def continuity_node(state: NovelState) -> dict:
 async def orchestrator_review_node(state: NovelState) -> dict:
     """Orchestrator analyzes failure reports and generates rewrite instructions.
 
-    This is the feedback loop: instead of blindly retrying, the Orchestrator
-    reads Editor/Continuity/Human feedback and produces specific, actionable
-    guidance for the Writer to follow during rewrite.
+    Returns structured dict: {"instructions": str, "constraints": dict}.
+    The writer_node handles both str and dict rewrite_instructions.
     """
     orchestrator = OrchestratorAgent(config=_config_for(TaskClass.STRUCTURAL))
 
@@ -191,7 +273,7 @@ async def orchestrator_review_node(state: NovelState) -> dict:
 
     print(f"  [Orchestrator Review] Analyzing {source} feedback, generating rewrite guide...")
 
-    instructions = await orchestrator.review_feedback(
+    result = await orchestrator.review_feedback(
         chapter_number=state.get("chapter_number", 1),
         chapter_outline=state.get("chapter_outline", ""),
         draft_content=state.get("draft_content", ""),
@@ -200,10 +282,13 @@ async def orchestrator_review_node(state: NovelState) -> dict:
         human_feedback=human_feedback,
     )
 
-    print(f"  [Orchestrator Review] Guide: {len(instructions)} chars")
+    instr_len = len(result.get("instructions", ""))
+    constraints = result.get("constraints", {})
+    print(f"  [Orchestrator Review] Guide: {instr_len} chars, "
+          f"constraints: {list(constraints.keys())}")
 
     return {
-        "rewrite_instructions": instructions,
+        "rewrite_instructions": result,
     }
 
 
@@ -278,18 +363,19 @@ def route_after_continuity(
 ) -> Literal["worldbuilding", "orchestrator_review"]:
     """Decide: pass to worldbuilding, or trigger feedback loop.
 
-    - Good score + no criticals → worldbuilding → human review
+    - Both scores good + no criticals → worldbuilding → human review
     - Issues + retries left → orchestrator_review → writer (auto feedback loop)
     - Issues + no retries → worldbuilding → human review (human gets final say)
     """
-    score = state.get("continuity_report", {}).get("overall_score", 0)
+    c_score = state.get("continuity_report", {}).get("overall_score", 0)
+    e_score = state.get("editor_report", {}).get("overall_score", 0)
     criticals = [
         i for i in state.get("continuity_report", {}).get("inconsistencies", [])
         if i.get("severity") == "critical"
     ]
     retry = state.get("retry_count", 0)
 
-    if score >= CONTINUITY_PASS_SCORE and not criticals:
+    if c_score >= CONTINUITY_PASS_SCORE and not criticals and e_score >= EDITOR_APPROVE_SCORE:
         return "worldbuilding"
 
     if retry < MAX_RETRIES:
@@ -299,27 +385,39 @@ def route_after_continuity(
 
 
 def route_after_human(state: NovelState) -> Literal["__end__", "orchestrator_review"]:
-    """Human approved → done. Human rejected → feedback loop for rewrite."""
+    """Human approved → done. Rejected + retries left → feedback loop.
+    Rejected + no retries left → force end (prevents infinite reject loop)."""
     if state.get("human_approved", False):
+        return "__end__"
+    if state.get("retry_count", 0) >= MAX_RETRIES:
         return "__end__"
     return "orchestrator_review"
 
 
 # ── Build Graph ────────────────────────────────────────
 
-def build_chapter_graph() -> StateGraph:
-    """Build the multi-Agent chapter pipeline with feedback loop and HITL.
+_checkpointer_cache: dict[str, SqliteSaver] = {}
 
-    Flow:
-    Orchestrator → Writer → Editor → Continuity → [
-        pass → Worldbuilding → Human Review (interrupt) → [
-            approved → Done,
-            rejected → Orchestrator Review → Writer
-        ],
-        fail + retries → Orchestrator Review → Writer (auto feedback loop),
-        fail + no retries → Worldbuilding → Human Review (human decides)
-    ]
+
+def _get_checkpointer(persist_dir: str) -> SqliteSaver | MemorySaver:
+    """Return a SqliteSaver for the project directory, or MemorySaver as fallback.
+
+    Caches checkpointer instances per persist_dir so we reuse the same
+    SQLite connection across requests for the same project.
     """
+    if not persist_dir:
+        return MemorySaver()
+    db_path = Path(persist_dir) / "checkpoints.db"
+    db_key = str(db_path.resolve())
+    if db_key not in _checkpointer_cache:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        _checkpointer_cache[db_key] = SqliteSaver(conn)
+    return _checkpointer_cache[db_key]
+
+
+def _build_workflow() -> StateGraph:
+    """Build the StateGraph with all nodes and edges (shared by sync + async builders)."""
     workflow = StateGraph(NovelState)
 
     workflow.add_node("orchestrator", orchestrator_node)
@@ -353,4 +451,36 @@ def build_chapter_graph() -> StateGraph:
         {"__end__": END, "orchestrator_review": "orchestrator_review"},
     )
 
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow
+
+
+def build_chapter_graph(persist_dir: str = "") -> StateGraph:
+    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit)."""
+    workflow = _build_workflow()
+    checkpointer = _get_checkpointer(persist_dir)
+    return workflow.compile(checkpointer=checkpointer)
+
+
+# ── Async Build (for SSE / astream_events) ────────────────
+
+_async_checkpointer_cache: dict[str, AsyncSqliteSaver] = {}
+
+
+async def _get_checkpointer_async(persist_dir: str) -> AsyncSqliteSaver | MemorySaver:
+    """AsyncSqliteSaver for use with graph.astream_events()."""
+    if not persist_dir:
+        return MemorySaver()
+    db_path = Path(persist_dir) / "checkpoints.db"
+    db_key = str(db_path.resolve())
+    if db_key not in _async_checkpointer_cache:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = await aiosqlite.connect(str(db_path))
+        _async_checkpointer_cache[db_key] = AsyncSqliteSaver(conn)
+    return _async_checkpointer_cache[db_key]
+
+
+async def build_chapter_graph_async(persist_dir: str = "") -> StateGraph:
+    """Async version for SSE endpoints (uses AsyncSqliteSaver)."""
+    workflow = _build_workflow()
+    checkpointer = await _get_checkpointer_async(persist_dir)
+    return workflow.compile(checkpointer=checkpointer)

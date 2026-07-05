@@ -8,6 +8,15 @@ from pydantic import BaseModel, Field
 
 
 class ChapterStrategy(BaseModel):
+    """Narrative strategy for a single chapter — orchestrator output.
+
+    Fields are classified per the design doc into:
+    - GLOBAL: always injected into Writer prompt
+    - CONDITIONAL: injected only when narrative_mode matches
+    - AUXILIARY: injected as [参考] hints
+    """
+
+    # ── Original fields (GLOBAL) ──
     primary_storyline: str = ""
     pacing: str = "normal"
     key_scenes: list[str] = Field(default_factory=list)
@@ -15,11 +24,38 @@ class ChapterStrategy(BaseModel):
     foreshadowings_to_address: list[str] = Field(default_factory=list)
     suggested_chapter_words: int = 3000
 
+    # ── Phase 1: Structural layer ──
+    # CONDITIONAL: climax stage only
+    climax_sequence: dict | None = None
+    # AUXILIARY: boundary detection
+    stage_boundary: dict | None = None
+    # CONDITIONAL: unit_arc / hybrid mode
+    unit_arc: dict | None = None
+    # CONDITIONAL: multi_perspective / ensemble mode
+    pov_config: dict | None = None
+    # CONDITIONAL: non-linear modes
+    time_structure: dict | None = None
+    # CONDITIONAL: near ending
+    ending_tone: dict | None = None
+    # GLOBAL: replaces primary_storyline for multi-line works
+    storylines: list[dict] = Field(default_factory=list)
+    storyline_intersection: dict | None = None
+
+    # ── Phase 3: Character + Experience layer ──
+    character_arcs: list[dict] = Field(default_factory=list)
+    character_emotional_state: dict = Field(default_factory=dict)
+    tension_profile: dict | None = None
+    foreshadowing_management: list[dict] = Field(default_factory=list)
+    scene_composition: dict | None = None
+
 
 class ContextNeeded(BaseModel):
     characters: list[str] = Field(default_factory=list)
     world_elements: list[str] = Field(default_factory=list)
     recent_reference: str = ""
+    # Phase 1 additions
+    cross_timeline_references: list[str] = Field(default_factory=list)
+    perspective_specific: str = ""
 
 
 class OrchestratorReport(BaseModel):

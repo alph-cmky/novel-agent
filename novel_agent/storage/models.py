@@ -23,14 +23,25 @@ def init_db(db_path: Path) -> sqlite3.Connection:
 
 def _migrate(conn: sqlite3.Connection):
     """Add columns that may be missing from older databases."""
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
-    migrations = [
+    existing_projects = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+    project_migrations = [
         ("story_length", "TEXT NOT NULL DEFAULT 'long'"),
         ("target_chapter_words", "INTEGER NOT NULL DEFAULT 3000"),
+        ("world_setting", "TEXT NOT NULL DEFAULT ''"),
+        ("narrative_mode", "TEXT"),  # NULL = legacy project
+        ("narrative_perspective", "TEXT NOT NULL DEFAULT ''"),
     ]
-    for col_name, col_def in migrations:
-        if col_name not in existing:
+    for col_name, col_def in project_migrations:
+        if col_name not in existing_projects:
             conn.execute(f"ALTER TABLE projects ADD COLUMN {col_name} {col_def}")
+
+    existing_chapters = {row["name"] for row in conn.execute("PRAGMA table_info(chapters)")}
+    chapter_migrations = [
+        ("worldbuilding_report", "TEXT NOT NULL DEFAULT '{}'"),
+    ]
+    for col_name, col_def in chapter_migrations:
+        if col_name not in existing_chapters:
+            conn.execute(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_def}")
 
 
 _SCHEMA = """
@@ -42,6 +53,9 @@ CREATE TABLE IF NOT EXISTS projects (
     outline TEXT NOT NULL DEFAULT '',
     story_length TEXT NOT NULL DEFAULT 'long',
     target_chapter_words INTEGER NOT NULL DEFAULT 3000,
+    world_setting TEXT NOT NULL DEFAULT '',
+    narrative_mode TEXT,
+    narrative_perspective TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -54,6 +68,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     draft_content TEXT NOT NULL DEFAULT '',
     editor_report TEXT NOT NULL DEFAULT '{}',
     continuity_report TEXT NOT NULL DEFAULT '{}',
+    worldbuilding_report TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'draft',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -81,7 +96,18 @@ CREATE TABLE IF NOT EXISTS foreshadowings (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS outlines (
+    project_id TEXT NOT NULL,
+    chapter_number INTEGER NOT NULL,
+    title TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    sort_order INTEGER DEFAULT 0,
+    PRIMARY KEY (project_id, chapter_number)
+);
+
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
 CREATE INDEX IF NOT EXISTS idx_world_entities_project ON world_entities(project_id);
 CREATE INDEX IF NOT EXISTS idx_foreshadowings_project ON foreshadowings(project_id);
+CREATE INDEX IF NOT EXISTS idx_outlines_project ON outlines(project_id);
 """

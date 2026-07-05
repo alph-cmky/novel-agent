@@ -30,6 +30,16 @@ CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门�
 - **major**: 明显矛盾，读者可能注意到
 - **minor**: 小瑕疵（如颜色记错、数字不一致）
 
+## 叙事模式感知
+
+根据项目的 narrative_mode 调整审计策略：
+
+- **linear（线性）**：标准3维度审计
+- **unit_arc（单元剧）**：角色状态在单元之间可"重置"，不做跨单元状态一致性检查
+- **multi_perspective（多视角）**：逐 POV 线审计，不同 POV 线间允许信息不一致，但同一线内部必须一致
+- **ensemble（群像）**：多线并行，每个角色线独立审计
+- **flashback / non_linear**：不做"时间推进方向"检查，但检查事件因果一致性
+
 ## 工具
 使用 check_continuity 工具检索前文的角色/事件/世界观信息进行比对。
 
@@ -73,18 +83,24 @@ class ContinuityAgent(BaseAgent):
         return CONTINUITY_SYSTEM_PROMPT
 
     async def audit(
-        self, chapter_number: int, draft_content: str
+        self, chapter_number: int, draft_content: str,
+        narrative_mode: str | None = None,
     ) -> tuple[dict, TraceStep]:
         """Audit chapter for continuity issues.
 
         Returns (audit_report, trace).
         """
+        mode_hint = ""
+        if narrative_mode:
+            mode_hint = f"\n当前叙事模式：{narrative_mode}。请根据叙事模式调整审计策略。\n"
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": (
-                    f"请审计第{chapter_number}章的设定一致性。\n\n"
+                    f"请审计第{chapter_number}章的设定一致性。\n"
+                    f"{mode_hint}\n"
                     f"## 本章正文\n{draft_content[:4000]}\n\n"
                     f"先用 check_continuity 工具检索前文的相关设定，"
                     f"然后逐项比对给出审计报告。只输出JSON，不要其他内容。"

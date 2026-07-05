@@ -46,15 +46,24 @@ def _state(continuity_score=0, criticals=None, retry=0,
 
 class TestRouteAfterContinuity:
     def test_pass_to_worldbuilding(self):
-        """High score, no criticals → worldbuilding → human review."""
+        """High scores, no criticals → worldbuilding → human review."""
         result = route_after_continuity(
-            _state(continuity_score=CONTINUITY_PASS_SCORE)
+            _state(continuity_score=CONTINUITY_PASS_SCORE, editor_score=60)
         )
         assert result == "worldbuilding"
 
     def test_pass_above_threshold(self):
-        result = route_after_continuity(_state(continuity_score=95))
+        result = route_after_continuity(
+            _state(continuity_score=95, editor_score=60)
+        )
         assert result == "worldbuilding"
+
+    def test_low_editor_with_retries_goes_to_orchestrator_review(self):
+        """Continuity passes but Editor below threshold → feedback loop."""
+        result = route_after_continuity(
+            _state(continuity_score=90, editor_score=20, retry=0)
+        )
+        assert result == "orchestrator_review"
 
     def test_critical_with_retries_left_goes_to_orchestrator_review(self):
         """Critical issues + retries remaining → orchestrator_review (feedback loop)."""
@@ -109,9 +118,9 @@ class TestRouteAfterHuman:
         result = route_after_human(_state(approved=True))
         assert result == "__end__"
 
-    def test_rejected_goes_to_orchestrator_review(self):
-        """Human rejected → orchestrator_review for rewrite guidance."""
-        result = route_after_human(_state(approved=False))
+    def test_rejected_with_retries_goes_to_orchestrator_review(self):
+        """Human rejected + retries left → orchestrator_review for rewrite."""
+        result = route_after_human(_state(approved=False, retry=0))
         assert result == "orchestrator_review"
 
     def test_rejected_with_feedback(self):
@@ -119,5 +128,11 @@ class TestRouteAfterHuman:
         result = route_after_human(_state(
             approved=False,
             human_feedback={"action": "reject", "comments": "need more tension"},
+            retry=0,
         ))
         assert result == "orchestrator_review"
+
+    def test_rejected_no_retries_force_ends(self):
+        """Human rejected but no retries left → force end (prevent infinite loop)."""
+        result = route_after_human(_state(approved=False, retry=MAX_RETRIES))
+        assert result == "__end__"

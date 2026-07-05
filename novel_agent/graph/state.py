@@ -12,6 +12,10 @@ class NovelState(TypedDict, total=False):
     chapter_outline: str
     story_length: str
     target_chapter_words: int
+    # 叙事模式：linear / unit_arc / hybrid / multi_perspective / ensemble（None = 旧项目）
+    narrative_mode: str | None
+    # 叙事视角：first_person / third_person_limited / third_person_omniscient / ...
+    narrative_perspective: str
 
     # Agent输出
     draft_content: str
@@ -23,7 +27,7 @@ class NovelState(TypedDict, total=False):
     retry_count: int
     human_approved: bool
     human_feedback: dict  # {action: "approve"|"reject", comments: str, edited_text: str}
-    rewrite_instructions: str  # Orchestrator 给 Writer 的重写指导
+    rewrite_instructions: str | dict  # str | {"instructions": str, "constraints": dict}
 
     # Orchestrator注入的上下文
     orchestrator_strategy: dict
