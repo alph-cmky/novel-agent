@@ -38,7 +38,7 @@ def parse_json_response(text: str, defaults: dict | None = None) -> dict:
             pass
 
     # 3. Find JSON object in text
-    m = re.search(r"\{.*\}", text, re.DOTALL)
+    m = re.search(r"\{.*?\}", text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(0))

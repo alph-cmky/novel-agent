@@ -49,6 +49,12 @@ class ContextCompressor:
         self.strategy = strategy or CompressionStrategy()
         self._client: AsyncOpenAI | None = None
 
+    async def close(self) -> None:
+        """Release the underlying HTTP client connection pool."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
     def should_compress(self, context: dict[str, str]) -> bool:
         """Check if total context exceeds threshold."""
         total = sum(estimate_tokens(v) for v in context.values())

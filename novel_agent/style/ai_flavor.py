@@ -104,7 +104,7 @@ def check_dialogue_ratio(text: str) -> dict:
         text,
     )
     dialogue_chars = sum(
-        len(m[0] or m[1] or m[2] or m[3]) for m in dialogue_parts
+        len(m[0] or m[1] or m[2]) for m in dialogue_parts
     )
     total_chars = len(text)
     ratio = dialogue_chars / total_chars if total_chars > 0 else 0
