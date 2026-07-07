@@ -30,3 +30,6 @@ traces/
 
 # Novel data
 novel-data/
+
+# Frontend
+frontend/node_modules/
