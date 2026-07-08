@@ -68,8 +68,8 @@ Orchestrator → Writer → Editor → Continuity → [
 ## 路由逻辑
 
 - `route_after_continuity`: score ≥ 80 且无 critical → worldbuilding；有问题且 retry < 3 → orchestrator_review；retry 耗尽 → worldbuilding（人类最终决定）
-- `route_after_human`: approved → END；rejected → orchestrator_review（反馈闭环）
-- 阈值常量定义在 `novel_agent/graph/chapter.py`：MAX_RETRIES=3, CONTINUITY_PASS_SCORE=80, EDITOR_APPROVE_SCORE=60, CONTINUITY_APPROVE_SCORE=60
+- `route_after_human`: approved → END；rejected + retries left → orchestrator_review；rejected + no retries → END（防止无限拒绝）
+- 阈值常量定义在 `novel_agent/graph/chapter.py`：MAX_RETRIES=3, CONTINUITY_PASS_SCORE=80, EDITOR_APPROVE_SCORE=60
 
 ## NovelState 字段
 
@@ -150,3 +150,32 @@ write <chapter> <outline> [--words N]
 ```
 
 `write` 命令支持 Human-in-the-loop：通过 Approve/Reject 按钮进行人工审批。
+
+## Checkpoint 持久化
+
+`build_chapter_graph(persist_dir)` 接受可选的 `persist_dir` 参数：
+- 不传 → `MemorySaver`（CLI / Chainlit 兼容）
+- 传入 → `SqliteSaver`，checkpoint 写入 `{persist_dir}/checkpoints.db`
+- `thread_id` 使用 `{project_id}:ch{chapter_number}` 确定性格式，重启后可恢复
+- `_checkpointer_cache` 按 persist_dir 缓存 SqliteSaver 实例
+
+## Web API
+
+FastAPI REST 端点定义在 `novel_agent/api/routes.py`：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/projects | 项目列表 |
+| POST | /api/projects | 创建项目 |
+| GET | /api/projects/{id} | 项目详情 |
+| PATCH | /api/projects/{id} | 更新设置 |
+| DELETE | /api/projects/{id} | 删除项目 |
+| GET/PUT | /api/projects/{id}/outline | 大纲管理 |
+| POST | /api/projects/{id}/outline/generate | AI 生成大纲 |
+| GET | /api/projects/{id}/graph | 关系图谱数据 |
+| GET/DELETE | /api/projects/{id}/chapters/{n} | 章节详情/删除 |
+| POST | /api/projects/{id}/chapters/{n}/write | 触发写作（SSE） |
+| POST | /api/projects/{id}/chapters/{n}/approve | 批准章节 |
+| POST | /api/projects/{id}/chapters/{n}/reject | 拒绝章节 |
+
+`ProjectManager` 提供 `delete_chapter()` 和 `delete_project()` 方法，级联删除关联数据。

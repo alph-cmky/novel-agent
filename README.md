@@ -1,11 +1,58 @@
 # Novel Agent
 
-基于 LangGraph 的开源多 Agent 小说写作框架，支持短篇/中篇/长篇多种篇幅 — 支持 Human-in-the-loop。
+基于 LangGraph 的开源多 Agent 小说写作框架。7 节点流水线，内建自动反馈闭环与人工审批机制，支持三种篇幅策略，提供 CLI / Web SPA / Chainlit 三种交互方式。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-## 架构
+## 功能亮点
+
+| 功能 | 说明 |
+|------|------|
+| 多 Agent 协作流水线 | Orchestrator → Writer → Editor → Continuity → Worldbuilding → Human Review，7 节点各司其职 |
+| 流式写作 | SSE 实时推送，逐字渲染创作过程，非一次性返回 |
+| 知识图谱可视化 | Cytoscape.js 渲染角色/地点/物品/组织/事件的关系网络，支持逐章回溯 |
+| 篇幅感知策略 | short（短篇）/ novella（中篇）/ long（长篇）三种节奏策略，每章字数可配置 |
+| 模型路由 | Quality 模型负责创作，Budget 模型负责审查，按任务自动分配 |
+| 质量保障 | 自动反馈闭环（最多 3 次）→ 不达标则暂停等待人工审批，支持 CLI / Web UI 两种审批方式 |
+| 三种交互方式 | CLI（命令行）/ Web SPA（React）/ Chainlit（对话式），共享同一后端 |
+
+## 系统架构
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    交互层                            │
+│  React SPA (Vite)  │  CLI (Click)  │  Chainlit UI   │
+└───────────────────────┬─────────────────────────────┘
+                        │  REST + SSE
+┌───────────────────────▼─────────────────────────────┐
+│                 FastAPI 网关                         │
+│  routes.py  │  sse.py  │  outline.py  │  graph_data │
+└───────────────────────┬─────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────┐
+│              LangGraph StateGraph                   │
+│                                                     │
+│  Orchestrator → Writer → Editor → Continuity        │
+│       ▲              ▲         │                    │
+│       │              │    ┌────┴────┐               │
+│       │  重写指导     │   pass     fail              │
+│       │              │    │         │               │
+│       │     ┌────────┘  Worldbuilding               │
+│       │     │                │                      │
+│       │  Orchestrator   Human Review                │
+│       │    Review       (interrupt)                 │
+│       └─────┘                │                      │
+│                         批准/拒绝                    │
+└───────────────────────┬─────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────┐
+│                   存储层                             │
+│    SQLite (项目/章节/实体)  │  ChromaDB (向量记忆)    │
+└─────────────────────────────────────────────────────┘
+```
+
+**Agent 流水线细节：**
 
 ```mermaid
 graph TD
@@ -30,8 +77,6 @@ graph TD
     style DONE fill:#909399,color:#fff
 ```
 
-**7 节点 + 反馈闭环 + Human-in-the-loop：**
-
 | 节点 | 职责 | 模型层级 |
 |------|------|----------|
 | Orchestrator | 叙事阶段分析、章节策略、篇幅感知节奏 | Budget |
@@ -40,7 +85,115 @@ graph TD
 | Continuity | 跨章节一致性审计（角色、时间线、世界观规则） | Budget |
 | Orchestrator Review | 分析失败报告，生成具体重写指导 | Budget |
 | Worldbuilding | 实体提取、冲突检测、持久化到 SQLite | Budget |
-| Human Review | **LangGraph `interrupt()`** — 暂停流水线，等待人类输入 | — |
+| Human Review | LangGraph `interrupt()` — 暂停流水线，等待人类输入 | — |
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 18+（仅 Web UI 需要）
+- OpenAI 兼容 API（OpenAI、DeepSeek 等）
+
+### 安装
+
+```bash
+git clone https://github.com/your-org/novel-agent.git
+cd novel-agent
+uv sync
+```
+
+前端（可选，仅 Web UI 需要）：
+
+```bash
+cd frontend
+npm install
+```
+
+### 配置
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 API key 和模型偏好
+```
+
+### CLI 使用
+
+```bash
+# 初始化项目（含篇幅设置）
+novel-agent init -n "MyNovel" -t "我的小说" -g "都市" -l long -w 3000
+
+# 完整流水线生成
+novel-agent write -c 1 -o "主角穿越到异世界，发现拥有系统"
+
+# 单章覆盖字数
+novel-agent write -c 1 -o "战斗场景" -w 5000
+
+# 快速生成（仅 Writer，跳过审查）
+novel-agent quick -c 1 -o "主角穿越到异世界"
+
+# 查看 trace
+novel-agent trace ls
+novel-agent trace show traces/trace-xxx.json
+```
+
+### Web UI
+
+启动后端：
+
+```bash
+uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
+```
+
+启动前端开发服务器（热更新）：
+
+```bash
+cd frontend && npm run dev
+```
+
+打开 http://localhost:5173 ，提供项目管理、大纲规划、流式写作和关系图谱可视化。
+
+生产模式（前端构建后由 FastAPI 直接 serve）：
+
+```bash
+cd frontend && npm run build && cd ..
+uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
+```
+
+> 也支持 Chainlit 传统 UI：`chainlit run novel_agent/api/chainlit_app.py`
+
+### Docker
+
+```bash
+docker compose up web        # FastAPI + React Web UI (port 8000)
+docker compose up chainlit   # Chainlit 传统 UI (port 8001)
+docker compose run novel-agent write -c 1 -o "大纲"  # CLI
+```
+
+## 核心特性
+
+### 质量保障
+
+流水线内建两层质量机制，自动修复不动的才交给人：
+
+**自动反馈闭环** — Editor/Continuity 发现问题后，Orchestrator Review 分析失败报告，生成具体重写指导（如"角色语气不一致，第1章是愤世嫉俗的，这里变成了乐观"）。Writer 收到指导后在 prompt 最前面插入，重新创作后再次进入审查。最多 3 次自动重试。
+
+**人工审批** — 自动重试耗尽、或质量达标后，流水线暂停等待人类决定。CLI 终端交互式输入 `approve`/`reject`，Web UI 按钮式审批，均可附带修改意见触发带反馈的重写。
+
+```
+# CLI 审批界面
+============================================================
+  HUMAN REVIEW — Chapter 1
+============================================================
+  Editor: 85/100  |  Continuity: 92/100
+  Retries: 0
+
+  ── Draft Preview ──
+  [草稿预览...]
+
+  Approve or reject? (approve/reject) [a]:
+```
 
 ### 双层记忆
 
@@ -57,84 +210,7 @@ graph TD
 | `novella` | 3000 | 平衡发展，高潮在 60-70% 处 |
 | `long` | 3000 | 渐进展开，多线并进，伏笔长线回收 |
 
-## 快速开始
-
-### 环境要求
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- OpenAI 兼容 API（OpenAI、DeepSeek 等）
-
-### 安装
-
-```bash
-git clone https://github.com/your-org/novel-agent.git
-cd novel-agent
-uv sync
-```
-
-### 配置
-
-```bash
-cp .env.example .env
-# 编辑 .env，填入 API key 和模型偏好
-```
-
-### CLI 使用
-
-```bash
-# 初始化项目（含篇幅设置）
-novel-agent init -n "MyNovel" -t "我的小说" -g "都市" -l long -w 3000
-
-# 完整流水线生成（O→W→E→C→WB→Human Review）
-novel-agent write -c 1 -o "主角穿越到异世界，发现拥有系统"
-
-# 单章覆盖字数
-novel-agent write -c 1 -o "战斗场景" -w 5000
-
-# 快速生成（仅 Writer，跳过审查）
-novel-agent quick -c 1 -o "主角穿越到异世界"
-
-# 查看 trace
-novel-agent trace ls
-novel-agent trace show traces/trace-xxx.json
-```
-
-### Human-in-the-loop
-
-运行 `novel-agent write` 时，流水线在 Human Review 处暂停：
-
-```
-============================================================
-  HUMAN REVIEW — Chapter 1
-============================================================
-  Editor: 85/100  |  Continuity: 92/100
-  Retries: 0
-
-  ── Draft Preview ──
-  [草稿预览...]
-
-  Approve or reject? (approve/reject) [a]:
-```
-
-输入 `a`/`approve` 批准，或 `r`/`reject` 并附修改意见触发带指导的重写。
-
-### Web UI
-
-```bash
-chainlit run novel_agent/api/app.py
-```
-
-打开 http://localhost:8000 ，通过按钮点击（而非 CLI 输入）进行审批。
-
-### Docker
-
-```bash
-docker compose up chainlit    # Web UI
-docker compose run novel-agent write -c 1 -o "大纲"  # CLI
-```
-
-## 配置
+## 配置参考
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
@@ -171,8 +247,15 @@ novel_agent/
 ├── trace/               # JSON trace 采集 + Rich CLI 查看器
 ├── tools/               # MCP 兼容工具协议
 ├── style/               # AI 味检测引擎（30+ 规则模式）
-├── api/                 # Chainlit Web UI（支持 HITL 按钮）
-└── cli/                 # Click CLI（支持交互式人工审批）
+├── api/                 # FastAPI REST + SSE + Chainlit UI
+│   ├── routes.py        # REST API（项目 CRUD、大纲、导出）
+│   ├── sse.py           # SSE 流式写作 + Session 管理
+│   ├── graph_data.py    # 关系图谱数据聚合
+│   ├── outline.py       # AI 大纲生成
+│   └── chainlit_app.py  # Chainlit 兼容入口
+├── cli/                 # Click CLI（支持交互式人工审批）
+└── frontend/            # React SPA（Vite + TypeScript + Tailwind）
+    └── src/pages/       # 看板 / 大纲 / 写作 / 设置
 ```
 
 ## License
