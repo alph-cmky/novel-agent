@@ -43,6 +43,18 @@ def _migrate(conn: sqlite3.Connection):
         if col_name not in existing_chapters:
             conn.execute(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_def}")
 
+    existing_fs = {row["name"] for row in conn.execute("PRAGMA table_info(foreshadowings)")}
+    foreshadowing_migrations = [
+        ("risk_level", "TEXT NOT NULL DEFAULT 'medium'"),
+        ("action_needed", "TEXT NOT NULL DEFAULT 'maintain'"),
+        ("reader_knows", "INTEGER NOT NULL DEFAULT 0"),
+        ("characters_aware", "TEXT NOT NULL DEFAULT '[]'"),
+        ("characters_unaware", "TEXT NOT NULL DEFAULT '[]'"),
+    ]
+    for col_name, col_def in foreshadowing_migrations:
+        if col_name not in existing_fs:
+            conn.execute(f"ALTER TABLE foreshadowings ADD COLUMN {col_name} {col_def}")
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -93,6 +105,11 @@ CREATE TABLE IF NOT EXISTS foreshadowings (
     expected_resolve_chapter INTEGER,
     resolved_chapter INTEGER,
     status TEXT NOT NULL DEFAULT 'open',
+    risk_level TEXT NOT NULL DEFAULT 'medium',
+    action_needed TEXT NOT NULL DEFAULT 'maintain',
+    reader_knows INTEGER NOT NULL DEFAULT 0,
+    characters_aware TEXT NOT NULL DEFAULT '[]',
+    characters_unaware TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

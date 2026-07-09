@@ -11,6 +11,7 @@ Orchestrator → Writer → Editor → Continuity → [
 """
 
 import asyncio
+import json as _json
 import sqlite3
 from pathlib import Path
 from typing import Literal
@@ -35,6 +36,31 @@ from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.routing import ModelRouter, TaskClass
 
 router = ModelRouter()
+
+# ── Helpers ─────────────────────────────────────────────
+
+
+def _build_arc_summary(previous_chapters: list[dict]) -> str:
+    """Build a summary of recent chapter performance from stored reports."""
+    if not previous_chapters:
+        return ""
+    recent = previous_chapters[-5:]
+    entries = []
+    for c in recent:
+        cn = c.get("chapter_number", "?")
+        try:
+            er = _json.loads(c.get("editor_report", "{}"))
+        except (_json.JSONDecodeError, TypeError):
+            er = {}
+        try:
+            cr = _json.loads(c.get("continuity_report", "{}"))
+        except (_json.JSONDecodeError, TypeError):
+            cr = {}
+        e_score = er.get("overall_score", "?")
+        c_score = cr.get("overall_score", "?")
+        entries.append(f"第{cn}章: Editor {e_score}/100, Continuity {c_score}/100")
+    return "## 最近章节表现\n" + "\n".join(entries) if entries else ""
+
 
 # ── Routing thresholds ──────────────────────────────────
 
@@ -72,6 +98,10 @@ async def orchestrator_node(state: NovelState) -> dict:
 
     target_words = state.get("target_chapter_words", 3000)
     narrative_mode = state.get("narrative_mode")
+    narrative_perspective = state.get("narrative_perspective", "")
+
+    # Build arc summary from previous chapters' stored reports
+    arc_summary = _build_arc_summary(previous_chapters)
 
     strategy = await orchestrator.analyze(
         chapter_number=state.get("chapter_number", 1),
@@ -82,6 +112,8 @@ async def orchestrator_node(state: NovelState) -> dict:
         story_length=story_length,
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
+        narrative_perspective=narrative_perspective,
+        arc_summary=arc_summary,
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -119,11 +151,20 @@ async def orchestrator_node(state: NovelState) -> dict:
             if world_ctx else timeline_hint
         )
 
+    # Inject recent_reference into recent_summary
+    recent_summary = state.get("recent_summary", "")
+    recent_ref = context_needed.get("recent_reference", "")
+    if recent_ref:
+        ref_hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
+        recent_summary = (
+            f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
+        )
+
     return {
         "orchestrator_strategy": strategy,
         "character_context": char_ctx,
         "world_context": world_ctx,
-        "recent_summary": state.get("recent_summary", ""),
+        "recent_summary": recent_summary,
     }
 
 
@@ -302,6 +343,7 @@ async def worldbuilding_node(state: NovelState) -> dict:
     report, _ = await wb.extract(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
+        narrative_mode=state.get("narrative_mode"),
     )
     entities = len(report.get("new_entities", []))
     conflicts = len(report.get("conflicts", []))

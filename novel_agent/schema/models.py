@@ -71,6 +71,7 @@ class OrchestratorReport(BaseModel):
 class EditorIssue(BaseModel):
     severity: str = "minor"
     category: str = ""
+    dimension: str = ""  # 对应 system prompt 中的 dimension 字段
     description: str = ""
     suggestion: str = ""
     phrase: str = ""
@@ -85,11 +86,23 @@ class AIFlavorReport(BaseModel):
     structural_issues: list[str] = Field(default_factory=list)
 
 
+class EditorDimensions(BaseModel):
+    """Per-dimension scores matching Editor system prompt output."""
+    rhythm: int = 0
+    ai_flavor: int = 0
+    dialogue: int = 0
+    logic: int = 0
+    writing: int = 0
+
+
 class EditorReport(BaseModel):
     overall_score: int = 0
     verdict: str = ""
+    dimensions: EditorDimensions = Field(default_factory=EditorDimensions)
     issues: list[EditorIssue] = Field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
     ai_flavor: AIFlavorReport = Field(default_factory=AIFlavorReport)
+    # Legacy flat fields — retained for backward compat
     rhythm_score: int = 0
     dialogue_score: int = 0
     logic_score: int = 0

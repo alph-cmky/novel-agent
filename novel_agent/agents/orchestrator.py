@@ -205,23 +205,14 @@ class OrchestratorAgent(BaseAgent):
         story_length: str = "long",
         target_chapter_words: int = 3000,
         narrative_mode: str | None = None,
+        narrative_perspective: str = "",
+        arc_summary: str = "",
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
         Returns a dict with narrative_stage, chapter_strategy, context_needed.
         """
         total_chapters = len(previous_chapters)
-
-        # Build arc summary from tracked data
-        arc_summary = ""
-        if self._story_arc:
-            arc_entries = [
-                f"第{a.get('chapter', '?')}章: {a.get('stage', '?')} - "
-                f"Editor {a.get('editor_score', '?')}/100, "
-                f"Continuity {a.get('continuity_score', '?')}/100"
-                for a in self._story_arc[-5:]
-            ]
-            arc_summary = "## 最近章节表现\n" + "\n".join(arc_entries)
 
         recent = previous_chapters[-3:] if len(previous_chapters) > 3 else previous_chapters
         recent_titles = ", ".join(
@@ -233,6 +224,7 @@ class OrchestratorAgent(BaseAgent):
         )
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
+        persp_hint = self._build_perspective_hint(narrative_perspective)
 
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -241,6 +233,7 @@ class OrchestratorAgent(BaseAgent):
                 "content": (
                     f"请分析当前叙事状态并制定第{chapter_number}章的策略。\n\n"
                     f"{mode_instruction}\n"
+                    f"{persp_hint}"
                     f"## 篇幅信息\n"
                     f"- 篇幅：{length_label}\n"
                     f"- 目标每章字数：{target_chapter_words}字\n"
@@ -325,6 +318,26 @@ class OrchestratorAgent(BaseAgent):
                 '    "unit_resolution": "resolved|unresolved|cliffhanger",\n'
                 '    "carry_over_elements": ["<跨单元线索>"]\n'
                 "  }\n"
+                "同时输出完整的 storylines、time_structure、ending_tone、"
+                "tension_profile 和 scene_composition 字段。\n"
+            )
+
+        if mode == "hybrid":
+            return base + (
+                "hybrid 模式需要同时输出 unit_arc 和 storylines：\n"
+                "请在 chapter_strategy 中额外输出 unit_arc 字段：\n"
+                '  "unit_arc": {\n'
+                '    "unit_number": <int>,\n'
+                '    "unit_title": "<string>",\n'
+                '    "unit_type": "case_of_the_week|training_arc|filler|character_spotlight",\n'
+                '    "mainline_progress": "<百分比>",\n'
+                '    "unit_resolution": "resolved|unresolved|cliffhanger",\n'
+                '    "carry_over_elements": ["<跨单元线索>"]\n'
+                "  }\n"
+                "同时输出完整的 storylines、time_structure、ending_tone、"
+                "storyline_intersection（多线交汇时）、"
+                "character_arcs（有里程碑事件时）、character_emotional_state、"
+                "tension_profile、foreshadowing_management 和 scene_composition 字段。\n"
             )
 
         if mode in ("multi_perspective", "ensemble"):
@@ -336,14 +349,45 @@ class OrchestratorAgent(BaseAgent):
                 '    "access_level": "surface|moderate|deep",\n'
                 '    "knowledge_gap": "<该角色不知道的关键信息>"\n'
                 "  }\n"
+                "同时输出完整的 storylines、time_structure、ending_tone、"
+                "character_arcs（有里程碑事件时）、character_emotional_state、"
+                "tension_profile、foreshadowing_management 和 scene_composition 字段。\n"
             )
 
-        # linear, hybrid, and other modes: always output all fields
+        # linear and other modes: always output all fields
         return base + (
             "本章请输出完整的 storylines、time_structure、ending_tone、"
             "character_arcs（有里程碑事件时）、character_emotional_state、"
             "tension_profile、foreshadowing_management 和 scene_composition 字段。\n"
         )
+
+    @staticmethod
+    def _build_perspective_hint(perspective: str) -> str:
+        """Build perspective constraint hint for the Orchestrator prompt.
+
+        Tells the Orchestrator about the narrator's information access limits,
+        so context_needed and chapter_strategy respect POV constraints.
+        """
+        if not perspective:
+            return ""
+
+        hints = {
+            "first_person": (
+                "叙事视角约束：第一人称。context_needed 中的角色和世界观信息"
+                "应限定为主角所能感知的范围。主角不知道的事情不应出现在"
+                "perspective_specific 之外。\n"
+            ),
+            "third_person_limited": (
+                "叙事视角约束：第三人称受限。聚焦单一角色的认知范围，"
+                "可在 perspective_specific 中标注该角色不知道的关键信息。\n"
+            ),
+            "third_person_omniscient": (
+                "叙事视角约束：第三人称全知。无信息访问限制，"
+                "context_needed 可包含任意角色的信息。\n"
+            ),
+        }
+
+        return hints.get(perspective, "")
 
     async def review_feedback(
         self,

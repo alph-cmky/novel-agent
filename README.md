@@ -15,7 +15,7 @@
 | 篇幅感知策略 | short（短篇）/ novella（中篇）/ long（长篇）三种节奏策略，每章字数可配置 |
 | 模型路由 | Quality 模型负责创作，Budget 模型负责审查，按任务自动分配 |
 | 质量保障 | 自动反馈闭环（最多 3 次）→ 不达标则暂停等待人工审批，支持 CLI / Web UI 两种审批方式 |
-| 三种交互方式 | CLI（命令行）/ Web SPA（React）/ Chainlit（对话式），共享同一后端 |
+| 三种交互方式 | CLI（服务/导出/运维）/ Web SPA（React）/ Chainlit（对话式），共享同一后端 |
 
 ## 系统架构
 
@@ -121,28 +121,29 @@ cp .env.example .env
 ### CLI 使用
 
 ```bash
-# 初始化项目（含篇幅设置）
-novel-agent init -n "MyNovel" -t "我的小说" -g "都市" -l long -w 3000
+# 启动 Web 服务
+novel-agent serve
 
-# 完整流水线生成
-novel-agent write -c 1 -o "主角穿越到异世界，发现拥有系统"
+# 自定义端口 + 热重载（开发模式）
+novel-agent serve --port 8080 --reload
 
-# 单章覆盖字数
-novel-agent write -c 1 -o "战斗场景" -w 5000
+# 导出小说
+novel-agent export                  # Markdown 格式，输出到 stdout
+novel-agent export -o novel.md      # 保存到文件
+novel-agent export -f txt -o novel.txt  # 纯文本格式
 
-# 快速生成（仅 Writer，跳过审查）
-novel-agent quick -c 1 -o "主角穿越到异世界"
-
-# 查看 trace
+# 调试 trace
 novel-agent trace ls
 novel-agent trace show traces/trace-xxx.json
 ```
 
 ### Web UI
 
-启动后端：
-
 ```bash
+# 一行命令启动（推荐）
+novel-agent serve
+
+# 或手动启动后端
 uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -158,7 +159,7 @@ cd frontend && npm run dev
 
 ```bash
 cd frontend && npm run build && cd ..
-uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
+novel-agent serve
 ```
 
 > 也支持 Chainlit 传统 UI：`chainlit run novel_agent/api/chainlit_app.py`
@@ -168,7 +169,6 @@ uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
 ```bash
 docker compose up web        # FastAPI + React Web UI (port 8000)
 docker compose up chainlit   # Chainlit 传统 UI (port 8001)
-docker compose run novel-agent write -c 1 -o "大纲"  # CLI
 ```
 
 ## 核心特性
@@ -253,7 +253,7 @@ novel_agent/
 │   ├── graph_data.py    # 关系图谱数据聚合
 │   ├── outline.py       # AI 大纲生成
 │   └── chainlit_app.py  # Chainlit 兼容入口
-├── cli/                 # Click CLI（支持交互式人工审批）
+├── cli/                 # Click CLI（serve / export / trace）
 └── frontend/            # React SPA（Vite + TypeScript + Tailwind）
     └── src/pages/       # 看板 / 大纲 / 写作 / 设置
 ```

@@ -82,6 +82,7 @@ class WorldbuildingAgent(BaseAgent):
         self,
         chapter_number: int,
         draft_content: str,
+        narrative_mode: str | None = None,
     ) -> tuple[dict, TraceStep]:
         """Extract worldbuilding entities from a chapter.
 
@@ -91,12 +92,21 @@ class WorldbuildingAgent(BaseAgent):
             self._existing_entities, ensure_ascii=False, indent=2
         )
 
+        # Mode-specific instruction for POV tagging
+        mode_hint = ""
+        if narrative_mode in ("multi_perspective", "ensemble"):
+            mode_hint = (
+                "\n当前为多视角/群像模式。请在实体的 properties 中增加 "
+                '"pov_character" 字段，标注该实体信息来自哪个 POV 角色的视角。\n'
+            )
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": (
-                    f"从第{chapter_number}章提取新设定，并与已有设定比对。\n\n"
+                    f"从第{chapter_number}章提取新设定，并与已有设定比对。\n"
+                    f"{mode_hint}\n"
                     f"## 已有设定\n{existing_json}\n\n"
                     f"## 本章正文\n{draft_content[:4000]}\n\n"
                     f"只输出JSON。"

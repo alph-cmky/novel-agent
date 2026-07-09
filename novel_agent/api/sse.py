@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
+from novel_agent.observability.langfuse import create_trace, score_trace
 from novel_agent.storage.manager import ProjectManager
 
 
@@ -148,6 +149,14 @@ async def create_sse_stream(
     Uses a background drain task to stream writer chunks in real-time,
     and graph.astream_events() for node-level progress events.
     """
+    # Create LangFuse trace — sets contextvar handler so all agent
+    # LLM calls in the graph are automatically grouped under this trace.
+    create_trace(
+        name=f"chapter_{chapter_number}",
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+
     store.set_context(session_id, project_id, chapter_number)
     store.set_config(session_id, config)
     queue = store.get_queue(session_id)
@@ -212,6 +221,7 @@ async def create_sse_stream(
             # Graph completed normally
             if final_state and final_state.values:
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
+                _push_quality_scores(final_state.values)
             yield _sse_event("done", {"chapter_content": "", "status": "completed"})
 
     except GraphInterrupt as gi:
@@ -318,6 +328,7 @@ async def resume_graph(
             # Graph completed normally
             if final_state and final_state.values:
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
+                _push_quality_scores(final_state.values)
             yield _sse_event("done", {"chapter_content": "", "status": "completed"})
 
     except GraphInterrupt as gi:
@@ -342,6 +353,19 @@ async def resume_graph(
         running.clear()
         if drain_task and not drain_task.done():
             drain_task.cancel()
+
+
+def _push_quality_scores(state_values: dict) -> None:
+    """Extract editor and continuity scores from graph state and push to LangFuse."""
+    scores = {}
+    ed = state_values.get("editor_report", {})
+    ct = state_values.get("continuity_report", {})
+    if isinstance(ed, dict) and "overall_score" in ed:
+        scores["editor_score"] = float(ed["overall_score"])
+    if isinstance(ct, dict) and "overall_score" in ct:
+        scores["continuity_score"] = float(ct["overall_score"])
+    if scores:
+        score_trace(scores)
 
 
 def _save_chapter_result(

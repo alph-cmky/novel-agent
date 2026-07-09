@@ -129,15 +129,13 @@ tests/
 ## CLI 命令
 
 ```
-novel-agent init -n <name> [-t title] [-g genre] [-l short|novella|long] [-w words]
-novel-agent write -c <chapter> -o <outline> [-p project] [-m model] [-w words]
-novel-agent quick -c <chapter> -o <outline> [-p project] [-m model] [-w words]
-novel-agent list
-novel-agent trace show <file>
-novel-agent trace ls
+novel-agent serve [--host 0.0.0.0] [--port 8000] [--reload]   # 启动 Web 服务
+novel-agent export [-p project] [-f md|txt] [-o output]        # 导出小说
+novel-agent trace show <file>                                    # 查看 trace
+novel-agent trace ls                                             # 列出 trace
 ```
 
-`write` 命令支持 Human-in-the-loop：流水线运行到 Human Review 节点时暂停，用户输入 approve/reject 决定是否通过。
+项目管理、大纲规划、章节写作请在 Web UI 中完成。
 
 ## Chainlit 命令
 

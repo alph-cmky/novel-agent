@@ -1,15 +1,10 @@
-"""Context Compressor — intelligent compression when token budget exceeded.
-
-When Recent Memory exceeds the token threshold, compresses older chapters
-into summaries while preserving critical information (foreshadowings,
-character introductions, setting changes).
-"""
+"""Context Compressor — intelligent compression when token budget exceeded."""
 
 import os
 import re
 from dataclasses import dataclass, field
 
-from openai import AsyncOpenAI
+from langchain_openai import ChatOpenAI
 
 
 @dataclass
@@ -47,13 +42,13 @@ class ContextCompressor:
 
     def __init__(self, strategy: CompressionStrategy | None = None):
         self.strategy = strategy or CompressionStrategy()
-        self._client: AsyncOpenAI | None = None
-
-    async def close(self) -> None:
-        """Release the underlying HTTP client connection pool."""
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+        self._model = ChatOpenAI(
+            model=os.getenv("BUDGET_MODEL", "deepseek-chat"),
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            max_tokens=600,
+            temperature=0.3,
+        )
 
     def should_compress(self, context: dict[str, str]) -> bool:
         """Check if total context exceeds threshold."""
@@ -93,22 +88,7 @@ class ContextCompressor:
         )
 
         # Build compressed summary
-        parts = []
-        for c in older:
-            draft = c.get("draft_content", "")
-            if draft:
-                parts.append(
-                    f"第{c.get('chapter_number', '?')}章: {draft[:200]}..."
-                    if len(draft) > 200 else
-                    f"第{c.get('chapter_number', '?')}章: {draft}"
-                )
-
-        # If we have enough chapters and an API key, use LLM for better summary
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        if api_key and len(older) >= 3:
-            summary = await self._llm_compress(older)
-        else:
-            summary = _build_simple_summary(older)
+        summary = await self._llm_compress(older)
 
         # Recent chapters stay full
         recent_text = _build_simple_summary(recent)
@@ -120,12 +100,6 @@ class ContextCompressor:
 
     async def _llm_compress(self, chapters: list[dict]) -> str:
         """Use LLM to generate a concise summary of older chapters."""
-        if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=os.getenv("OPENAI_API_KEY", ""),
-                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            )
-
         chapter_texts = []
         for c in chapters:
             cn = c.get("chapter_number", "?")
@@ -140,13 +114,8 @@ class ContextCompressor:
         )
 
         try:
-            response = await self._client.chat.completions.create(
-                model=os.getenv("BUDGET_MODEL", "deepseek-chat"),
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content or ""
+            response = await self._model.ainvoke(prompt)
+            return response.content or ""
         except Exception:
             return _build_simple_summary(chapters)
 

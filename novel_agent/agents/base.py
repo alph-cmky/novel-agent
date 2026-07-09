@@ -7,8 +7,16 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from openai import AsyncOpenAI
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_openai import ChatOpenAI
 
+from novel_agent.observability.langfuse import get_handler as _get_lf_handler
 from novel_agent.tools.base import BaseTool, ToolResult
 
 
@@ -56,6 +64,40 @@ class TraceStep:
         }
 
 
+def _to_langchain_messages(messages: list[dict]) -> list[BaseMessage]:
+    """Convert OpenAI-style message dicts to LangChain BaseMessage list."""
+    result = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            result.append(SystemMessage(content=content))
+        elif role == "user":
+            result.append(HumanMessage(content=content))
+        elif role == "assistant":
+            aim = AIMessage(content=content)
+            tcs = m.get("tool_calls", [])
+            if tcs:
+                aim.tool_calls = [
+                    {
+                        "id": tc["id"],
+                        "name": tc["function"]["name"],
+                        "args": (
+                            json.loads(tc["function"]["arguments"])
+                            if isinstance(tc["function"]["arguments"], str)
+                            else tc["function"]["arguments"]
+                        ),
+                    }
+                    for tc in tcs
+                ]
+            result.append(aim)
+        elif role == "tool":
+            result.append(ToolMessage(content=content, tool_call_id=m.get("tool_call_id", "")))
+        else:
+            result.append(HumanMessage(content=content))
+    return result
+
+
 class BaseAgent:
     """Base agent with model calling, tool execution, and trace recording."""
 
@@ -63,10 +105,6 @@ class BaseAgent:
 
     def __init__(self, config: AgentConfig | None = None):
         self.config = config or AgentConfig()
-        self._client = AsyncOpenAI(
-            api_key=self.config.api_key,
-            base_url=self.config.base_url,
-        )
         self._tools: dict[str, BaseTool] = {}
         self._latest_trace: TraceStep | None = None
 
@@ -86,34 +124,41 @@ class BaseAgent:
         messages: list[dict],
         tools: list[BaseTool] | None = None,
         action: str = "model_call",
-    ) -> Any:
-        """Call the LLM with optional tool definitions. Returns the message."""
+    ) -> AIMessage:
+        """Call the LLM with optional tool definitions. Returns AIMessage."""
         tool_list = tools or self.tools
-        tool_schemas = [t.get_schema() for t in tool_list] if tool_list else None
+        lc_messages = _to_langchain_messages(messages)
 
         t0 = time.monotonic()
         trace = TraceStep(agent=self.name, action=action)
         trace.model = self.config.model
 
-        kwargs = {
-            "model": self.config.model,
-            "messages": messages,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-        }
-        if tool_schemas:
-            kwargs["tools"] = tool_schemas
+        model = ChatOpenAI(
+            model=self.config.model,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+        )
+        bound = model.bind_tools(
+            [t.get_schema()["function"] for t in tool_list]
+        ) if tool_list else model
 
-        response = await self._client.chat.completions.create(**kwargs)
+        config: dict[str, Any] = {}
+        lf_handler = _get_lf_handler()
+        if lf_handler:
+            config["callbacks"] = [lf_handler]
+
+        response: AIMessage = await bound.ainvoke(lc_messages, config=config)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-        msg = response.choices[0].message
-        trace.input_tokens = response.usage.prompt_tokens if response.usage else 0
-        trace.output_tokens = response.usage.completion_tokens if response.usage else 0
+        usage = getattr(response, "usage_metadata", {}) or {}
+        trace.input_tokens = usage.get("input_tokens", 0)
+        trace.output_tokens = usage.get("output_tokens", 0)
         trace.duration_ms = elapsed_ms
         self._latest_trace = trace
 
-        return msg
+        return response
 
     async def call_model_stream(
         self,
@@ -133,33 +178,37 @@ class BaseAgent:
         trace = TraceStep(agent=self.name, action=action)
         trace.model = self.config.model
 
-        kwargs = {
-            "model": self.config.model,
-            "messages": messages,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-
-        stream = await self._client.chat.completions.create(**kwargs)
+        lc_messages = _to_langchain_messages(messages)
         total_input = 0
         total_output = 0
         reasoning_chars = 0
-        async for chunk in stream:
-            if chunk.usage:
-                total_input = chunk.usage.prompt_tokens or 0
-                total_output = chunk.usage.completion_tokens or 0
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta:
-                rc = getattr(delta, "reasoning_content", "") or ""
-                if rc:
-                    reasoning_chars += len(rc)
-                if delta.content:
-                    yield delta.content
+
+        model = ChatOpenAI(
+            model=self.config.model,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+        )
+        config: dict[str, Any] = {}
+        lf_handler = _get_lf_handler()
+        if lf_handler:
+            config["callbacks"] = [lf_handler]
+
+        async for chunk in model.astream(lc_messages, config=config):
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage:
+                total_input = usage.get("input_tokens", total_input)
+                total_output = usage.get("output_tokens", total_output)
+
+            content = getattr(chunk, "content", "") or ""
+            rc = getattr(chunk, "reasoning_content", "") or ""
+            if rc:
+                reasoning_chars += len(rc)
+            if content:
+                yield content
 
         if reasoning_chars > 0 and total_output == 0:
-            # Reasoning model used all tokens for thinking — estimate output
             total_output = reasoning_chars
 
         trace.input_tokens = total_input
@@ -175,32 +224,49 @@ class BaseAgent:
         """Execute tool calls from a model response and return results."""
         results = []
         for tc in tool_calls:
-            tool_name = tc.function.name
+            if isinstance(tc, dict):
+                tool_name = tc.get("name") or tc.get("function", {}).get("name", "")
+                tool_args = tc.get("args") or tc.get("function", {}).get("arguments", {})
+                tool_id = tc.get("id", "")
+            else:
+                tool_name = getattr(tc, "name", "")
+                tool_args = getattr(tc, "args", {})
+                tool_id = getattr(tc, "id", "")
+
             tool = self._tools.get(tool_name)
             if tool is None:
                 results.append({
-                    "tool_call_id": tc.id,
+                    "tool_call_id": tool_id,
                     "role": "tool",
                     "content": json.dumps({"error": f"Unknown tool: {tool_name}"}),
                 })
                 continue
 
-            try:
-                args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
-                args = {}
+            if isinstance(tool_args, str):
+                try:
+                    tool_args = json.loads(tool_args)
+                except json.JSONDecodeError:
+                    tool_args = {}
 
-            result: ToolResult = await tool.execute(**args)
+            try:
+                result: ToolResult = await tool.execute(**tool_args)
+            except Exception as exc:
+                result = ToolResult(success=False, error=str(exc))
+
             results.append({
-                "tool_call_id": tc.id,
+                "tool_call_id": tool_id,
                 "role": "tool",
-                "content": json.dumps(result.data, ensure_ascii=False),
+                "content": (
+                    json.dumps(result.data, ensure_ascii=False)
+                    if result.success
+                    else json.dumps({"error": result.error})
+                ),
             })
 
             if trace:
                 trace.tool_calls.append({
                     "tool": tool_name,
-                    "args": args,
+                    "args": tool_args,
                     "success": result.success,
                 })
 
@@ -218,34 +284,42 @@ class BaseAgent:
         trace.model = self.config.model
 
         for _ in range(max_rounds):
-            msg = await self.call_model(messages, action=action)
+            response = await self.call_model(messages, action=action)
             if self._latest_trace:
                 trace.input_tokens += self._latest_trace.input_tokens
                 trace.output_tokens += self._latest_trace.output_tokens
 
-            # Execute tool_calls first — model may return both
-            # content and tool_calls; tools must not be dropped.
-            if msg.tool_calls:
-                tool_results = await self.execute_tool_calls(msg.tool_calls, trace)
-                messages.append({"role": "assistant", "tool_calls": [
-                    {"id": tc.id, "type": "function", "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    }} for tc in msg.tool_calls
-                ]})
+            tool_calls = getattr(response, "tool_calls", None)
+            if tool_calls:
+                tool_results = await self.execute_tool_calls(tool_calls, trace)
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": tc.get("name", ""),
+                                "arguments": (
+                                    json.dumps(tc.get("args", {}))
+                                    if isinstance(tc.get("args"), dict)
+                                    else tc.get("args", "")
+                                ),
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                })
                 messages.extend(tool_results)
-                if msg.content:
-                    # Accumulate content and continue — model may produce
-                    # more after tool results are fed back.
-                    continue
                 continue
 
-            if msg.content:
+            content = response.content or ""
+            if content:
                 trace.duration_ms = int((time.monotonic() - t0) * 1000)
                 self._latest_trace = trace
-                return msg.content, trace
+                return content, trace
 
-            # No content and no tool calls — shouldn't happen
             break
 
         self._latest_trace = trace

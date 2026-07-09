@@ -336,21 +336,64 @@ class ProjectManager:
         description: str,
         planted_chapter: int,
         expected_resolve_chapter: int | None = None,
+        risk_level: str = "medium",
+        reader_knows: bool = False,
+        characters_aware: list[str] | None = None,
+        characters_unaware: list[str] | None = None,
     ) -> str:
         """Record a new foreshadowing. Returns foreshadowing_id."""
+        import json as _json
         import uuid as _uuid
         fid = str(_uuid.uuid4())[:8]
         conn = self._get_conn()
         conn.execute(
             "INSERT INTO foreshadowings "
             "(id, project_id, description, planted_chapter, "
-            "expected_resolve_chapter, status) VALUES (?, ?, ?, ?, ?, 'planted')",
+            "expected_resolve_chapter, status, risk_level, reader_knows, "
+            "characters_aware, characters_unaware) "
+            "VALUES (?, ?, ?, ?, ?, 'planted', ?, ?, ?, ?)",
             (fid, project_id, description, planted_chapter,
-             expected_resolve_chapter),
+             expected_resolve_chapter, risk_level,
+             1 if reader_knows else 0,
+             _json.dumps(characters_aware or [], ensure_ascii=False),
+             _json.dumps(characters_unaware or [], ensure_ascii=False)),
         )
         conn.commit()
         conn.close()
         return fid
+
+    def update_foreshadowing_status(
+        self,
+        project_id: str,
+        description: str,
+        planted_chapter: int,
+        **kwargs,
+    ) -> bool:
+        """Update foreshadowing lifecycle fields (risk_level, action_needed, etc.)."""
+        allowed = {"risk_level", "action_needed", "status", "reader_knows",
+                    "characters_aware", "characters_unaware",
+                    "resolved_chapter", "expected_resolve_chapter"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return False
+        import json as _json
+        conn = self._get_conn()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values())
+        # JSON-serialize list fields
+        for i, (k, v) in enumerate(list(updates.items())):
+            if k in ("characters_aware", "characters_unaware") and isinstance(v, list):
+                values[i] = _json.dumps(v, ensure_ascii=False)
+        values.extend([project_id, description, planted_chapter])
+        conn.execute(
+            f"UPDATE foreshadowings SET {set_clause} "
+            f"WHERE project_id = ? AND description = ? AND planted_chapter = ?",
+            values,
+        )
+        updated = conn.total_changes > 0
+        conn.commit()
+        conn.close()
+        return updated
 
     def get_foreshadowings(self, project_id: str) -> list[dict]:
         conn = self._get_conn()
