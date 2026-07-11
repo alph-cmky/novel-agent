@@ -21,7 +21,11 @@ from novel_agent.tools.base import BaseTool, ToolResult
 
 
 class AgentConfig:
-    """Configuration for an agent instance."""
+    """Configuration for an agent instance.
+
+    Validates inputs early so misconfiguration is caught at startup,
+    not deep inside an LLM call.
+    """
 
     def __init__(
         self,
@@ -34,8 +38,30 @@ class AgentConfig:
         self.model = model or os.getenv("BUDGET_MODEL", "deepseek-chat")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+        # Validate types
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError(f"model must be a non-empty string, got: {self.model!r}")
+        if not isinstance(self.api_key, str):
+            raise ValueError(f"api_key must be a string, got: {type(self.api_key).__name__}")
+        if not isinstance(self.base_url, str):
+            raise ValueError(f"base_url must be a string, got: {type(self.base_url).__name__}")
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise ValueError(f"max_tokens must be a positive int, got: {max_tokens}")
+        if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 2:
+            raise ValueError(f"temperature must be 0-2, got: {temperature}")
+
         self.max_tokens = max_tokens
-        self.temperature = temperature
+        self.temperature = float(temperature)
+
+        # Warn if API key is empty (but don't crash — user may fix it later)
+        if not self.api_key:
+            import warnings
+            warnings.warn(
+                "OPENAI_API_KEY is not set. LLM calls will fail until configured.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 class TraceStep:

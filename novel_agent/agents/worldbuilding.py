@@ -1,7 +1,8 @@
-"""Worldbuilding Agent — entity extraction, conflict detection, knowledge graph.
+"""Worldbuilding Agent — entity extraction, conflict detection, foreshadowing lifecycle.
 
 Reads chapter output, extracts new entities (characters, locations, rules),
-compares against existing worldbuilding database, and flags conflicts.
+compares against existing worldbuilding database, flags conflicts, and manages
+foreshadowing lifecycle (plant/resolve/advance).
 """
 
 import json
@@ -29,7 +30,22 @@ WORLDBUILDING_SYSTEM_PROMPT = """你是一个小说世界观管理员，负责�
 - 新规则与旧规则矛盾
 - 时间线冲突
 
-### 3. 输出格式
+### 3. 伏笔生命周期管理
+从本章内容中识别伏笔（foreshadowing），并与已有伏笔比对：
+
+**新伏笔识别标准：**
+- 角色提及未来计划/约定（"下次见面时..."、"三个月后..."）
+- 物品/能力出现但未解释（神秘道具、未知力量）
+- 信息不对称（某人知道但读者/其他人不知道）
+- 预言或暗示（"这个选择将改变一切"）
+- 未完成的对话/行动
+
+**已有伏笔状态判断：**
+- 被解决了 → 放入 resolved_foreshadowings
+- 有进展但未解决 → 放入 foreshadowings（只保留有实质进展的）
+- 无进展 → 不需要在输出中提及
+
+### 4. 输出格式
 
 ```json
 {
@@ -55,7 +71,25 @@ WORLDBUILDING_SYSTEM_PROMPT = """你是一个小说世界观管理员，负责�
     }
   ],
   "chapter_events": ["本章发生的关键事件"],
-  "updated_entities": ["设定有更新或进展的已有实体"]
+  "updated_entities": ["设定有更新或进展的已有实体"],
+  "foreshadowings": [
+    {
+      "description": "伏笔描述",
+      "planted_chapter": 3,
+      "expected_resolve_chapter": null,
+      "risk_level": "high|medium|low",
+      "action_needed": "后续章节应如何回应此伏笔",
+      "reader_knows": true,
+      "characters_aware": ["角色名"],
+      "characters_unaware": ["角色名"]
+    }
+  ],
+  "resolved_foreshadowings": [
+    {
+      "description": "已解决伏笔的原文（需与已有伏笔匹配）",
+      "resolved_chapter": 3
+    }
+  ]
 }
 ```
 
@@ -70,9 +104,11 @@ class WorldbuildingAgent(BaseAgent):
         self,
         config: AgentConfig | None = None,
         existing_entities: list[dict] | None = None,
+        existing_foreshadowings: list[dict] | None = None,
     ):
         super().__init__(config)
         self._existing_entities = existing_entities or []
+        self._existing_foreshadowings = existing_foreshadowings or []
 
     @property
     def system_prompt(self) -> str:
@@ -84,13 +120,27 @@ class WorldbuildingAgent(BaseAgent):
         draft_content: str,
         narrative_mode: str | None = None,
     ) -> tuple[dict, TraceStep]:
-        """Extract worldbuilding entities from a chapter.
+        """Extract worldbuilding entities, conflicts, and foreshadowings from a chapter.
 
         Returns (extraction_report, trace).
         """
         existing_json = json.dumps(
             self._existing_entities, ensure_ascii=False, indent=2
         )
+
+        # Build existing foreshadowings context
+        fs_context = ""
+        if self._existing_foreshadowings:
+            open_fs = [f for f in self._existing_foreshadowings
+                       if f.get("status") in ("open", "planted")]
+            if open_fs:
+                items = []
+                for f in open_fs:
+                    items.append(
+                        f"  - [{f.get('risk_level', '?')}] "
+                        f"第{f.get('planted_chapter', '?')}章: {f.get('description', '')}"
+                    )
+                fs_context = "## 已有伏笔（待解决/有进展）\n" + "\n".join(items) + "\n"
 
         # Mode-specific instruction for POV tagging
         mode_hint = ""
@@ -105,9 +155,10 @@ class WorldbuildingAgent(BaseAgent):
             {
                 "role": "user",
                 "content": (
-                    f"从第{chapter_number}章提取新设定，并与已有设定比对。\n"
+                    f"从第{chapter_number}章提取新设定、冲突和伏笔。\n"
                     f"{mode_hint}\n"
                     f"## 已有设定\n{existing_json}\n\n"
+                    f"{fs_context}"
                     f"## 本章正文\n{draft_content[:4000]}\n\n"
                     f"只输出JSON。"
                 ),
@@ -125,6 +176,8 @@ class WorldbuildingAgent(BaseAgent):
             "conflicts": [],
             "chapter_events": [],
             "updated_entities": [],
+            "foreshadowings": [],
+            "resolved_foreshadowings": [],
         })
         return report, trace
 

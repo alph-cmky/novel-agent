@@ -4,6 +4,8 @@ Usage:
     chainlit run novel_agent/api/app.py
 """
 
+import json
+import os
 from pathlib import Path
 
 import chainlit as cl
@@ -11,13 +13,16 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from novel_agent.graph.chapter import build_chapter_graph
+from novel_agent.observability.langfuse import create_trace, score_trace
 from novel_agent.storage.manager import ProjectManager
 
-DEFAULT_PROJECT_DIR = Path.cwd() / "novel-data"
+
+def _get_persist_dir() -> Path:
+    return Path(os.getenv("NOVEL_DATA_DIR", "./novel-data"))
 
 
 def _get_manager() -> ProjectManager:
-    return ProjectManager(DEFAULT_PROJECT_DIR)
+    return ProjectManager(_get_persist_dir())
 
 
 def _build_initial_state(
@@ -54,7 +59,7 @@ def _build_initial_state(
         "recent_summary": ctx["recent_summary"],
         "unresolved_foreshadowings": [],
         "trace_id": "",
-        "persist_dir": str(DEFAULT_PROJECT_DIR.absolute()),
+        "persist_dir": str(_get_persist_dir().absolute()),
     }
 
 
@@ -343,8 +348,15 @@ async def _run_pipeline(
         narrative_perspective=narrative_perspective,
     )
 
-    graph = build_chapter_graph()
+    graph = build_chapter_graph(persist_dir=str(_get_persist_dir()))
     config = {"configurable": {"thread_id": f"project-{project_id}"}}
+
+    # Create LangFuse trace for this chapter run
+    create_trace(
+        name=f"chapter_{chapter_number}",
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
 
     await cl.Message(content=f"## Chapter {chapter_number}: {outline}\n").send()
 
@@ -372,9 +384,29 @@ async def _run_pipeline(
     continuity = result.get("continuity_report", {})
     worldbuilding = result.get("worldbuilding_report", {})
 
-    # Save result
-    mgr.save_chapter(project_id, chapter_number, outline=outline, draft_content=draft)
-    mgr.save_world_entities(project_id, worldbuilding_report=worldbuilding)
+    # Save result with full reports
+    status = "approved" if result.get("human_approved") else "draft"
+    mgr.save_chapter(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        outline=outline,
+        draft_content=draft,
+        status=status,
+        editor_report=json.dumps(editor, ensure_ascii=False),
+        continuity_report=json.dumps(continuity, ensure_ascii=False),
+    )
+    if worldbuilding:
+        mgr.update_chapter_worldbuilding(project_id, chapter_number, worldbuilding)
+        mgr.save_world_entities(project_id, worldbuilding)
+
+    # Push quality scores to LangFuse trace
+    scores = {}
+    if isinstance(editor, dict) and "overall_score" in editor:
+        scores["editor_score"] = float(editor["overall_score"])
+    if isinstance(continuity, dict) and "overall_score" in continuity:
+        scores["continuity_score"] = float(continuity["overall_score"])
+    if scores:
+        score_trace(scores)
 
     # Display results
     editor_score = editor.get("overall_score", "?")

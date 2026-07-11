@@ -72,7 +72,12 @@ EDITOR_APPROVE_SCORE = 60        # minimum editor score for auto-approval
 def _config_for(task: TaskClass) -> AgentConfig:
     """Create AgentConfig from the model router's decision."""
     route = router.resolve(task)
-    return AgentConfig(model=route.model, temperature=route.temperature)
+    kwargs: dict = {"model": route.model, "temperature": route.temperature}
+    if route.api_key:
+        kwargs["api_key"] = route.api_key
+    if route.base_url:
+        kwargs["base_url"] = route.base_url
+    return AgentConfig(**kwargs)
 
 # ── Nodes ──────────────────────────────────────────────
 
@@ -160,11 +165,29 @@ async def orchestrator_node(state: NovelState) -> dict:
             f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
         )
 
+    # Load unresolved foreshadowings from DB
+    unresolved: list[str] = []
+    if project_id:
+        try:
+            from novel_agent.storage.manager import ProjectManager
+            mgr2 = ProjectManager(persist_dir)
+            all_fs = mgr2.get_foreshadowings(project_id)
+            open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
+            unresolved = [
+                f"[第{f.get('planted_chapter','?')}章] {f.get('description','')}"
+                for f in open_fs
+            ]
+            if unresolved:
+                print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
+        except Exception:
+            pass
+
     return {
         "orchestrator_strategy": strategy,
         "character_context": char_ctx,
         "world_context": world_ctx,
         "recent_summary": recent_summary,
+        "unresolved_foreshadowings": unresolved,
     }
 
 
@@ -334,11 +357,25 @@ async def orchestrator_review_node(state: NovelState) -> dict:
 
 
 async def worldbuilding_node(state: NovelState) -> dict:
-    """Worldbuilding Agent extracts entities from approved chapter."""
+    """Worldbuilding Agent extracts entities, conflicts, and foreshadowings."""
     existing = state.get("existing_world_entities", [])
+
+    # Load existing foreshadowings for lifecycle tracking
+    persist_dir = state.get("persist_dir", "./novel-data")
+    project_id = state.get("project_id", "")
+    existing_fs: list[dict] = []
+    if project_id:
+        try:
+            from novel_agent.storage.manager import ProjectManager
+            mgr = ProjectManager(persist_dir)
+            existing_fs = mgr.get_foreshadowings(project_id)
+        except Exception:
+            pass
+
     wb = WorldbuildingAgent(
         config=_config_for(TaskClass.EXTRACTION),
         existing_entities=existing,
+        existing_foreshadowings=existing_fs,
     )
     report, _ = await wb.extract(
         chapter_number=state.get("chapter_number", 1),
@@ -347,7 +384,12 @@ async def worldbuilding_node(state: NovelState) -> dict:
     )
     entities = len(report.get("new_entities", []))
     conflicts = len(report.get("conflicts", []))
-    print(f"  [Worldbuilding] {entities} new entities, {conflicts} conflicts")
+    new_fs = len(report.get("foreshadowings", []))
+    resolved_fs = len(report.get("resolved_foreshadowings", []))
+    print(
+        f"  [Worldbuilding] {entities} entities, {conflicts} conflicts, "
+        f"{new_fs} new foreshadowings, {resolved_fs} resolved"
+    )
     return {"worldbuilding_report": report}
 
 

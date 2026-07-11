@@ -9,7 +9,9 @@ ENTITY_SHAPES = {
     "character": "ellipse",
     "location": "diamond",
     "item": "rectangle",
-    "organization": "hexagon",
+    "faction": "hexagon",
+    "organization": "hexagon",  # legacy alias
+    "rule": "round-rectangle",
     "event": "triangle",
     "unknown": "ellipse",
 }
@@ -19,7 +21,9 @@ ENTITY_COLORS = {
     "character": "#4a90d9",
     "location": "#67c23a",
     "item": "#e6a23c",
-    "organization": "#7b4dd3",
+    "faction": "#7b4dd3",
+    "organization": "#7b4dd3",  # legacy alias
+    "rule": "#e040fb",
     "event": "#f56c6c",
     "unknown": "#909399",
 }

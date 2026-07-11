@@ -1,20 +1,6 @@
 version: "3.8"
 
 services:
-  novel-agent:
-    build: .
-    container_name: novel-agent
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - BUDGET_MODEL=${BUDGET_MODEL:-deepseek-chat}
-      - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
-    volumes:
-      - ./novel-data:/app/novel-data
-      - ./traces:/app/traces
-    stdin_open: true
-    tty: true
-
   web:
     build: .
     container_name: novel-agent-web
@@ -26,16 +12,18 @@ services:
       - BUDGET_MODEL=${BUDGET_MODEL:-deepseek-chat}
       - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
       - NOVEL_DATA_DIR=/app/novel-data
+      # LangFuse observability (optional — leave blank to disable)
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
     volumes:
       - ./novel-data:/app/novel-data
       - ./traces:/app/traces
-    command: uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
 
-  chainlit:
+  # CLI mode — interactive use (stdin/tty required)
+  cli:
     build: .
-    container_name: novel-agent-chainlit
-    ports:
-      - "8001:8000"
+    container_name: novel-agent-cli
+    profiles: ["cli"]
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -44,4 +32,6 @@ services:
     volumes:
       - ./novel-data:/app/novel-data
       - ./traces:/app/traces
-    command: uv run chainlit run novel_agent/api/chainlit_app.py --host 0.0.0.0 --port 8000
+    stdin_open: true
+    tty: true
+    entrypoint: ["uv", "run", "novel-agent"]

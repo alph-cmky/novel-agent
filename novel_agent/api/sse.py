@@ -368,6 +368,54 @@ def _push_quality_scores(state_values: dict) -> None:
         score_trace(scores)
 
 
+def _save_foreshadowings(
+    mgr: ProjectManager, project_id: str, chapter_number: int,
+    wb_report: dict,
+) -> None:
+    """Persist new and resolved foreshadowings from worldbuilding report."""
+    # Save new foreshadowings
+    for fs in wb_report.get("foreshadowings", []) or []:
+        if not isinstance(fs, dict) or not fs.get("description"):
+            continue
+        try:
+            mgr.add_foreshadowing(
+                project_id=project_id,
+                description=str(fs["description"]),
+                planted_chapter=int(fs.get("planted_chapter", chapter_number)),
+                expected_resolve_chapter=(
+                    int(fs["expected_resolve_chapter"])
+                    if fs.get("expected_resolve_chapter") else None
+                ),
+                risk_level=str(fs.get("risk_level", "medium")),
+                reader_knows=bool(fs.get("reader_knows", False)),
+                characters_aware=(
+                    fs["characters_aware"] if isinstance(fs.get("characters_aware"), list) else []
+                ),
+                characters_unaware=(
+                    fs["characters_unaware"]
+                    if isinstance(fs.get("characters_unaware"), list)
+                    else []
+                ),
+            )
+        except Exception:
+            pass
+
+    # Resolve existing foreshadowings
+    for fs in wb_report.get("resolved_foreshadowings", []) or []:
+        if not isinstance(fs, dict) or not fs.get("description"):
+            continue
+        try:
+            mgr.update_foreshadowing_status(
+                project_id=project_id,
+                description=str(fs["description"]),
+                planted_chapter=int(fs.get("planted_chapter", 0)),
+                status="resolved",
+                resolved_chapter=chapter_number,
+            )
+        except Exception:
+            pass
+
+
 def _save_chapter_result(
     mgr: ProjectManager, project_id: str, chapter_number: int, result: dict
 ) -> None:
@@ -397,3 +445,6 @@ def _save_chapter_result(
     # Save world entities
     if wb_report:
         mgr.save_world_entities(project_id, wb_report)
+
+    # Save foreshadowing lifecycle
+    _save_foreshadowings(mgr, project_id, chapter_number, wb_report)

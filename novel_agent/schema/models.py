@@ -152,3 +152,5 @@ class WorldbuildingReport(BaseModel):
     conflicts: list[WorldbuildingConflict] = Field(default_factory=list)
     chapter_events: list[str] = Field(default_factory=list)
     updated_entities: list[str] = Field(default_factory=list)
+    # Foreshadowing lifecycle — extracted by WorldbuildingAgent
+    foreshadowings: list[dict[str, Any]] = Field(default_factory=list)

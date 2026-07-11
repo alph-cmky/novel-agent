@@ -2,6 +2,11 @@
 
 Budget model (deepseek-chat): structural analysis, reviews, extraction.
 Quality model (claude-sonnet-4): creative writing, dialogue, final prose.
+
+Each model tier can use a different API key and base URL via env vars:
+  QUALITY_API_KEY / QUALITY_BASE_URL — for quality model
+  BUDGET_API_KEY / BUDGET_BASE_URL — for budget model
+  If not set, falls back to OPENAI_API_KEY / OPENAI_BASE_URL.
 """
 
 import os
@@ -21,6 +26,8 @@ class RouteConfig:
     model: str
     temperature: float
     max_tokens: int = 4096
+    api_key: str = ""
+    base_url: str = ""
 
 
 TASK_ROUTES: dict[TaskClass, tuple[str, float]] = {
@@ -43,11 +50,22 @@ class ModelRouter:
     def resolve(self, task: TaskClass) -> RouteConfig:
         env_key, temperature = TASK_ROUTES[task]
         budget = self._budget_override or os.getenv("BUDGET_MODEL", FALLBACK_MODEL)
+
         if "QUALITY" in env_key:
             model = self._quality_override or os.getenv("QUALITY_MODEL") or budget
+            api_key = os.getenv("QUALITY_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+            base_url = os.getenv("QUALITY_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
         else:
             model = budget
-        return RouteConfig(model=model, temperature=temperature)
+            api_key = os.getenv("BUDGET_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+            base_url = os.getenv("BUDGET_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
+
+        return RouteConfig(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=base_url,
+        )
 
     def route_for(self, agent_name: str) -> RouteConfig:
         mapping = {

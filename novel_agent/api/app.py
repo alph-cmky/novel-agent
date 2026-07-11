@@ -12,9 +12,9 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(_env_path)
 
-from fastapi import FastAPI  # noqa: E402
+from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from novel_agent.api.routes import router  # noqa: E402
@@ -30,6 +30,17 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(_request: Request, exc: Exception):
+    """Catch-all handler returning JSON errors instead of HTML 500 pages."""
+    import traceback
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "traceback": traceback.format_exc()},
+    )
+
 
 # Serve frontend static files in production
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"

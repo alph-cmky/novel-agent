@@ -152,6 +152,9 @@ async def get_outline(project_id: str):
 @router.put("/projects/{project_id}/outline")
 async def save_outline(project_id: str, req: SaveOutlineRequest):
     mgr = _get_manager()
+    project = mgr.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     mgr.save_outline(project_id, req.chapters)
     return {"ok": True}
 
@@ -162,7 +165,13 @@ async def generate_outline_endpoint(project_id: str):
     project = mgr.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    chapters = await generate_outline(mgr, project_id)
+    try:
+        chapters = await generate_outline(mgr, project_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"大纲生成失败: {str(e)}",
+        ) from e
     return chapters
 
 
@@ -181,6 +190,9 @@ async def get_graph(project_id: str, until_chapter: int = Query(0)):
 @router.get("/projects/{project_id}/chapters")
 async def list_chapters(project_id: str):
     mgr = _get_manager()
+    project = mgr.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     return mgr.get_all_chapters(project_id)
 
 
@@ -331,6 +343,9 @@ async def reject_chapter(project_id: str, chapter_number: int, req: RejectReques
 @router.put("/projects/{project_id}/chapters/{chapter_number}/draft")
 async def save_draft(project_id: str, chapter_number: int, req: SaveDraftRequest):
     mgr = _get_manager()
+    project = mgr.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
     existing = mgr.get_chapter(project_id, chapter_number)
     status = existing["status"] if existing and existing.get("status") == "approved" else "draft"
     mgr.save_chapter(
@@ -357,8 +372,11 @@ def _build_export_content(
     for o in outlines:
         title_map[o["chapter_number"]] = o.get("title", "")
 
-    # Filter to chapters that have content
-    written = [c for c in chapters if c.get("draft_content", "").strip()]
+    # Filter to chapters that have content (guard against None)
+    written = [
+        c for c in chapters
+        if (c.get("draft_content") or "").strip()
+    ]
     total = len(written)
 
     if fmt == "txt":
@@ -380,7 +398,7 @@ def _build_export_content(
             ch_title = title_map.get(cn, f"第{cn}章")
             lines.append(f"第{cn}章 {ch_title}")
             lines.append("")
-            lines.append(ch["draft_content"].strip())
+            lines.append((ch.get("draft_content") or "").strip())
             lines.append("")
             lines.append("─" * 40)
             lines.append("")
@@ -407,7 +425,7 @@ def _build_export_content(
         heading = f"## 第{cn}章" + (f" {ch_title}" if ch_title else "")
         lines.append(heading)
         lines.append("")
-        lines.append(ch["draft_content"].strip())
+        lines.append((ch.get("draft_content") or "").strip())
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -441,7 +459,7 @@ async def export_novel(
     content = _build_export_content(project, chapters, outlines, fmt)
 
     if preview:
-        total = len([c for c in chapters if c.get("draft_content", "").strip()])
+        total = len([c for c in chapters if (c.get("draft_content") or "").strip()])
         return {
             "title": title,
             "content": content,
