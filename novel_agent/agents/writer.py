@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
+from novel_agent.schema.parser import strip_none
 from novel_agent.tools.search import SearchContextTool
 
 WRITER_SYSTEM_PROMPT = """你是一个专业的长篇小说写手，擅长创作节奏快、冲突强的网文。
@@ -191,7 +192,10 @@ class WriterAgent(BaseAgent):
         Tier 2 (CONDITIONAL): Mode-specific guidance — only when narrative_mode matches.
         Tier 3 (AUXILIARY): Experience hints — injected as [参考] suggestions.
         """
-        cs = strategy.get("chapter_strategy", {})
+        cs = strategy.get("chapter_strategy") or {}
+        if not isinstance(cs, dict):
+            cs = {}
+        cs = strip_none(cs)
         parts = []
 
         # ── Stage context (from top-level strategy, not chapter_strategy) ──

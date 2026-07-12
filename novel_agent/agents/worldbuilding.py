@@ -8,7 +8,7 @@ foreshadowing lifecycle (plant/resolve/advance).
 import json
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
-from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import parse_validated
 
 WORLDBUILDING_SYSTEM_PROMPT = """你是一个小说世界观管理员，负责从章节内容中提取和管理设定。
 
@@ -171,7 +171,7 @@ class WorldbuildingAgent(BaseAgent):
             action=f"extract_worldbuilding_ch{chapter_number}",
         )
 
-        report = parse_json_response(content, defaults={
+        report = parse_validated("worldbuilding", content, defaults={
             "new_entities": [],
             "conflicts": [],
             "chapter_events": [],

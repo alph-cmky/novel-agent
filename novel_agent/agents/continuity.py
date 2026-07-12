@@ -2,7 +2,7 @@
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
-from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import parse_validated
 from novel_agent.tools.continuity import CheckContinuityTool
 
 CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门检查章节间的一致性。
@@ -50,12 +50,12 @@ CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门�
   "overall_score": 0-100,
   "inconsistencies": [
     {
-      "type": "character|timeline|worldbuilding",
+      "category": "character|timeline|worldbuilding",
       "severity": "critical|major|minor",
-      "location_current": "本章描述内容",
-      "location_previous": "前文矛盾内容",
+      "current": "本章描述内容",
+      "previous": "前文矛盾内容",
       "description": "具体冲突描述",
-      "fix_suggestion": "修复建议"
+      "suggestion": "修复建议"
     }
   ],
   "verdict": "pass|rewrite|minor_fix"
@@ -112,7 +112,7 @@ class ContinuityAgent(BaseAgent):
             messages, max_rounds=2, action=f"audit_chapter_{chapter_number}"
         )
 
-        report = parse_json_response(content, defaults={
+        report = parse_validated("continuity", content, defaults={
             "overall_score": 0,
             "inconsistencies": [],
             "verdict": "manual_review",

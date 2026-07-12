@@ -16,6 +16,7 @@ from novel_agent.schema.models import (
     OrchestratorReport,
     WorldbuildingReport,
 )
+from novel_agent.schema.parser import parse_json_response
 
 
 @dataclass
@@ -28,13 +29,10 @@ class ValidationResult:
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        if isinstance(self.data, OrchestratorReport):
-            return self.data.model_dump()
-        if isinstance(self.data, EditorReport):
-            return self.data.model_dump()
-        if isinstance(self.data, ContinuityReport):
-            return self.data.model_dump()
-        return self.data.model_dump()
+        # exclude_none keeps output consistent with strip_none: a field the LLM
+        # left null (or omitted) must not reappear as an explicit None, otherwise
+        # downstream ``dict.get(key, {}).get(...)`` would crash again.
+        return self.data.model_dump(exclude_none=True)
 
 
 class OutputValidator:
@@ -117,43 +115,64 @@ class OutputValidator:
 
     @staticmethod
     def _coerce(raw: dict, agent_type: str) -> dict:
-        """Fix common LLM output mistakes before retrying validation."""
+        """Fix common LLM output mistakes before retrying validation.
+
+        Uses dotted paths so nested fields (e.g. ``chapter_strategy.key_scenes``,
+        ``dimensions.rhythm``) are corrected in place, not just top-level fields.
+        """
         fixed = dict(raw)
 
-        # Ensure list fields are actually lists
-        list_fields = {
+        list_paths = {
             "orchestrator": [
-                "key_scenes", "foreshadowings_to_address",
-                "characters", "world_elements",
+                "chapter_strategy.key_scenes",
+                "chapter_strategy.foreshadowings_to_address",
+                "chapter_strategy.storylines",
+                "chapter_strategy.character_arcs",
+                "chapter_strategy.foreshadowing_management",
+                "context_needed.characters",
+                "context_needed.world_elements",
+                "context_needed.cross_timeline_references",
             ],
             "editor": [
                 "issues", "banned_phrases", "cliches",
-                "sentence_pattern_issues", "structural_issues",
+                "sentence_pattern_issues", "structural_issues", "highlights",
             ],
             "continuity": ["inconsistencies"],
             "worldbuilding": [
-                "new_entities", "conflicts",
-                "chapter_events", "updated_entities",
+                "new_entities", "conflicts", "chapter_events",
+                "updated_entities", "foreshadowings", "resolved_foreshadowings",
             ],
         }
 
-        for fname in list_fields.get(agent_type, []):
-            if fname in fixed and not isinstance(fixed[fname], list):
-                fixed[fname] = [fixed[fname]] if fixed[fname] else []
-
-        # Coerce score fields to int
-        score_fields = [
-            "overall_score", "rhythm_score", "dialogue_score",
-            "logic_score", "writing_quality_score",
+        int_paths = [
+            "overall_score",
+            "rhythm_score", "dialogue_score", "logic_score", "writing_quality_score",
+            "dimensions.rhythm", "dimensions.ai_flavor", "dimensions.dialogue",
+            "dimensions.logic", "dimensions.writing",
+            "chapter_strategy.suggested_chapter_words",
         ]
-        for fname in score_fields:
-            if fname in fixed and not isinstance(fixed[fname], int):
-                try:
-                    fixed[fname] = int(fixed[fname])
-                except (ValueError, TypeError):
-                    fixed[fname] = 0
 
-        # Coerce nested objects
+        def _set(d: dict, path: str, fn) -> None:
+            keys = path.split(".")
+            for k in keys[:-1]:
+                nxt = d.get(k)
+                if not isinstance(nxt, dict):
+                    return  # intermediate structure missing — Pydantic will default it
+                d = nxt
+            leaf = keys[-1]
+            if leaf in d and d[leaf] is not None:
+                d[leaf] = fn(d[leaf])
+
+        for path in list_paths.get(agent_type, []):
+            _set(
+                fixed, path,
+                lambda v: ([v] if v else []) if not isinstance(v, list) else v,
+            )
+
+        for path in int_paths:
+            _set(fixed, path, OutputValidator._coerce_int)
+
+        # Coerce nested objects to dict
         if agent_type == "editor" and "ai_flavor" in fixed:
             if not isinstance(fixed["ai_flavor"], dict):
                 fixed["ai_flavor"] = {}
@@ -164,3 +183,30 @@ class OutputValidator:
                 fixed["context_needed"] = {}
 
         return fixed
+
+    @staticmethod
+    def _coerce_int(v: Any) -> int:
+        if isinstance(v, int) and not isinstance(v, bool):
+            return v
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return 0
+
+
+def parse_validated(
+    agent_type: str,
+    text: str,
+    defaults: dict | None = None,
+) -> dict:
+    """Parse raw LLM output, then coerce field types via OutputValidator.
+
+    Combines the two normalization boundaries:
+    1. ``parse_json_response`` strips nested ``null`` values.
+    2. ``OutputValidator.validate`` coerces types (scores → int, items → list)
+       and fills Pydantic defaults for the target agent schema.
+
+    Returns a plain dict (None fields dropped) safe to consume downstream.
+    """
+    raw = parse_json_response(text, defaults)
+    return OutputValidator.validate(agent_type, raw).to_dict()

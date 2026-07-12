@@ -175,7 +175,13 @@ class BaseAgent:
         if lf_handler:
             config["callbacks"] = [lf_handler]
 
-        response: AIMessage = await bound.ainvoke(lc_messages, config=config)
+        # step-3.7-flash 等模型偶发返回空 content（无 tool_calls），重试最多 3 次
+        response: AIMessage | None = None
+        for _ in range(3):
+            response = await bound.ainvoke(lc_messages, config=config)
+            if response.content or getattr(response, "tool_calls", None):
+                break
+        assert response is not None  # 循环至少执行一次
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         usage = getattr(response, "usage_metadata", {}) or {}

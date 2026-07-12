@@ -1,7 +1,7 @@
 """Editor Agent — reviews chapter quality and detects AI writing patterns."""
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
-from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import parse_validated
 from novel_agent.tools.style import DetectAiFlavorTool
 
 EDITOR_SYSTEM_PROMPT = """你是一个资深网文编辑，擅长审稿和识别AI写作痕迹。
@@ -103,7 +103,7 @@ class EditorAgent(BaseAgent):
             messages, max_rounds=2, action=f"review_chapter_{chapter_number}"
         )
 
-        report = parse_json_response(content, defaults={
+        report = parse_validated("editor", content, defaults={
             "overall_score": 0,
             "dimensions": {},
             "issues": [],
