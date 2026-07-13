@@ -14,6 +14,7 @@ from langgraph.types import Command
 
 from novel_agent.graph.chapter import build_chapter_graph
 from novel_agent.observability.langfuse import create_trace, score_trace
+from novel_agent.schema.enums import ChapterStatus
 from novel_agent.storage.manager import ProjectManager
 
 
@@ -88,7 +89,7 @@ async def start():
             "**Commands:**\n"
             "- `write <chapter> <outline> [--words N]` — generate a chapter\n"
             "- `list` — show all projects\n"
-            "- `new <name> [title] [genre] [--length short|novella|long] [--words N]`\n"
+            "- `new <name> [title] [genre] [--words N]`\n"
             "  create a new project\n"
             "- `select <project_id>` — switch project\n"
             "- `chapters` — list written chapters\n"
@@ -107,21 +108,16 @@ async def on_message(message: cl.Message):
     project_id = cl.user_session.get("project_id") or ""
     text = message.content.strip()
 
-    # ── new <name> [title] [genre] [--length short|novella|long] [--words N] ──
+    # ── new <name> [title] [genre] [--words N] ──
     if text.startswith("new ") or text.startswith("create "):
-        length = "long"
         chapter_words = 3000
-        if "--length" in text:
-            import re
-            m = re.search(r"--length\s+(\w+)", text)
-            if m and m.group(1) in ("short", "novella", "long"):
-                length = m.group(1)
         if "--words" in text:
+            import re
             m = re.search(r"--words\s+(\d+)", text)
             if m:
                 chapter_words = int(m.group(1))
         clean = text
-        for flag in ("--length", "--words"):
+        for flag in ("--words",):
             clean = re.sub(rf"{flag}\s+\S+", "", clean).strip()
         parts = clean.split(maxsplit=3)
         name = parts[1] if len(parts) > 1 else "untitled"
@@ -129,12 +125,12 @@ async def on_message(message: cl.Message):
         genre = parts[3] if len(parts) > 3 else ""
         pid = mgr.init_project(
             name=name, title=title, genre=genre,
-            story_length=length, target_chapter_words=chapter_words,
+            story_length="long", target_chapter_words=chapter_words,
         )
         cl.user_session.set("project_id", pid)
         await cl.Message(
             content=f"Created project **{title}** (id=`{pid}`)\n"
-            f"Length: {length}, Chapter words: {chapter_words}"
+            f"Length: long, Chapter words: {chapter_words}"
         ).send()
 
     # ── list ──
@@ -385,7 +381,11 @@ async def _run_pipeline(
     worldbuilding = result.get("worldbuilding_report", {})
 
     # Save result with full reports
-    status = "approved" if result.get("human_approved") else "draft"
+    status = (
+        ChapterStatus.APPROVED.value
+        if result.get("human_approved")
+        else ChapterStatus.DRAFT.value
+    )
     mgr.save_chapter(
         project_id=project_id,
         chapter_number=chapter_number,

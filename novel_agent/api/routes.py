@@ -15,6 +15,7 @@ from novel_agent.api.graph_data import build_graph_data
 from novel_agent.api.outline import generate_outline
 from novel_agent.api.sse import SessionStore, create_sse_stream, resume_graph
 from novel_agent.graph.chapter import build_chapter_graph_async
+from novel_agent.schema.enums import ChapterStatus, OutlineStatus
 from novel_agent.storage.manager import ProjectManager
 
 router = APIRouter()
@@ -99,7 +100,7 @@ async def create_project(req: CreateProjectRequest):
                 "chapter_number": i + 1,
                 "title": line[:50],
                 "summary": line,
-                "status": "pending",
+                "status": OutlineStatus.PENDING.value,
                 "sort_order": i + 1,
             }
             for i, line in enumerate(lines)
@@ -243,7 +244,7 @@ async def write_chapter(project_id: str, chapter_number: int):
         chapter_outline = f"第{chapter_number}章"
 
     # Mark chapter as writing
-    mgr.update_outline_item(project_id, chapter_number, status="writing")
+    mgr.update_outline_item(project_id, chapter_number, status=OutlineStatus.WRITING.value)
 
     # Build context
     ctx = mgr.build_context(project_id, chapter_number)
@@ -347,7 +348,11 @@ async def save_draft(project_id: str, chapter_number: int, req: SaveDraftRequest
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     existing = mgr.get_chapter(project_id, chapter_number)
-    status = existing["status"] if existing and existing.get("status") == "approved" else "draft"
+    status = (
+        existing["status"]
+        if existing and existing.get("status") == ChapterStatus.APPROVED.value
+        else ChapterStatus.DRAFT.value
+    )
     mgr.save_chapter(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -363,8 +368,7 @@ def _build_export_content(
     """Build formatted export content."""
     title = project.get("title") or project.get("name", "Untitled")
     genre = project.get("genre", "")
-    length = project.get("story_length", "")
-    length_label = {"short": "短篇", "novella": "中篇", "long": "长篇"}.get(length, length)
+    length_label = "长篇"
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     # Build chapter title map from outlines

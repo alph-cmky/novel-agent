@@ -3,6 +3,7 @@
 from novel_agent.agents.base import AgentConfig
 from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.routing import ModelRouter, TaskClass
+from novel_agent.schema.enums import OutlineStatus
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.storage.manager import ProjectManager
 
@@ -30,6 +31,13 @@ OUTLINE_SYSTEM_PROMPT = """你是一个小说主编，负责为一本小说规�
 只输出JSON。
 """
 
+# A full-book outline (50-100+ chapters × 50-200字 summary) needs far more
+# than the 4096 default; otherwise the model hits its output limit and returns
+# truncated/empty content (``finish_reason="length"``), yielding no chapters.
+# 16K is still occasionally exceeded by verbose 100-chapter outlines, so give
+# headroom up to 32K — the model stops early (finish_reason="stop") when done.
+OUTLINE_MAX_TOKENS = 32768
+
 
 async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
     """Generate a chapter outline for a project using AI.
@@ -42,18 +50,14 @@ async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
 
     title = project.get("title") or project.get("name", "")
     genre = project.get("genre", "")
-    story_length = project.get("story_length", "long")
 
-    length_label = {"short": "短篇", "novella": "中篇", "long": "长篇"}.get(
-        story_length, "长篇"
-    )
-
-    chapter_counts = {"short": "3-10章", "novella": "20-50章", "long": "50-100章"}
-    chapter_range = chapter_counts.get(story_length, "50-100章")
+    length_label = "长篇"
+    chapter_range = "50-100章"
 
     agent_config = AgentConfig(
         model=router.resolve(TaskClass.STRUCTURAL).model,
         temperature=0.7,
+        max_tokens=OUTLINE_MAX_TOKENS,
     )
 
     agent = OrchestratorAgent(config=agent_config)
@@ -82,12 +86,17 @@ async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
     result = parse_json_response(content, defaults={"chapters": []})
     chapters = result.get("chapters", [])
 
+    if not chapters:
+        raise ValueError(
+            "模型未返回有效章节（输出可能超长被截断），请重试"
+        )
+
     # Ensure required fields
     for i, ch in enumerate(chapters):
         ch.setdefault("chapter_number", i + 1)
         ch.setdefault("title", f"第{ch['chapter_number']}章")
         ch.setdefault("summary", "")
-        ch["status"] = "pending"
+        ch["status"] = OutlineStatus.PENDING.value
         ch["sort_order"] = ch["chapter_number"]
 
     # Save to database

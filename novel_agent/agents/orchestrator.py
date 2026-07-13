@@ -8,6 +8,7 @@ conditional edges in graph/chapter.py.
 from novel_agent.agents.base import AgentConfig, BaseAgent
 from novel_agent.memory.compressor import ContextCompressor
 from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import parse_validated
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书的创作方向和节奏。
 
@@ -219,9 +220,7 @@ class OrchestratorAgent(BaseAgent):
             f"第{c.get('chapter_number', '?')}章" for c in recent
         )
 
-        length_label = {"short": "短篇", "novella": "中篇", "long": "长篇"}.get(
-            story_length, "长篇"
-        )
+        length_label = "长篇"
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
@@ -254,7 +253,7 @@ class OrchestratorAgent(BaseAgent):
             action=f"orchestrate_ch{chapter_number}",
         )
 
-        result = parse_json_response(content, defaults={
+        result = parse_validated("orchestrator", content, defaults={
             "narrative_stage": "development",
             "stage_analysis": "",
             "chapter_strategy": {

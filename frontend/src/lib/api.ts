@@ -1,3 +1,5 @@
+import type { OutlineStatus } from './status'
+
 const BASE = '/api'
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -30,7 +32,7 @@ export interface OutlineItem {
   chapter_number: number
   title: string
   summary: string
-  status: 'pending' | 'writing' | 'drafted' | 'approved'
+  status: OutlineStatus
   sort_order: number
 }
 
@@ -70,6 +72,8 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   updateProject: (id: string, data: Record<string, unknown>) =>
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteProject: (id: string) =>
+    request<void>(`/projects/${id}`, { method: 'DELETE' }),
 
   // Outline
   getOutline: (id: string) => request<OutlineItem[]>(`/projects/${id}/outline`),
