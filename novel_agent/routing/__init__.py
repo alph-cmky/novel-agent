@@ -19,6 +19,7 @@ class TaskClass(Enum):
     STRUCTURAL = "structural_analysis"
     REVIEW = "review"
     EXTRACTION = "extraction"
+    META_EVALUATION = "meta_evaluation"
 
 
 @dataclass
@@ -35,6 +36,7 @@ TASK_ROUTES: dict[TaskClass, tuple[str, float]] = {
     TaskClass.STRUCTURAL: ("BUDGET_MODEL", 0.4),
     TaskClass.REVIEW: ("BUDGET_MODEL", 0.3),
     TaskClass.EXTRACTION: ("BUDGET_MODEL", 0.2),
+    TaskClass.META_EVALUATION: ("BUDGET_MODEL", 0.2),
 }
 
 FALLBACK_MODEL = "deepseek-chat"
@@ -74,6 +76,7 @@ class ModelRouter:
             "editor": TaskClass.REVIEW,
             "continuity": TaskClass.REVIEW,
             "worldbuilding": TaskClass.EXTRACTION,
+            "evolution_orchestrator": TaskClass.META_EVALUATION,
         }
         return self.resolve(mapping.get(agent_name, TaskClass.STRUCTURAL))
 

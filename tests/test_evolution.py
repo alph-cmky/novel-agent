@@ -1,0 +1,299 @@
+"""Tests for the evolution core logic — Delta, termination, improvement plans."""
+
+
+from novel_agent.graph.evolution import (
+    EDITOR_DIMENSIONS,
+    EvolutionConfig,
+    build_improvement_plan_rule,
+    composite_score,
+    compute_delta,
+    decide_termination,
+    extract_scores,
+)
+
+
+class TestExtractScores:
+    def test_extracts_basic_scores(self):
+        state = {
+            "editor_report": {
+                "overall_score": 72,
+                "dimensions": {
+                    "rhythm": 70, "ai_flavor": 65, "dialogue": 75,
+                    "logic": 80, "writing": 70,
+                },
+            },
+            "continuity_report": {"overall_score": 80},
+        }
+        scores = extract_scores(state)
+        assert scores["editor_overall"] == 72
+        assert scores["continuity_overall"] == 80
+        assert scores["dimensions"]["rhythm"] == 70
+        assert scores["dimensions"]["ai_flavor"] == 65
+
+    def test_handles_empty_state(self):
+        scores = extract_scores({})
+        assert scores["editor_overall"] == 0
+        assert scores["continuity_overall"] == 0
+        assert all(scores["dimensions"][d] == 0 for d in EDITOR_DIMENSIONS)
+
+    def test_handles_missing_dimensions(self):
+        state = {
+            "editor_report": {"overall_score": 80, "dimensions": {"rhythm": 70}},
+            "continuity_report": {"overall_score": 85},
+        }
+        scores = extract_scores(state)
+        assert scores["dimensions"]["rhythm"] == 70
+        assert scores["dimensions"]["ai_flavor"] == 0  # missing → 0
+
+
+class TestCompositeScore:
+    def test_basic_composite(self):
+        scores = {
+            "editor_overall": 80,
+            "continuity_overall": 90,
+            "dimensions": {
+                "rhythm": 75, "ai_flavor": 70, "dialogue": 85,
+                "logic": 80, "writing": 75,
+            },
+        }
+        # dims_avg = (75+70+85+80+75)/5 = 77
+        # composite = 80*0.5 + 90*0.3 + 77*0.2 = 40 + 27 + 15.4 = 82.4
+        result = composite_score(scores)
+        assert result == 82.4
+
+    def test_custom_weights(self):
+        cfg = EvolutionConfig(editor_weight=0.6, continuity_weight=0.2, dimensions_weight=0.2)
+        scores = {
+            "editor_overall": 80,
+            "continuity_overall": 90,
+            "dimensions": {
+                "rhythm": 75, "ai_flavor": 70, "dialogue": 85, "logic": 80, "writing": 75,
+            },
+        }
+        # 80*0.6 + 90*0.2 + 77*0.2 = 48 + 18 + 15.4 = 81.4
+        result = composite_score(scores, cfg)
+        assert result == 81.4
+
+    def test_empty_dimensions(self):
+        scores = {
+            "editor_overall": 70,
+            "continuity_overall": 75,
+            "dimensions": {},
+        }
+        result = composite_score(scores)
+        # dims_avg = 0/1 = 0, composite = 70*0.5 + 75*0.3 + 0*0.2 = 57.5
+        assert result == 57.5
+
+
+class TestComputeDelta:
+    def test_all_improving(self):
+        current = {
+            "editor_overall": 80,
+            "continuity_overall": 85,
+            "dimensions": {
+                "rhythm": 75, "ai_flavor": 70, "dialogue": 80, "logic": 80, "writing": 75,
+            },
+        }
+        previous = {
+            "editor_overall": 70,
+            "continuity_overall": 82,
+            "dimensions": {
+                "rhythm": 65, "ai_flavor": 60, "dialogue": 75, "logic": 78, "writing": 70,
+            },
+        }
+        delta = compute_delta(current, previous)
+        assert delta["editor"] == 10
+        assert delta["continuity"] == 3
+        assert delta["trend"] == "improving"
+
+    def test_mixed(self):
+        current = {
+            "editor_overall": 75,
+            "continuity_overall": 80,
+            "dimensions": {
+                "rhythm": 70, "ai_flavor": 75, "dialogue": 60, "logic": 80, "writing": 65,
+            },
+        }
+        previous = {
+            "editor_overall": 72,
+            "continuity_overall": 82,
+            "dimensions": {
+                "rhythm": 68, "ai_flavor": 70, "dialogue": 68, "logic": 82, "writing": 68,
+            },
+        }
+        delta = compute_delta(current, previous)
+        # ai_flavor: +5 (improving), dialogue: -8 (regressing)
+        assert delta["trend"] == "mixed"
+
+    def test_regressing(self):
+        current = {
+            "editor_overall": 68,
+            "continuity_overall": 78,
+            "dimensions": {
+                "rhythm": 65, "ai_flavor": 62, "dialogue": 60, "logic": 75, "writing": 62,
+            },
+        }
+        previous = {
+            "editor_overall": 75,
+            "continuity_overall": 82,
+            "dimensions": {
+                "rhythm": 72, "ai_flavor": 70, "dialogue": 68, "logic": 80, "writing": 68,
+            },
+        }
+        delta = compute_delta(current, previous)
+        # all negative
+        assert delta["trend"] == "regressing"
+
+
+class TestDecideTermination:
+    def _scores(self, editor=80, continuity=85, **dims):
+        dims_dict = {"rhythm": 75, "ai_flavor": 70, "dialogue": 80, "logic": 80, "writing": 75}
+        dims_dict.update(dims)
+        return {
+            "editor_overall": editor,
+            "continuity_overall": continuity,
+            "dimensions": dims_dict,
+        }
+
+    def _delta(self, editor=0, continuity=0, **dim_deltas):
+        dims = {d: 0 for d in EDITOR_DIMENSIONS}
+        dims.update(dim_deltas)
+        return {
+            "editor": editor,
+            "continuity": continuity,
+            "dimensions": dims,
+            "trend": "stagnating",
+        }
+
+    def test_no_termination_when_improving(self):
+        """With deltas above convergence threshold, should NOT terminate."""
+        reason, _ = decide_termination(
+            delta=self._delta(editor=5, ai_flavor=5, dialogue=4),
+            current_scores=self._scores(editor=80),
+            best_scores=self._scores(editor=75),
+            history=[],
+            current_round=1,
+        )
+        assert reason == ""
+
+    def test_crash_single_dimension(self):
+        """Any dimension delta < -10 → crash."""
+        reason, detail = decide_termination(
+            delta=self._delta(ai_flavor=-15),
+            current_scores=self._scores(ai_flavor=55),
+            best_scores=self._scores(),
+            history=[],
+            current_round=1,
+        )
+        assert reason == "crash"
+        assert "ai_flavor" in detail
+
+    def test_max_rounds(self):
+        reason, _ = decide_termination(
+            delta=self._delta(),
+            current_scores=self._scores(),
+            best_scores=self._scores(),
+            history=[],
+            current_round=5,
+            config=EvolutionConfig(max_rounds=5),
+        )
+        assert reason == "max_rounds"
+
+    def test_convergence(self):
+        """All |delta| < threshold → converged."""
+        reason, _ = decide_termination(
+            delta=self._delta(rhythm=1, ai_flavor=2, dialogue=-1, logic=2, writing=-2),
+            current_scores=self._scores(),
+            best_scores=self._scores(),
+            history=[],
+            current_round=2,
+            config=EvolutionConfig(convergence_threshold=3.0),
+        )
+        assert reason == "converged"
+
+    def test_ceiling(self):
+        """All dimensions > 90 → ceiling."""
+        reason, _ = decide_termination(
+            delta=self._delta(),
+            current_scores=self._scores(
+                editor=95, continuity=92,
+                rhythm=92, ai_flavor=93, dialogue=91, logic=95, writing=94,
+            ),
+            best_scores=self._scores(),
+            history=[],
+            current_round=1,
+        )
+        assert reason == "ceiling"
+
+    def test_regression_vs_best(self):
+        """Composite drops below best-5 → regressed."""
+        # current composite should be lower than best composite
+        reason, _ = decide_termination(
+            delta=self._delta(editor=-15),
+            current_scores=self._scores(editor=55, continuity=60),
+            best_scores=self._scores(editor=80, continuity=85),
+            history=[],
+            current_round=2,
+        )
+        assert reason in ("crash", "regressed")
+
+    def test_plateau_skips_none_delta_baseline(self):
+        """The v0 baseline entry has delta=None — plateau check must skip it.
+
+        Regression: dict.get("delta", {}) returns None (not the default) when the
+        key exists with value None, so the plateau branch crashed with
+        ``'NoneType' object has no attribute 'get'`` once history reached
+        plateau_rounds (2) entries.
+        """
+        flat = self._delta(rhythm=1, ai_flavor=1, dialogue=1, logic=1, writing=1)
+        dims = self._scores()["dimensions"]
+        history = [
+            {"v": 0, "delta": None, "editor": 80, "continuity": 85, "dimensions": dims},
+            {"v": 1, "delta": flat, "editor": 80, "continuity": 85, "dimensions": dims},
+            {"v": 2, "delta": flat, "editor": 80, "continuity": 85, "dimensions": dims},
+        ]
+        # Current delta is NOT flat (rhythm=5) so convergence doesn't short-circuit;
+        # this lets the plateau branch actually run over the history.
+        reason, _ = decide_termination(
+            delta=self._delta(rhythm=5, ai_flavor=1, dialogue=1, logic=1, writing=1),
+            current_scores=self._scores(),
+            best_scores=self._scores(),
+            history=history,
+            current_round=3,
+        )
+        assert reason == "plateau"
+
+
+class TestBuildImprovementPlan:
+    def _scores(self, **dims):
+        dims_dict = {"rhythm": 70, "ai_flavor": 65, "dialogue": 75, "logic": 80, "writing": 70}
+        dims_dict.update(dims)
+        return {"editor_overall": 72, "continuity_overall": 80, "dimensions": dims_dict}
+
+    def test_first_round_targets_weakest(self):
+        """No delta → target weakest dimensions."""
+        plan = build_improvement_plan_rule(self._scores(), delta=None)
+        assert "ai_flavor" in plan["focus_dimensions"]  # weakest at 65
+        assert plan["primary_instruction"]  # should have some instruction
+
+    def test_with_delta_focuses_on_regressed(self):
+        """Delta with regressed dimensions → focus on them."""
+        current = self._scores(rhythm=68, ai_flavor=75)
+        delta = {
+            "editor": 3, "continuity": 2,
+            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
+            "trend": "mixed",
+        }
+        plan = build_improvement_plan_rule(current, delta=delta)
+        assert "rhythm" in plan["focus_dimensions"]  # regressed
+
+    def test_preserve_improved_dimensions(self):
+        """Dimensions that improved >+3 should be in preserve."""
+        current = self._scores(rhythm=68, ai_flavor=80)
+        delta = {
+            "editor": 5, "continuity": 2,
+            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
+            "trend": "mixed",
+        }
+        plan = build_improvement_plan_rule(current, delta=delta)
+        assert "ai_flavor" in plan["constraints"]["preserve"]  # improved +10

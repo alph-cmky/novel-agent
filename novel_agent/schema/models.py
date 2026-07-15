@@ -154,3 +154,4 @@ class WorldbuildingReport(BaseModel):
     updated_entities: list[str] = Field(default_factory=list)
     # Foreshadowing lifecycle — extracted by WorldbuildingAgent
     foreshadowings: list[dict[str, Any]] = Field(default_factory=list)
+    resolved_foreshadowings: list[dict[str, Any]] = Field(default_factory=list)

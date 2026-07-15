@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from novel_agent.memory.embeddings import ChapterStore
+from novel_agent.schema.enums import ChapterStatus, OutlineStatus
 from novel_agent.storage.models import get_db_path, init_db
 
 
@@ -79,9 +80,11 @@ class ProjectManager:
         chapter_number: int,
         outline: str = "",
         draft_content: str = "",
-        status: str = "draft",
+        status: str = ChapterStatus.DRAFT.value,
         editor_report: str = "{}",
         continuity_report: str = "{}",
+        version: int = 0,
+        evolution_summary: str = "{}",
     ) -> str:
         """Save a chapter. Returns chapter_id."""
         conn = self._get_conn()
@@ -90,28 +93,34 @@ class ProjectManager:
         conn.execute(
             """INSERT INTO chapters
                (id, project_id, chapter_number, outline, draft_content, status,
-                editor_report, continuity_report)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                editor_report, continuity_report, version, evolution_summary)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(project_id, chapter_number) DO UPDATE SET
                outline = excluded.outline,
                draft_content = excluded.draft_content,
                status = excluded.status,
                editor_report = excluded.editor_report,
                continuity_report = excluded.continuity_report,
+               version = excluded.version,
+               evolution_summary = excluded.evolution_summary,
                updated_at = datetime('now')""",
             (chapter_id, project_id, chapter_number, outline, draft_content, status,
-             editor_report, continuity_report),
+             editor_report, continuity_report, version, evolution_summary),
         )
 
         conn.execute(
             "UPDATE projects SET updated_at = datetime('now') WHERE id = ?",
             (project_id,),
         )
-        # Update outline status if exists
+        # Update outline status if exists — map chapter status ("draft"/"approved")
+        # onto the outline lifecycle ("drafted"/"approved") shown in the UI.
+        outline_status = (
+            OutlineStatus.DRAFTED.value if status == ChapterStatus.DRAFT else status
+        )
         conn.execute(
             """UPDATE outlines SET status = ?
                WHERE project_id = ? AND chapter_number = ?""",
-            (status, project_id, chapter_number),
+            (outline_status, project_id, chapter_number),
         )
         conn.commit()
         conn.close()
@@ -288,7 +297,7 @@ class ProjectManager:
                     ch.get("chapter_number", 0),
                     ch.get("title", ""),
                     ch.get("summary", ""),
-                    ch.get("status", "pending"),
+                    ch.get("status", OutlineStatus.PENDING.value),
                     ch.get("sort_order", ch.get("chapter_number", 0)),
                 ),
             )
@@ -409,8 +418,8 @@ class ProjectManager:
     def get_chapter_count(self, project_id: str) -> int:
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM chapters WHERE project_id = ? AND status != 'draft'",
-            (project_id,),
+            "SELECT COUNT(*) as cnt FROM chapters WHERE project_id = ? AND status != ?",
+            (project_id, ChapterStatus.DRAFT.value),
         ).fetchone()
         conn.close()
         return row["cnt"] if row else 0
@@ -469,3 +478,5 @@ class ProjectManager:
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
         conn.close()
+        # Also remove the project's vector memory collection (ChromaDB).
+        self.chapter_store.delete_collection(project_id)

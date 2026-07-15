@@ -1,13 +1,15 @@
-"""Chapter-writing StateGraph with feedback loop and Human-in-the-loop.
+"""Chapter-writing StateGraph — v2 with recursive self-evolution.
 
-Orchestrator → Writer → Editor → Continuity → [
-    pass → Worldbuilding → Human Review (interrupt) → [
-        approved → Done,
-        rejected → Orchestrator Review → Writer (with rewrite guidance)
-    ],
-    fail + retries → Orchestrator Review → Writer (auto feedback loop),
-    fail + no retries → Worldbuilding → Human Review (human gets final say)
-]
+Evolution enabled (default):
+    Orchestrator → Evolution Subgraph [
+        Writer → Editor → Continuity → EvolutionOrchestrator → [continue|select_best]
+    ] → Worldbuilding → Human Review → [approved → END | rejected → evolution_writer]
+
+Evolution disabled (legacy):
+    Orchestrator → Writer → Editor → Continuity → [
+        pass → Worldbuilding → Human Review,
+        fail → Orchestrator Review → Writer (feedback loop)
+    ]
 """
 
 import asyncio
@@ -27,10 +29,19 @@ from langgraph.types import interrupt
 from novel_agent.agents.base import AgentConfig
 from novel_agent.agents.continuity import ContinuityAgent
 from novel_agent.agents.editor import EditorAgent
+from novel_agent.agents.evolution_orchestrator import EvolutionOrchestratorAgent
 from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
-from novel_agent.config import get_length_config
+from novel_agent.config import DEFAULT_MAX_TOKENS
+from novel_agent.graph.evolution import (
+    DEFAULT_EVO_CONFIG,
+    build_improvement_plan_rule,
+    composite_score,
+    compute_delta,
+    decide_termination,
+    extract_scores,
+)
 from novel_agent.graph.state import NovelState
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.routing import ModelRouter, TaskClass
@@ -65,19 +76,68 @@ def _build_arc_summary(previous_chapters: list[dict]) -> str:
 # ── Routing thresholds ──────────────────────────────────
 
 MAX_RETRIES = 3
-CONTINUITY_PASS_SCORE = 80       # pass to worldbuilding
-EDITOR_APPROVE_SCORE = 60        # minimum editor score for auto-approval
+CONTINUITY_PASS_SCORE = 80
+EDITOR_APPROVE_SCORE = 60
 
 
 def _config_for(task: TaskClass) -> AgentConfig:
     """Create AgentConfig from the model router's decision."""
     route = router.resolve(task)
     kwargs: dict = {"model": route.model, "temperature": route.temperature}
+    # worldbuilding 要输出大量实体+伏笔，4096 容易截断导致 JSON 不完整
+    kwargs["max_tokens"] = 8192 if task is TaskClass.EXTRACTION else 4096
     if route.api_key:
         kwargs["api_key"] = route.api_key
     if route.base_url:
         kwargs["base_url"] = route.base_url
     return AgentConfig(**kwargs)
+
+
+def _format_improvement_plan(plan: dict | None, version: int) -> str:
+    """Format an improvement_plan dict into a prompt section for Writer."""
+    if not plan:
+        return ""
+
+    parts = [f"## 进化改进指导 (第 {version + 1} 次迭代)"]
+    parts.append(f"这是第 {version + 1} 次改进。前面几轮的改进已经提升了部分维度的质量。")
+
+    focus = plan.get("focus_dimensions", [])
+    if focus:
+        dim_labels = {
+            "rhythm": "节奏", "ai_flavor": "AI味", "dialogue": "对话",
+            "logic": "逻辑", "writing": "文笔",
+        }
+        focus_cn = ", ".join(dim_labels.get(d, d) for d in focus)
+        parts.append(f"\n### 本轮重点维度\n{focus_cn}")
+
+    primary = plan.get("primary_instruction", "")
+    if primary:
+        parts.append(f"\n### 核心指令\n{primary}")
+
+    secondary = plan.get("secondary_instructions", [])
+    if secondary:
+        parts.append("\n### 辅助指令")
+        for s in secondary:
+            parts.append(f"- {s}")
+
+    constraints = plan.get("constraints", {})
+    preserve = constraints.get("preserve", [])
+    if preserve:
+        dim_labels = {
+            "rhythm": "节奏", "ai_flavor": "AI味", "dialogue": "对话",
+            "logic": "逻辑", "writing": "文笔",
+        }
+        preserve_cn = ", ".join(dim_labels.get(d, d) for d in preserve)
+        parts.append(f"\n### 请保持\n{preserve_cn} 方面的已有进步，不要牺牲它们")
+
+    avoid = constraints.get("avoid", [])
+    if avoid:
+        parts.append("\n### 明确禁止")
+        for a in avoid:
+            parts.append(f"- {a}")
+
+    return "\n".join(parts)
+
 
 # ── Nodes ──────────────────────────────────────────────
 
@@ -105,7 +165,6 @@ async def orchestrator_node(state: NovelState) -> dict:
     narrative_mode = state.get("narrative_mode")
     narrative_perspective = state.get("narrative_perspective", "")
 
-    # Build arc summary from previous chapters' stored reports
     arc_summary = _build_arc_summary(previous_chapters)
 
     strategy = await orchestrator.analyze(
@@ -140,7 +199,6 @@ async def orchestrator_node(state: NovelState) -> dict:
         hint = f"[本章涉及设定: {extra_world}]"
         world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
 
-    # Inject new context_needed fields (Phase 0)
     persp_specific = context_needed.get("perspective_specific", "")
     if persp_specific:
         char_ctx = (
@@ -156,7 +214,6 @@ async def orchestrator_node(state: NovelState) -> dict:
             if world_ctx else timeline_hint
         )
 
-    # Inject recent_reference into recent_summary
     recent_summary = state.get("recent_summary", "")
     recent_ref = context_needed.get("recent_reference", "")
     if recent_ref:
@@ -194,15 +251,10 @@ async def orchestrator_node(state: NovelState) -> dict:
 async def writer_node(state: NovelState, config: RunnableConfig | None = None) -> dict:
     """Writer Agent generates (or rewrites) chapter content.
 
-    When config contains a stream_queue (asyncio.Queue), uses write_stream()
-    and pushes chunks to the queue for SSE delivery.
+    Supports both evolution improvement_plan (v2) and legacy rewrite_instructions (v1).
     """
     target_words = state.get("target_chapter_words", 3000)
-    story_length = state.get("story_length", "long")
-
-    length_cfg = get_length_config(story_length)
-    # Reasoning models need extra token budget for thinking phase
-    max_tokens = max(length_cfg.max_tokens, int(target_words * 3))
+    max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
 
     agent_config = _config_for(TaskClass.CREATIVE)
     agent_config.max_tokens = max_tokens
@@ -226,14 +278,24 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     if config and config.get("configurable"):
         stream_queue = config["configurable"].get("stream_queue")
 
-    # Handle structured rewrite_instructions (str | dict)
-    raw_instructions = state.get("rewrite_instructions", "")
+    # Determine rewrite instructions — evolution plan takes priority
+    rewrite_text = ""
     constraints = {}
-    if isinstance(raw_instructions, dict):
-        rewrite_text = raw_instructions.get("instructions", "")
-        constraints = raw_instructions.get("constraints", {})
+    evolution_version = state.get("evolution_version", 0)
+
+    improvement_plan = state.get("evolution_improvement_plan") or {}
+    if improvement_plan.get("primary_instruction"):
+        # Evolution mode: format improvement_plan into instructions
+        rewrite_text = _format_improvement_plan(improvement_plan, evolution_version)
+        constraints = improvement_plan.get("constraints", {})
     else:
-        rewrite_text = raw_instructions
+        # Legacy mode: handle rewrite_instructions (str | dict)
+        raw_instructions = state.get("rewrite_instructions", "")
+        if isinstance(raw_instructions, dict):
+            rewrite_text = raw_instructions.get("instructions", "")
+            constraints = raw_instructions.get("constraints", {})
+        else:
+            rewrite_text = raw_instructions
 
     # Merge constraints.strategy_override into orchestrator_strategy
     strategy = state.get("orchestrator_strategy", {})
@@ -249,7 +311,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         recent_summary=state.get("recent_summary", ""),
         target_chapter_words=target_words,
         rewrite_instructions=rewrite_text,
-        orchestrator_strategy=state.get("orchestrator_strategy", {}),
+        orchestrator_strategy=strategy,
     )
 
     if stream_queue is not None:
@@ -260,14 +322,10 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 
         content = "".join(collected)
 
-        # Fallback: reasoning models may use all tokens for thinking,
-        # leaving content empty. Retry with non-streaming write() which
-        # uses higher effective token budget via tool-calling flow.
         if not content.strip():
             print("  [Writer] Stream returned empty, falling back to non-streaming...")
             content, trace = await writer.write(**write_args)
             if content.strip():
-                # Push the full content as one chunk so the frontend gets it
                 await stream_queue.put(("chunk", content))
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
         else:
@@ -277,14 +335,27 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         content, trace = await writer.write(**write_args)
         tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
-    retry = state.get("retry_count", 0) + 1
-    label = f"(retry {retry})" if retry > 1 else ""
-    print(f"  [Writer] {len(content)} chars {label} (target: {target_words}w, tokens: {tok_info})")
-    return {
-        "draft_content": content,
-        "retry_count": retry,
-        "rewrite_instructions": "",  # consumed
-    }
+    evolution_enabled = state.get("evolution_enabled", True)
+    if evolution_enabled:
+        label = f"(v{evolution_version})"
+        wmsg = f"  [Writer] {len(content)} chars {label} "
+        wmsg += f"(target: {target_words}w, tokens: {tok_info})"
+        print(wmsg)
+        return {
+            "draft_content": content,
+            "evolution_round": state.get("evolution_round", 0),
+        }
+    else:
+        retry = state.get("retry_count", 0) + 1
+        label = f"(retry {retry})" if retry > 1 else ""
+        wmsg = f"  [Writer] {len(content)} chars {label} "
+        wmsg += f"(target: {target_words}w, tokens: {tok_info})"
+        print(wmsg)
+        return {
+            "draft_content": content,
+            "retry_count": retry,
+            "rewrite_instructions": "",
+        }
 
 
 async def editor_node(state: NovelState) -> dict:
@@ -317,8 +388,8 @@ async def continuity_node(state: NovelState) -> dict:
     )
     score = report.get("overall_score", 0)
     criticals = [
-        i for i in report.get("inconsistencies", [])
-        if i.get("severity") == "critical"
+        i for i in (report.get("inconsistencies") or [])
+        if isinstance(i, dict) and i.get("severity") == "critical"
     ]
     print(f"  [Continuity] {score}/100, Critical: {len(criticals)}")
     return {"continuity_report": report}
@@ -327,8 +398,7 @@ async def continuity_node(state: NovelState) -> dict:
 async def orchestrator_review_node(state: NovelState) -> dict:
     """Orchestrator analyzes failure reports and generates rewrite instructions.
 
-    Returns structured dict: {"instructions": str, "constraints": dict}.
-    The writer_node handles both str and dict rewrite_instructions.
+    Only used in non-evolution (legacy) mode.
     """
     orchestrator = OrchestratorAgent(config=_config_for(TaskClass.STRUCTURAL))
 
@@ -356,11 +426,185 @@ async def orchestrator_review_node(state: NovelState) -> dict:
     }
 
 
+async def evolution_orchestrator_node(state: NovelState) -> dict:
+    """EvolutionOrchestrator — version comparison, Delta, termination, improvement plan.
+
+    Rule layer (deterministic) + optional LLM enrichment (natural language guidance).
+    """
+    current_round = state.get("evolution_round", 0)
+    version = state.get("evolution_version", 0)
+    current_scores = extract_scores(state)
+    evo_config = DEFAULT_EVO_CONFIG
+
+    # ── Branch A: First round (no history) ──
+    if not state.get("evolution_history"):
+        entry = {
+            "v": version,
+            "editor": current_scores["editor_overall"],
+            "continuity": current_scores["continuity_overall"],
+            "composite": composite_score(current_scores),
+            "dimensions": current_scores["dimensions"],
+            "delta": None,
+            "focus": None,
+        }
+
+        # Rule-based improvement plan for v0
+        rule_plan = build_improvement_plan_rule(current_scores, delta=None, config=evo_config)
+
+        # LLM enrichment (optional — fails gracefully to rule_plan)
+        plan = rule_plan
+        try:
+            agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
+            enriched = await agent.enrich_plan(
+                current_version=version,
+                current_scores=current_scores,
+                delta=None,
+                rule_plan=rule_plan,
+                history=[],
+                draft_preview=state.get("draft_content", ""),
+            )
+            if enriched and enriched.get("primary_instruction"):
+                plan = enriched
+        except Exception:
+            pass
+
+        editor_score = current_scores["editor_overall"]
+        continuity_score = current_scores["continuity_overall"]
+        print(f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
+              f"→ 首轮，记录历史，生成改进计划 focus={plan.get('focus_dimensions', [])}")
+
+        return {
+            "evolution_round": 1,
+            "evolution_version": 1,
+            "evolution_history": [entry],
+            "evolution_best_version": version,
+            "evolution_best_draft": state.get("draft_content", ""),
+            "evolution_best_editor_report": state.get("editor_report", {}),
+            "evolution_best_continuity_report": state.get("continuity_report", {}),
+            "evolution_improvement_plan": plan,
+            "evolution_termination": "",
+        }
+
+    # ── Branch B: Has history → Delta comparison ──
+    previous = state["evolution_history"][-1]
+    previous_scores = {
+        "editor_overall": previous["editor"],
+        "continuity_overall": previous["continuity"],
+        "dimensions": previous.get("dimensions", {}),
+    }
+    delta = compute_delta(current_scores, previous_scores)
+
+    best_ed_rpt = state.get("evolution_best_editor_report", {})
+    best_ct_rpt = state.get("evolution_best_continuity_report", {})
+    best_scores = {
+        "editor_overall": best_ed_rpt.get("overall_score", 0),
+        "continuity_overall": best_ct_rpt.get("overall_score", 0),
+        "dimensions": best_ed_rpt.get("dimensions", {}),
+    }
+
+    # 1. Rule layer: termination decision
+    termination, reason = decide_termination(
+        delta, current_scores, best_scores, state["evolution_history"], evo_config, current_round,
+    )
+
+    # 2. Rule layer: improvement plan
+    rule_plan = build_improvement_plan_rule(current_scores, delta, evo_config)
+
+    # 3. LLM enrichment (only if continuing)
+    plan = rule_plan
+    if not termination:
+        try:
+            agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
+            enriched = await agent.enrich_plan(
+                current_version=version,
+                current_scores=current_scores,
+                delta=delta,
+                rule_plan=rule_plan,
+                history=state["evolution_history"],
+                draft_preview=state.get("draft_content", ""),
+            )
+            if enriched and enriched.get("primary_instruction"):
+                plan = enriched
+        except Exception:
+            pass
+
+    # 4. Build history entry
+    new_entry = {
+        "v": version,
+        "editor": current_scores["editor_overall"],
+        "continuity": current_scores["continuity_overall"],
+        "composite": composite_score(current_scores),
+        "dimensions": current_scores["dimensions"],
+        "delta": delta,
+        "focus": plan.get("focus_dimensions", []) if plan else [],
+    }
+
+    result: dict = {
+        "evolution_history": state["evolution_history"] + [new_entry],
+        "evolution_termination": termination,
+    }
+
+    # 5. Check if new best version
+    is_new_best = composite_score(current_scores) > composite_score(best_scores)
+    if is_new_best:
+        result.update({
+            "evolution_best_version": version,
+            "evolution_best_draft": state.get("draft_content", ""),
+            "evolution_best_editor_report": state.get("editor_report", {}),
+            "evolution_best_continuity_report": state.get("continuity_report", {}),
+        })
+
+    # 6. If continuing, increment counters + issue plan
+    if not termination:
+        result.update({
+            "evolution_round": current_round + 1,
+            "evolution_version": version + 1,
+            "evolution_improvement_plan": plan,
+        })
+
+    editor_score = current_scores["editor_overall"]
+    continuity_score = current_scores["continuity_overall"]
+    best_v = result.get("evolution_best_version", state.get("evolution_best_version", 0))
+    status = f"终止:{termination}" if termination else "继续"
+    print(f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
+          f"Δ={delta['trend']} best=v{best_v} {status}")
+
+    return result
+
+
+def select_best_version_node(state: NovelState) -> dict:
+    """Select the best version and prepare for DB write.
+
+    The actual DB write happens in the SSE layer (create_sse_stream / resume_graph),
+    not here — this node just sets the final draft_content to the best version.
+    """
+    best_version = state.get("evolution_best_version", 0)
+    current_version = state.get("evolution_version", 0)
+    termination = state.get("evolution_termination", "")
+
+    # If best is current (no-op) or best is a previous version (rollback)
+    if best_version != current_version:
+        print(
+            f"  [SelectBest] Rolling back: "
+            f"v{current_version} → v{best_version} (best)"
+        )
+        best_draft = state.get("evolution_best_draft", "")
+        best_ed = state.get("evolution_best_editor_report", {})
+        best_ct = state.get("evolution_best_continuity_report", {})
+        return {
+            "draft_content": best_draft or state.get("draft_content", ""),
+            "editor_report": best_ed or state.get("editor_report", {}),
+            "continuity_report": best_ct or state.get("continuity_report", {}),
+        }
+
+    print(f"  [SelectBest] v{best_version} is best, termination={termination}")
+    return {}
+
+
 async def worldbuilding_node(state: NovelState) -> dict:
     """Worldbuilding Agent extracts entities, conflicts, and foreshadowings."""
     existing = state.get("existing_world_entities", [])
 
-    # Load existing foreshadowings for lifecycle tracking
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
     existing_fs: list[dict] = []
@@ -397,11 +641,7 @@ def human_review_node(state: NovelState) -> dict:
     """Human-in-the-loop review node.
 
     Uses LangGraph interrupt() to pause the graph and wait for human input.
-    The caller (CLI or Chainlit) catches GraphInterrupt, presents the draft
-    to the user, and resumes with the human's decision.
-
-    Interrupt payload includes draft preview, scores, and issue summaries
-    so the human can make an informed decision.
+    In evolution mode, rejection triggers a fresh evolution cycle (max 2 rounds).
     """
     editor_report = state.get("editor_report", {})
     continuity_report = state.get("continuity_report", {})
@@ -410,7 +650,10 @@ def human_review_node(state: NovelState) -> dict:
     editor_score = editor_report.get("overall_score", 0)
     continuity_score = continuity_report.get("overall_score", 0)
 
-    # Build the interrupt payload — presented to the human reviewer
+    evolution_enabled = state.get("evolution_enabled", True)
+    evolution_rounds = len(state.get("evolution_history", []))
+    evolution_termination = state.get("evolution_termination", "")
+
     feedback = interrupt({
         "type": "human_review",
         "chapter_number": state.get("chapter_number", 1),
@@ -423,6 +666,8 @@ def human_review_node(state: NovelState) -> dict:
         "wb_new_entities": len(wb_report.get("new_entities", [])),
         "wb_conflicts": len(wb_report.get("conflicts", [])),
         "retry_count": state.get("retry_count", 0),
+        "evolution_rounds": evolution_rounds,
+        "evolution_termination": evolution_termination,
     })
 
     approved = feedback.get("action") == "approve"
@@ -434,9 +679,47 @@ def human_review_node(state: NovelState) -> dict:
         print(f"  Comments: {comments[:120]}")
     print(f"  {'─' * 40}\n")
 
+    if approved:
+        return {"human_approved": True, "human_feedback": feedback}
+
+    # Rejected — handle differently based on mode
+    rejects = state.get("evolution_human_rejects", 0) + 1
+
+    if not evolution_enabled:
+        # Legacy mode: simple reject → orchestrator_review
+        return {
+            "human_approved": False,
+            "human_feedback": feedback,
+            "retry_count": state.get("retry_count", 0),
+        }
+
+    # Evolution mode: human feedback → fresh evolution
+    if rejects >= 3:
+        # Safety valve: force approve after 3 rejects
+        return {"human_approved": True, "human_feedback": feedback}
+
+    # Build improvement plan from human feedback
+    plan = {
+        "focus_dimensions": [],
+        "primary_instruction": f"人类审阅者拒绝了这个版本。意见：{comments}",
+        "secondary_instructions": [],
+        "constraints": {
+            "preserve": ["章节大纲", "核心情节走向"],
+            "avoid": [],
+            "strategy_override": {},
+        },
+    }
+
     return {
-        "human_approved": approved,
+        "human_approved": False,
         "human_feedback": feedback,
+        "evolution_human_rejects": rejects,
+        "evolution_improvement_plan": plan,
+        "evolution_round": 0,
+        "evolution_version": 0,
+        "evolution_history": [],
+        "evolution_max_rounds": 2,
+        "evolution_termination": "",
     }
 
 
@@ -445,17 +728,12 @@ def human_review_node(state: NovelState) -> dict:
 def route_after_continuity(
     state: NovelState,
 ) -> Literal["worldbuilding", "orchestrator_review"]:
-    """Decide: pass to worldbuilding, or trigger feedback loop.
-
-    - Both scores good + no criticals → worldbuilding → human review
-    - Issues + retries left → orchestrator_review → writer (auto feedback loop)
-    - Issues + no retries → worldbuilding → human review (human gets final say)
-    """
+    """Legacy router for non-evolution mode."""
     c_score = state.get("continuity_report", {}).get("overall_score", 0)
     e_score = state.get("editor_report", {}).get("overall_score", 0)
     criticals = [
-        i for i in state.get("continuity_report", {}).get("inconsistencies", [])
-        if i.get("severity") == "critical"
+        i for i in (state.get("continuity_report", {}) or {}).get("inconsistencies") or []
+        if isinstance(i, dict) and i.get("severity") == "critical"
     ]
     retry = state.get("retry_count", 0)
 
@@ -468,14 +746,39 @@ def route_after_continuity(
     return "worldbuilding"
 
 
-def route_after_human(state: NovelState) -> Literal["__end__", "orchestrator_review"]:
-    """Human approved → done. Rejected + retries left → feedback loop.
-    Rejected + no retries left → force end (prevents infinite reject loop)."""
+def route_after_evolution(
+    state: NovelState,
+) -> Literal["evolution_writer", "evolution_select_best"]:
+    """Evolution router: continue iterating or select best and exit."""
+    if state.get("evolution_termination"):
+        return "evolution_select_best"
+
+    max_rounds = state.get("evolution_max_rounds", 5)
+    if state.get("evolution_round", 0) >= max_rounds:
+        return "evolution_select_best"
+
+    return "evolution_writer"
+
+
+def route_after_human_legacy(state: NovelState) -> Literal["__end__", "orchestrator_review"]:
+    """Human approved → done. Rejected + retries left → feedback loop."""
     if state.get("human_approved", False):
         return "__end__"
     if state.get("retry_count", 0) >= MAX_RETRIES:
         return "__end__"
     return "orchestrator_review"
+
+
+def route_after_human_evolution(state: NovelState) -> Literal["__end__", "evolution_writer"]:
+    """Human approved → done. Rejected → new evolution cycle."""
+    if state.get("human_approved", False):
+        return "__end__"
+
+    # Safety valve: max 3 rejects
+    if state.get("evolution_human_rejects", 0) >= 3:
+        return "__end__"
+
+    return "evolution_writer"
 
 
 # ── Build Graph ────────────────────────────────────────
@@ -484,11 +787,7 @@ _checkpointer_cache: dict[str, SqliteSaver] = {}
 
 
 def _get_checkpointer(persist_dir: str) -> SqliteSaver | MemorySaver:
-    """Return a SqliteSaver for the project directory, or MemorySaver as fallback.
-
-    Caches checkpointer instances per persist_dir so we reuse the same
-    SQLite connection across requests for the same project.
-    """
+    """Return a SqliteSaver for the project directory, or MemorySaver as fallback."""
     if not persist_dir:
         return MemorySaver()
     db_path = Path(persist_dir) / "checkpoints.db"
@@ -500,47 +799,73 @@ def _get_checkpointer(persist_dir: str) -> SqliteSaver | MemorySaver:
     return _checkpointer_cache[db_key]
 
 
-def _build_workflow() -> StateGraph:
-    """Build the StateGraph with all nodes and edges (shared by sync + async builders)."""
+def _build_workflow(evolution_enabled: bool = True) -> StateGraph:
+    """Build the StateGraph — conditionally compiled based on evolution_enabled."""
     workflow = StateGraph(NovelState)
 
     workflow.add_node("orchestrator", orchestrator_node)
-    workflow.add_node("writer", writer_node)
-    workflow.add_node("editor", editor_node)
-    workflow.add_node("continuity", continuity_node)
-    workflow.add_node("orchestrator_review", orchestrator_review_node)
+
+    # Common nodes — register before conditional branches
     workflow.add_node("worldbuilding", worldbuilding_node)
     workflow.add_node("human_review", human_review_node)
 
-    workflow.set_entry_point("orchestrator")
-    workflow.add_edge("orchestrator", "writer")
-    workflow.add_edge("writer", "editor")
-    workflow.add_edge("editor", "continuity")
+    if evolution_enabled:
+        # ── Evolution path ──
+        workflow.add_node("evolution_writer", writer_node)
+        workflow.add_node("evolution_editor", editor_node)
+        workflow.add_node("evolution_continuity", continuity_node)
+        workflow.add_node("evolution_orchestrator", evolution_orchestrator_node)
+        workflow.add_node("evolution_select_best", select_best_version_node)
 
-    workflow.add_conditional_edges(
-        "continuity",
-        route_after_continuity,
-        {
-            "worldbuilding": "worldbuilding",
-            "orchestrator_review": "orchestrator_review",
-        },
-    )
+        workflow.set_entry_point("orchestrator")
+        workflow.add_edge("orchestrator", "evolution_writer")
+        workflow.add_edge("evolution_writer", "evolution_editor")
+        workflow.add_edge("evolution_editor", "evolution_continuity")
+        workflow.add_edge("evolution_continuity", "evolution_orchestrator")
+        workflow.add_conditional_edges(
+            "evolution_orchestrator", route_after_evolution,
+            {
+                "evolution_writer": "evolution_writer",
+                "evolution_select_best": "evolution_select_best",
+            },
+        )
+        workflow.add_edge("evolution_select_best", "worldbuilding")
+        workflow.add_edge("worldbuilding", "human_review")
+        workflow.add_conditional_edges(
+            "human_review", route_after_human_evolution,
+            {"__end__": END, "evolution_writer": "evolution_writer"},
+        )
+    else:
+        # ── Legacy path ──
+        workflow.add_node("writer", writer_node)
+        workflow.add_node("editor", editor_node)
+        workflow.add_node("continuity", continuity_node)
+        workflow.add_node("orchestrator_review", orchestrator_review_node)
 
-    workflow.add_edge("orchestrator_review", "writer")
-    workflow.add_edge("worldbuilding", "human_review")
-
-    workflow.add_conditional_edges(
-        "human_review",
-        route_after_human,
-        {"__end__": END, "orchestrator_review": "orchestrator_review"},
-    )
+        workflow.set_entry_point("orchestrator")
+        workflow.add_edge("orchestrator", "writer")
+        workflow.add_edge("writer", "editor")
+        workflow.add_edge("editor", "continuity")
+        workflow.add_conditional_edges(
+            "continuity", route_after_continuity,
+            {
+                "worldbuilding": "worldbuilding",
+                "orchestrator_review": "orchestrator_review",
+            },
+        )
+        workflow.add_edge("orchestrator_review", "writer")
+        workflow.add_edge("worldbuilding", "human_review")
+        workflow.add_conditional_edges(
+            "human_review", route_after_human_legacy,
+            {"__end__": END, "orchestrator_review": "orchestrator_review"},
+        )
 
     return workflow
 
 
-def build_chapter_graph(persist_dir: str = "") -> StateGraph:
+def build_chapter_graph(persist_dir: str = "", evolution_enabled: bool = True) -> StateGraph:
     """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit)."""
-    workflow = _build_workflow()
+    workflow = _build_workflow(evolution_enabled=evolution_enabled)
     checkpointer = _get_checkpointer(persist_dir)
     return workflow.compile(checkpointer=checkpointer)
 
@@ -563,8 +888,10 @@ async def _get_checkpointer_async(persist_dir: str) -> AsyncSqliteSaver | Memory
     return _async_checkpointer_cache[db_key]
 
 
-async def build_chapter_graph_async(persist_dir: str = "") -> StateGraph:
+async def build_chapter_graph_async(
+    persist_dir: str = "", evolution_enabled: bool = True,
+) -> StateGraph:
     """Async version for SSE endpoints (uses AsyncSqliteSaver)."""
-    workflow = _build_workflow()
+    workflow = _build_workflow(evolution_enabled=evolution_enabled)
     checkpointer = await _get_checkpointer_async(persist_dir)
     return workflow.compile(checkpointer=checkpointer)

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import traceback
 import uuid
 from typing import Any
 
@@ -9,6 +10,7 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from novel_agent.observability.langfuse import create_trace, score_trace
+from novel_agent.schema.enums import ChapterStatus
 from novel_agent.storage.manager import ProjectManager
 
 
@@ -82,6 +84,12 @@ _NODE_LABELS: dict[str, str] = {
     "orchestrator_review": "反馈分析",
     "worldbuilding": "世界观提取",
     "human_review": "人工审批",
+    # Evolution nodes
+    "evolution_writer": "内容创作",
+    "evolution_editor": "编辑审查",
+    "evolution_continuity": "一致性审计",
+    "evolution_orchestrator": "进化评估",
+    "evolution_select_best": "选择最佳版本",
 }
 
 
@@ -112,14 +120,15 @@ async def _make_progress_event(
     label = _NODE_LABELS.get(name, name)
     score = None
     detail = None
+    meta = None
 
     if status == "done" and event:
         output = event.get("data", {}).get("output", {})
-        if name == "editor":
+        if name in ("editor", "evolution_editor"):
             report = output.get("editor_report", {})
             score = report.get("overall_score")
             detail = report.get("verdict")
-        elif name == "continuity":
+        elif name in ("continuity", "evolution_continuity"):
             report = output.get("continuity_report", {})
             score = report.get("overall_score")
         elif name == "worldbuilding":
@@ -127,10 +136,28 @@ async def _make_progress_event(
             n_ent = len(report.get('new_entities', []))
             n_conf = len(report.get('conflicts', []))
             detail = f"实体:{n_ent} 冲突:{n_conf}"
+        elif name == "evolution_orchestrator":
+            # Include evolution-specific metadata
+            history = output.get("evolution_history", [])
+            if history:
+                last = history[-1]
+                meta = {
+                    "version": last.get("v"),
+                    "editor": last.get("editor"),
+                    "continuity": last.get("continuity"),
+                    "composite": last.get("composite"),
+                    "delta": last.get("delta"),
+                    "termination": output.get("evolution_termination", ""),
+                }
+                score = last.get("composite")
+                term = output.get("evolution_termination", "")
+                detail = f"v{last.get('v')} E:{last.get('editor')} C:{last.get('continuity')}"
+                if term:
+                    detail += f" 终止:{term}"
 
     return _sse_event("progress", {
         "node": name, "label": label, "status": status,
-        "score": score, "detail": detail,
+        "score": score, "detail": detail, "meta": meta,
     })
 
 
@@ -165,6 +192,7 @@ async def create_sse_stream(
     running.set()
 
     drain_task = asyncio.create_task(_background_drain(queue, output, running))
+    current_node: str | None = None
 
     try:
         yield _sse_event("start", {"message": "开始写作..."})
@@ -178,6 +206,7 @@ async def create_sse_stream(
             name = event.get("name", "")
 
             if kind == "on_chain_start" and name in _NODE_LABELS:
+                current_node = name
                 yield await _make_progress_event(name, "running")
             elif kind == "on_chain_end" and name in _NODE_LABELS:
                 yield await _make_progress_event(name, "done", event)
@@ -216,6 +245,8 @@ async def create_sse_stream(
                 "wb_new_entities": len(wb.get("new_entities", [])),
                 "wb_conflicts": len(wb.get("conflicts", [])),
                 "retry_count": vals.get("retry_count", 0),
+                "evolution_rounds": len(vals.get("evolution_history", [])),
+                "evolution_termination": vals.get("evolution_termination", ""),
             })
         else:
             # Graph completed normally
@@ -242,7 +273,8 @@ async def create_sse_stream(
     except Exception as e:
         running.clear()
         await drain_task
-        yield _sse_event("error", {"message": str(e), "node": "unknown"})
+        traceback.print_exc()
+        yield _sse_event("error", {"message": str(e), "node": current_node})
     finally:
         running.clear()
         if not drain_task.done():
@@ -273,6 +305,7 @@ async def resume_graph(
     drain_task = asyncio.create_task(
         _background_drain(queue, output, running)
     ) if queue else None
+    current_node: str | None = None
 
     try:
         yield _sse_event("start", {"message": "继续写作..."})
@@ -288,6 +321,7 @@ async def resume_graph(
             name = event.get("name", "")
 
             if kind == "on_chain_start" and name in _NODE_LABELS:
+                current_node = name
                 yield await _make_progress_event(name, "running")
             elif kind == "on_chain_end" and name in _NODE_LABELS:
                 yield await _make_progress_event(name, "done", event)
@@ -348,7 +382,8 @@ async def resume_graph(
         running.clear()
         if drain_task:
             await drain_task
-        yield _sse_event("error", {"message": str(e), "node": "unknown"})
+        traceback.print_exc()
+        yield _sse_event("error", {"message": str(e), "node": current_node})
     finally:
         running.clear()
         if drain_task and not drain_task.done():
@@ -419,7 +454,7 @@ def _save_foreshadowings(
 def _save_chapter_result(
     mgr: ProjectManager, project_id: str, chapter_number: int, result: dict
 ) -> None:
-    """Persist the completed chapter to storage."""
+    """Persist the completed chapter to storage, including evolution data."""
 
     draft = result.get("draft_content", "")
     wb_report = result.get("worldbuilding_report", {})
@@ -427,7 +462,24 @@ def _save_chapter_result(
     continuity_report = result.get("continuity_report", {})
     outline = result.get("chapter_outline", "")
 
-    status = "approved" if result.get("human_approved") else "draft"
+    status = (
+        ChapterStatus.APPROVED.value
+        if result.get("human_approved")
+        else ChapterStatus.DRAFT.value
+    )
+
+    # Build evolution summary from state
+    evolution_history = result.get("evolution_history", [])
+    version = 0
+    evolution_summary = "{}"
+    if evolution_history:
+        version = len(evolution_history)
+        evolution_summary = json.dumps({
+            "total_rounds": len(evolution_history),
+            "best_version": result.get("evolution_best_version", 0),
+            "termination": result.get("evolution_termination", ""),
+            "score_history": evolution_history,
+        }, ensure_ascii=False)
 
     mgr.save_chapter(
         project_id=project_id,
@@ -437,6 +489,8 @@ def _save_chapter_result(
         status=status,
         editor_report=json.dumps(editor_report, ensure_ascii=False),
         continuity_report=json.dumps(continuity_report, ensure_ascii=False),
+        version=version,
+        evolution_summary=evolution_summary,
     )
 
     # Save worldbuilding report to chapter record

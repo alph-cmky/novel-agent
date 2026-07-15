@@ -38,6 +38,8 @@ def _migrate(conn: sqlite3.Connection):
     existing_chapters = {row["name"] for row in conn.execute("PRAGMA table_info(chapters)")}
     chapter_migrations = [
         ("worldbuilding_report", "TEXT NOT NULL DEFAULT '{}'"),
+        ("version", "INTEGER NOT NULL DEFAULT 0"),
+        ("evolution_summary", "TEXT NOT NULL DEFAULT '{}'"),
     ]
     for col_name, col_def in chapter_migrations:
         if col_name not in existing_chapters:
@@ -82,6 +84,11 @@ CREATE TABLE IF NOT EXISTS chapters (
     continuity_report TEXT NOT NULL DEFAULT '{}',
     worldbuilding_report TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'draft',
+
+    -- 进化元数据 (v2)
+    version INTEGER NOT NULL DEFAULT 0,
+    evolution_summary TEXT NOT NULL DEFAULT '{}',
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(project_id, chapter_number)
