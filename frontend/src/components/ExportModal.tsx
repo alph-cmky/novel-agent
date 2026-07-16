@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Loading } from './Spinner'
 
 const FORMAT_OPTIONS = [
   { value: 'md', label: 'Markdown', ext: '.md' },
@@ -77,7 +78,7 @@ export default function ExportModal({
         {/* Content preview */}
         <div className="flex-1 overflow-y-auto p-6">
           {isLoading ? (
-            <p className="text-center py-16 text-gray-400 text-sm">加载中...</p>
+            <Loading label="加载中..." className="py-16" />
           ) : error ? (
             <p className="text-center py-16 text-red-500 text-sm">
               加载失败: {(error as Error).message}

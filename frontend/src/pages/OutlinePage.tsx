@@ -5,12 +5,23 @@ import cytoscape from 'cytoscape'
 // @ts-expect-error cose-bilkent has no types
 import coseBilkent from 'cytoscape-cose-bilkent'
 import { api, type OutlineItem } from '../lib/api'
+import { OUTLINE_STATUS_META, type OutlineStatus } from '../lib/status'
 import ExportModal from '../components/ExportModal'
 import ErrorBoundary from '../components/ErrorBoundary'
+import { Loading, Spinner } from '../components/Spinner'
 
 cytoscape.use(coseBilkent)
 
 /* ── Chapter Tree ──────────────────────────────────── */
+
+function StatusBadge({ status }: { status: string }) {
+  const meta = OUTLINE_STATUS_META[status as OutlineStatus] || OUTLINE_STATUS_META.pending
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded ${meta.cls}`}>
+      {meta.label}
+    </span>
+  )
+}
 
 function ChapterTree({
   chapters,
@@ -26,21 +37,6 @@ function ChapterTree({
   onMove: (from: number, to: number) => void
 }) {
   const [dragIdx, setDragIdx] = useState<number | null>(null)
-
-  const statusBadge = (s: string) => {
-    const map: Record<string, { cls: string; label: string }> = {
-      pending: { cls: 'bg-gray-100 text-gray-600', label: '待写' },
-      writing: { cls: 'bg-blue-100 text-blue-600', label: '写作中' },
-      drafted: { cls: 'bg-yellow-100 text-yellow-600', label: '已生成' },
-      approved: { cls: 'bg-green-100 text-green-600', label: '已审批' },
-    }
-    const info = map[s] || map.pending
-    return (
-      <span className={`text-[10px] px-1.5 py-0.5 rounded ${info.cls}`}>
-        {info.label}
-      </span>
-    )
-  }
 
   return (
     <div className="space-y-0.5">
@@ -66,7 +62,7 @@ function ChapterTree({
           <span className="flex-1 truncate text-gray-700">
             {ch.title || '(无标题)'}
           </span>
-          {statusBadge(ch.status)}
+          <StatusBadge status={ch.status} />
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(ch.chapter_number) }}
             className="text-gray-300 hover:text-red-500 text-xs"
@@ -332,7 +328,7 @@ function GraphCanvas({ projectId }: { projectId: string }) {
         onChange={setUntilChapter}
       />
       {isLoading ? (
-        <p className="text-center py-16 text-gray-400 text-sm">加载图谱数据...</p>
+        <Loading label="加载图谱数据..." className="py-16" />
       ) : data && data.nodes.length > 0 ? (
         <div className="relative">
           <div
@@ -511,11 +507,16 @@ export default function OutlinePage() {
                   disabled={generateMutation.isPending}
                   className="flex-1 bg-blue-600 text-white rounded-lg py-1.5 text-xs hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {generateMutation.isPending ? '生成中...' : 'AI 生成大纲'}
+                  {generateMutation.isPending ? (
+                    <span className="flex items-center justify-center gap-1.5">
+                      <Spinner size="sm" className="text-white" />
+                      生成中...
+                    </span>
+                  ) : 'AI 生成大纲'}
                 </button>
               </div>
               {isLoading ? (
-                <p className="text-xs text-gray-400 text-center py-8">加载中...</p>
+                <Loading label="加载中..." size="md" className="py-8" />
               ) : (
                 <ChapterTree
                   chapters={chapters}

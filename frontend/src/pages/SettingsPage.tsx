@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import ErrorBoundary from '../components/ErrorBoundary'
+import { Loading, Spinner } from '../components/Spinner'
 
 export default function SettingsPage() {
   const { id } = useParams<{ id: string }>()
@@ -50,7 +51,7 @@ export default function SettingsPage() {
         </div>
 
         {isLoading ? (
-          <p className="text-gray-400 text-sm">加载中...</p>
+          <Loading label="加载中..." className="py-16" />
         ) : (
           <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl space-y-6">
             <div>
@@ -63,8 +64,6 @@ export default function SettingsPage() {
                     onChange={(e) => setStoryLength(e.target.value)}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   >
-                    <option value="short">短篇 (3-10章, 1500字/章)</option>
-                    <option value="novella">中篇 (20-50章, 3000字/章)</option>
                     <option value="long">长篇 (50-100+章, 3000字/章)</option>
                   </select>
                 </div>
@@ -125,7 +124,12 @@ export default function SettingsPage() {
                 disabled={mutation.isPending}
                 className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
               >
-                {mutation.isPending ? '保存中...' : '保存设置'}
+                {mutation.isPending ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Spinner size="sm" className="text-white" />
+                    保存中...
+                  </span>
+                ) : '保存设置'}
               </button>
               {mutation.isSuccess && (
                 <span className="ml-3 text-green-600 text-sm">已保存</span>

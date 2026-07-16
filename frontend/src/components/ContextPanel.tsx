@@ -10,8 +10,6 @@ interface ContextData {
 }
 
 const STORY_LENGTH_LABELS: Record<string, string> = {
-  short: '短篇',
-  novella: '中篇',
   long: '长篇',
 }
 

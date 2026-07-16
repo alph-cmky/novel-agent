@@ -6,27 +6,19 @@ interface Step {
   detail?: string
 }
 
-const STEPS: { node: string; label: string }[] = [
-  { node: 'orchestrator', label: '策略规划' },
-  { node: 'writer', label: '内容创作' },
-  { node: 'editor', label: '编辑审查' },
-  { node: 'continuity', label: '一致性审计' },
-  { node: 'worldbuilding', label: '世界观提取' },
-  { node: 'human_review', label: '人工审批' },
-]
-
 export default function PipelineProgress({ steps }: { steps: Step[] }) {
-  const stepMap = new Map(steps.map((s) => [s.node, s]))
+  if (steps.length === 0) {
+    return <p className="text-xs text-gray-400 py-2">等待开始...</p>
+  }
 
   return (
     <div className="space-y-1">
-      {STEPS.map(({ node, label }, i) => {
-        const step = stepMap.get(node)
-        const status = step?.status ?? 'idle'
-        const isLast = i === STEPS.length - 1
+      {steps.map((step, i) => {
+        const status = step.status
+        const isLast = i === steps.length - 1
 
         return (
-          <div key={node} className="flex items-start gap-2">
+          <div key={step.node} className="flex items-start gap-2">
             <div className="flex flex-col items-center">
               <div
                 className={`w-3 h-3 rounded-full border-2 ${
@@ -48,13 +40,13 @@ export default function PipelineProgress({ steps }: { steps: Step[] }) {
                     'text-gray-400'
                   }`}
                 >
-                  {label}
+                  {step.label || step.node}
                 </span>
-                {step?.score != null && (
+                {step.score != null && (
                   <span className="text-xs text-gray-500">{step.score}/100</span>
                 )}
               </div>
-              {step?.detail && (
+              {step.detail && (
                 <p className="text-xs text-gray-400 mt-0.5">{step.detail}</p>
               )}
             </div>

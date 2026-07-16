@@ -6,6 +6,7 @@ import ErrorBoundary from '../components/ErrorBoundary'
 import ContextPanel from '../components/ContextPanel'
 import PipelineProgress from '../components/PipelineProgress'
 import ScoreBadge from '../components/ScoreBadge'
+import { Spinner } from '../components/Spinner'
 
 interface PipelineStep {
   node: string
@@ -51,6 +52,8 @@ export default function WritingPage() {
   const [error, setError] = useState<string | null>(null)
   const [rejectComments, setRejectComments] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [showRejectBox, setShowRejectBox] = useState(false)
+  const [notice, setNotice] = useState<{ type: 'approved' | 'saved_draft'; message: string } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -65,6 +68,13 @@ export default function WritingPage() {
     queryKey: ['project', projectId],
     queryFn: () => api.getProject(projectId),
   })
+
+  const { data: outline } = useQuery({
+    queryKey: ['outline', projectId],
+    queryFn: () => api.getOutline(projectId),
+  })
+
+  const hasNextChapter = !!outline?.some((o) => o.chapter_number === chapterNumber + 1)
 
   // Load existing chapter content
   useEffect(() => {
@@ -103,6 +113,8 @@ export default function WritingPage() {
     setPipelineSteps([])
     setReviewData(null)
     setError(null)
+    setNotice(null)
+    setShowRejectBox(false)
 
     const url = api.writeChapterUrl(projectId, chapterNumber)
     fetch(url, { method: 'POST', signal: controller.signal }).then(async (response) => {
@@ -139,6 +151,7 @@ export default function WritingPage() {
                 setDraftContent((prev) => prev + (typeof data === 'string' ? data : ''))
               } else if (currentEvent === 'review_required' || data.type === 'review_required') {
                 setReviewData(data)
+                if (data.draft_full) setDraftContent(data.draft_full)
                 setPipelineSteps((prev) => [
                   ...prev,
                   { node: 'human_review', label: '人工审批', status: 'running' },
@@ -171,6 +184,16 @@ export default function WritingPage() {
                 })
               } else if (currentEvent === 'error') {
                 setError(data.message)
+                setPipelineSteps((prev) => {
+                  const node = data.node && data.node !== 'unknown' ? (data.node as string) : null
+                  const next = prev.map((s) =>
+                    s.status === 'running' ? { ...s, status: 'error' as const } : s
+                  )
+                  if (node && !next.some((s) => s.node === node)) {
+                    return [...next, { node, label: node, status: 'error' as const }]
+                  }
+                  return next
+                })
                 setIsStreaming(false)
               }
             } catch {
@@ -212,6 +235,8 @@ export default function WritingPage() {
                     prev.map((s) => ({ ...s, status: 'done' as const }))
                   )
                   setReviewData(null)
+                  setShowRejectBox(false)
+                  setNotice({ type: 'approved', message: '本章已批准并保存' })
                   queryClient.invalidateQueries({ queryKey: ['chapter', projectId, chapterNumber] })
                   queryClient.invalidateQueries({ queryKey: ['outline', projectId] })
                   queryClient.invalidateQueries({ queryKey: ['projects'] })
@@ -242,6 +267,8 @@ export default function WritingPage() {
     setPipelineSteps([])
     setReviewData(null)
     setError(null)
+    setNotice(null)
+    setShowRejectBox(false)
 
     fetch(url, {
       method: 'POST',
@@ -273,6 +300,7 @@ export default function WritingPage() {
                 setDraftContent((prev) => prev + (typeof data === 'string' ? data : ''))
               } else if (currentEvent === 'review_required') {
                 setReviewData(data)
+                if (data.draft_full) setDraftContent(data.draft_full)
                 setIsStreaming(false)
               } else if (currentEvent === 'done') {
                 if (data.chapter_content) {
@@ -292,6 +320,16 @@ export default function WritingPage() {
                 })
               } else if (currentEvent === 'error') {
                 setError(data.message)
+                setPipelineSteps((prev) => {
+                  const node = data.node && data.node !== 'unknown' ? (data.node as string) : null
+                  const next = prev.map((s) =>
+                    s.status === 'running' ? { ...s, status: 'error' as const } : s
+                  )
+                  if (node && !next.some((s) => s.node === node)) {
+                    return [...next, { node, label: node, status: 'error' as const }]
+                  }
+                  return next
+                })
                 setIsStreaming(false)
               }
             } catch {
@@ -312,6 +350,7 @@ export default function WritingPage() {
     setEditedContent(draftContent)
     setViewMode('edit')
     setSaveState('idle')
+    setNotice(null)
   }, [draftContent])
 
   // Cancel editing and revert to read mode
@@ -321,21 +360,33 @@ export default function WritingPage() {
     setSaveState('idle')
   }, [draftContent])
 
-  // Save edited draft
+  // Unified "save draft" — saves whatever the user is currently looking at:
+  // edit mode → editedContent (their manual changes), read mode → the AI's draftContent.
   const handleSaveDraft = useCallback(async () => {
-    if (!editedContent.trim()) return
+    const content = viewMode === 'edit' ? editedContent : draftContent
+    if (!content.trim()) return
     setSaveState('saving')
     try {
-      await api.saveDraft(projectId, chapterNumber, editedContent)
-      setDraftContent(editedContent)
+      await api.saveDraft(projectId, chapterNumber, content)
+      setDraftContent(content)
       setSaveState('saved')
       setViewMode('read')
+      if (reviewData) {
+        setReviewData(null)
+        setShowRejectBox(false)
+        setPipelineSteps((prev) => prev.map((s) => ({ ...s, status: 'done' as const })))
+        setNotice({ type: 'saved_draft', message: '草稿已保存，可稍后继续编辑或重新生成本章' })
+      } else {
+        setNotice(null)
+      }
       queryClient.invalidateQueries({ queryKey: ['chapter', projectId, chapterNumber] })
+      queryClient.invalidateQueries({ queryKey: ['outline', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
     } catch (err) {
       setSaveState('error')
       setError((err as Error).message)
     }
-  }, [projectId, chapterNumber, editedContent, queryClient])
+  }, [projectId, chapterNumber, viewMode, editedContent, draftContent, reviewData, queryClient])
 
   const hasExistingChapter = chapter && (chapter as Record<string, unknown>).draft_content as string
   const showContent = draftContent || hasExistingChapter
@@ -452,7 +503,14 @@ export default function WritingPage() {
                       </div>
                     ) : (
                       <div className="text-center">
-                        <p className="text-gray-400 mb-4">{hasExistingChapter ? '加载中...' : '点击按钮开始生成草稿'}</p>
+                        {hasExistingChapter ? (
+                          <div className="flex flex-col items-center gap-3 mb-4">
+                            <Spinner size="md" className="text-blue-600" />
+                            <p className="text-gray-400 text-sm">加载中...</p>
+                          </div>
+                        ) : (
+                          <p className="text-gray-400 mb-4">点击按钮开始生成草稿</p>
+                        )}
                         {!hasExistingChapter && (
                           <button
                             onClick={startWriting}
@@ -498,7 +556,12 @@ export default function WritingPage() {
                       disabled={saveState === 'saving' || !editedContent.trim()}
                       className="px-4 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
                     >
-                      {saveState === 'saving' ? '保存中...' : saveState === 'saved' ? '已保存' : '保存修改'}
+                      {saveState === 'saving' ? (
+                        <span className="flex items-center justify-center gap-1.5">
+                          <Spinner size="sm" className="text-white" />
+                          保存中...
+                        </span>
+                      ) : saveState === 'saved' ? '已保存' : '保存草稿'}
                     </button>
                   </div>
                 </div>
@@ -515,48 +578,94 @@ export default function WritingPage() {
               </button>
             )}
 
+            {/* Success notice: post-approve / post-save-draft feedback + navigation */}
+            {notice && !isStreaming && !reviewData && (
+              <div className="mt-3 bg-green-50 border border-green-200 rounded-lg p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-green-800">
+                  <span className="text-green-600">✓</span>
+                  <span>{notice.message}</span>
+                </div>
+                <div className="flex gap-3 text-sm">
+                  {notice.type === 'approved' && hasNextChapter && (
+                    <Link
+                      to={`/projects/${projectId}/chapters/${chapterNumber + 1}`}
+                      className="text-blue-600 hover:underline"
+                    >
+                      写下一章 →
+                    </Link>
+                  )}
+                  <Link to={`/projects/${projectId}`} className="text-gray-500 hover:underline">
+                    返回大纲
+                  </Link>
+                </div>
+              </div>
+            )}
+
             {/* Approval bar */}
             {reviewData && (
               <div className="mt-3 bg-white border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-medium text-gray-900 text-sm">审批章节</h3>
+                  <h3 className="font-medium text-gray-900 text-sm">审阅本章</h3>
                   <div className="flex gap-2">
                     <ScoreBadge score={reviewData.editor_score} />
                     <ScoreBadge score={reviewData.continuity_score} />
                   </div>
                 </div>
 
-                {/* Action hint during review */}
-                <div className="mb-3 p-2 bg-blue-50 rounded text-xs text-blue-700">
-                  提示：切换到「编辑」标签可手动修改草稿后再批准
-                </div>
+                <p className="mb-3 text-xs text-gray-400">
+                  满意则批准，暂缓可保存草稿，需修改可切换到上方「编辑」标签
+                </p>
 
                 {reviewData.retry_count > 0 && (
                   <p className="text-xs text-yellow-600 mb-2">
                     第 {reviewData.retry_count + 1} 次尝试 {reviewData.retry_count >= 2 ? '(最后一次)' : ''}
                   </p>
                 )}
-                <div className="flex gap-2 mb-3">
+
+                <div className="flex gap-2">
                   <button
                     onClick={handleApprove}
                     className="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm hover:bg-green-700 transition-colors"
                   >
-                    批准
+                    批准并保存
                   </button>
                   <button
-                    onClick={handleReject}
-                    className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm hover:bg-red-700 transition-colors"
+                    onClick={handleSaveDraft}
+                    disabled={saveState === 'saving'}
+                    className="flex-1 border border-blue-300 text-blue-700 rounded-lg py-2 text-sm hover:bg-blue-50 transition-colors disabled:opacity-50"
+                  >
+                    {saveState === 'saving' ? (
+                      <span className="flex items-center justify-center gap-1.5">
+                        <Spinner size="sm" className="text-blue-700" />
+                        保存中…
+                      </span>
+                    ) : '保存草稿'}
+                  </button>
+                  <button
+                    onClick={() => setShowRejectBox((v) => !v)}
+                    className="flex-1 border border-red-300 text-red-600 rounded-lg py-2 text-sm hover:bg-red-50 transition-colors"
                   >
                     拒绝并重写
                   </button>
                 </div>
-                <textarea
-                  value={rejectComments}
-                  onChange={(e) => setRejectComments(e.target.value)}
-                  placeholder="拒绝理由（可选），将指导 AI 重新创作..."
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                  rows={2}
-                />
+
+                {showRejectBox && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <textarea
+                      value={rejectComments}
+                      onChange={(e) => setRejectComments(e.target.value)}
+                      placeholder="拒绝理由（可选），将指导 AI 重新创作..."
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-red-400"
+                      rows={2}
+                    />
+                    <button
+                      onClick={handleReject}
+                      className="mt-2 w-full bg-red-600 text-white rounded-lg py-2 text-sm hover:bg-red-700 transition-colors"
+                    >
+                      确认拒绝并重新生成
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

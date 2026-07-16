@@ -4,16 +4,26 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, type Project } from '../lib/api'
 import ExportModal from '../components/ExportModal'
 import ErrorBoundary from '../components/ErrorBoundary'
+import { Loading, Spinner } from '../components/Spinner'
 
 const LENGTH_LABELS: Record<string, string> = {
-  short: '短篇', novella: '中篇', long: '长篇',
+  long: '长篇',
 }
 
 function ProjectCard({ project }: { project: Project }) {
+  const queryClient = useQueryClient()
   const total = (project as any).total_chapters || 0
   const done = (project as any).chapter_count || 0
   const progress = total > 0 ? Math.round((done / total) * 100) : 0
   const [showExport, setShowExport] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteProject(project.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
 
   return (
     <>
@@ -64,7 +74,41 @@ function ProjectCard({ project }: { project: Project }) {
           >
             导出
           </button>
+          {confirmingDelete ? (
+            <>
+              <button
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                className="flex-1 text-xs text-white bg-red-600 hover:bg-red-700 rounded py-1 disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? (
+                  <span className="flex items-center justify-center gap-1.5">
+                    <Spinner size="sm" className="text-white" />
+                    删除中…
+                  </span>
+                ) : '确认删除'}
+              </button>
+              <button
+                onClick={() => setConfirmingDelete(false)}
+                className="flex-1 text-xs text-gray-500 hover:text-gray-700 py-1"
+              >
+                取消
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="flex-1 text-xs text-gray-400 hover:text-red-600 py-1"
+            >
+              删除
+            </button>
+          )}
         </div>
+        {deleteMutation.isError && (
+          <p className="text-xs text-red-500 mt-2">
+            {(deleteMutation.error as Error).message}
+          </p>
+        )}
       </div>
       {showExport && (
         <ExportModal
@@ -137,8 +181,6 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setStoryLength(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               >
-                <option value="short">短篇 (3-10章)</option>
-                <option value="novella">中篇 (20-50章)</option>
                 <option value="long">长篇 (50-100+章)</option>
               </select>
             </div>
@@ -182,7 +224,12 @@ function CreateProjectModal({ onClose }: { onClose: () => void }) {
             disabled={!name || mutation.isPending}
             className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm hover:bg-blue-700 disabled:opacity-50"
           >
-            {mutation.isPending ? '创建中...' : '创建'}
+            {mutation.isPending ? (
+              <span className="flex items-center justify-center gap-2">
+                <Spinner size="sm" className="text-white" />
+                创建中...
+              </span>
+            ) : '创建'}
           </button>
         </div>
       </div>
@@ -211,9 +258,7 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {isLoading && (
-          <div className="text-center py-20 text-gray-400">加载中...</div>
-        )}
+        {isLoading && <Loading label="加载中..." className="py-20" />}
         {error && (
           <div className="text-center py-20 text-red-500">
             加载失败: {(error as Error).message}
