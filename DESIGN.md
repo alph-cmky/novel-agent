@@ -137,12 +137,12 @@ class BaseAgent:
 
 | 方法 | 输入 | 输出 | 用途 |
 |------|------|------|------|
-| `analyze()` | chapter_number, outline, previous_chapters, contexts, story_length, narrative_mode, narrative_perspective, arc_summary | `{narrative_stage, chapter_strategy, context_needed}` | 每章写作前调用 |
+| `analyze()` | chapter_number, outline, previous_chapters, contexts, narrative_mode, narrative_perspective, arc_summary | `{narrative_stage, chapter_strategy, context_needed}` | 每章写作前调用 |
 | `review_feedback()` | draft_content, editor_report, continuity_report, human_feedback | `{instructions, constraints}` | 需要重写时调用 |
 
 **叙事阶段识别：** intro, development, climax, resolution, unit_arc, mini_climax, transition（7 种）
 
-**篇幅感知：** 根据 `StoryLength`（short/novella/long）调整叙事节奏策略
+**篇幅感知：** 按长篇节奏策略调整（渐进展开，多线并进，伏笔长线回收）
 
 **输出字段三层分类（详见第六章）：**
 
@@ -255,7 +255,6 @@ Writer._format_strategy()
 | `project_id` | `str` | 入口 → 所有节点 |
 | `chapter_number` | `int` | 入口 → 所有节点 |
 | `chapter_outline` | `str` | 入口 → orchestrator, writer |
-| `story_length` | `str` | 项目配置 → orchestrator |
 | `target_chapter_words` | `int` | 项目配置 → writer |
 | `narrative_mode` | `str\|None` | 项目配置 → orchestrator, writer, editor, continuity, worldbuilding |
 | `narrative_perspective` | `str` | 项目配置 → orchestrator |
@@ -487,7 +486,7 @@ novel_agent/
 ├── trace/            # 本地 trace
 │   ├── collector.py
 │   └── viewer.py
-└── config.py         # StoryLength 配置
+└── config.py         # 长篇写作常量
 
 frontend/             # React Web UI
 ├── src/
