@@ -104,6 +104,17 @@ CREATE TABLE IF NOT EXISTS world_entities (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS world_relations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    relation_type TEXT NOT NULL DEFAULT 'related_to',
+    first_appearance_chapter INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, source, target, relation_type)
+);
+
 CREATE TABLE IF NOT EXISTS foreshadowings (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -132,6 +143,7 @@ CREATE TABLE IF NOT EXISTS outlines (
 
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
 CREATE INDEX IF NOT EXISTS idx_world_entities_project ON world_entities(project_id);
+CREATE INDEX IF NOT EXISTS idx_world_relations_project ON world_relations(project_id);
 CREATE INDEX IF NOT EXISTS idx_foreshadowings_project ON foreshadowings(project_id);
 CREATE INDEX IF NOT EXISTS idx_outlines_project ON outlines(project_id);
 """

@@ -169,6 +169,21 @@ class ProjectManager:
         conn.close()
         return [dict(r) for r in rows]
 
+    def get_chapter_worldbuilding(self, project_id: str) -> list[dict]:
+        """Lightweight fetch of chapter_number + worldbuilding_report only.
+
+        Used by the graph builder to extract conflicts without pulling
+        draft_content (正文全文) into memory.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT chapter_number, worldbuilding_report FROM chapters "
+            "WHERE project_id = ? ORDER BY chapter_number",
+            (project_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
     def build_context(
         self,
         project_id: str,
@@ -276,6 +291,72 @@ class ProjectManager:
         conn.commit()
         conn.close()
         return saved
+
+    def save_world_relations(
+        self,
+        project_id: str,
+        chapter_number: int,
+        worldbuilding_report: dict,
+    ) -> int:
+        """Persist entity relationships (edges) to world_relations. Returns count."""
+        new_entities = worldbuilding_report.get("new_entities", [])
+        if not new_entities:
+            return 0
+
+        conn = self._get_conn()
+        saved = 0
+        for entity in new_entities:
+            if not isinstance(entity, dict):
+                continue
+            source = entity.get("name", "")
+            if not source:
+                continue
+            for rel in entity.get("relationships", []) or []:
+                if not isinstance(rel, dict):
+                    continue
+                target = rel.get("target", "")
+                if not target:
+                    continue
+                # INSERT OR IGNORE 依赖 UNIQUE(project_id, source, target, relation_type)
+                # 去重并保留首次 first_appearance_chapter
+                conn.execute(
+                    "INSERT OR IGNORE INTO world_relations "
+                    "(id, project_id, source, target, relation_type, first_appearance_chapter) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4())[:8], project_id, source, target,
+                     rel.get("relation", "related_to"), chapter_number),
+                )
+                saved += 1
+
+        conn.commit()
+        conn.close()
+        return saved
+
+    def get_all_world_relations(self, project_id: str) -> list[dict]:
+        """Get all relationships (edges) for a project."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM world_relations WHERE project_id = ? "
+            "ORDER BY first_appearance_chapter",
+            (project_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def backfill_world_relations(self, project_id: str) -> int:
+        """Backfill edges from existing chapters' worldbuilding_report (idempotent)."""
+        import json
+        chapters = self.get_chapter_worldbuilding(project_id)
+        total = 0
+        for ch in chapters:
+            try:
+                wb = json.loads(ch.get("worldbuilding_report", "{}") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                wb = {}
+            total += self.save_world_relations(
+                project_id, ch["chapter_number"], wb
+            )
+        return total
 
     # ── Outline ───────────────────────────────────────
 
@@ -474,6 +555,7 @@ class ProjectManager:
         conn.execute("DELETE FROM chapters WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM outlines WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM world_entities WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM world_relations WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM foreshadowings WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
