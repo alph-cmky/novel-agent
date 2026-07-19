@@ -499,6 +499,7 @@ def _save_chapter_result(
     # Save world entities
     if wb_report:
         mgr.save_world_entities(project_id, wb_report)
+        mgr.save_world_relations(project_id, chapter_number, wb_report)
 
     # Save foreshadowing lifecycle
     _save_foreshadowings(mgr, project_id, chapter_number, wb_report)

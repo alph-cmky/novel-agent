@@ -45,7 +45,12 @@ def build_graph_data(
         {"nodes": [...], "edges": [...]}
     """
     entities = mgr.get_all_world_entities(project_id)
-    chapters = mgr.get_all_chapters(project_id)
+    relations = mgr.get_all_world_relations(project_id)
+    if not relations:
+        # 首次访问：从旧 worldbuilding_report 回填边（幂等）
+        mgr.backfill_world_relations(project_id)
+        relations = mgr.get_all_world_relations(project_id)
+    chapters = mgr.get_chapter_worldbuilding(project_id)
 
     # Filter by chapter if specified
     if until_chapter > 0:
@@ -53,10 +58,13 @@ def build_graph_data(
             e for e in entities
             if e.get("first_appearance_chapter", 999) <= until_chapter
         ]
+        relations = [
+            r for r in relations
+            if r.get("first_appearance_chapter", 0) <= until_chapter
+        ]
 
     # Collect conflicts from worldbuilding reports
     conflict_names: set[str] = set()
-    relationships: list[dict] = []
 
     for ch in chapters:
         if until_chapter > 0 and ch["chapter_number"] > until_chapter:
@@ -65,17 +73,6 @@ def build_graph_data(
             wb = json.loads(ch.get("worldbuilding_report", "{}"))
         except (json.JSONDecodeError, TypeError):
             wb = {}
-
-        # Extract relationships from entities (agent nests them inside new_entities)
-        for entity in wb.get("new_entities", []):
-            entity_name = entity.get("name", "")
-            for rel in entity.get("relationships", []):
-                relationships.append({
-                    "source": entity_name,
-                    "target": rel.get("target", ""),
-                    "relationship_type": rel.get("relation", "related_to"),
-                    "description": rel.get("relation", ""),
-                })
 
         for conflict in wb.get("conflicts", []):
             for name in conflict.get("entity_names", []):
@@ -91,7 +88,7 @@ def build_graph_data(
     # Build node list
     # Count connections per entity for importance
     connection_counts: dict[str, int] = {}
-    for rel in relationships:
+    for rel in relations:
         src = rel.get("source", "")
         tgt = rel.get("target", "")
         if src:
@@ -121,30 +118,27 @@ def build_graph_data(
             "color": ENTITY_COLORS.get(etype, "#909399"),
         })
 
-    # Build edge list
+    # Build edge list（边已由 world_relations 表 UNIQUE 去重）
     edges = []
-    seen_edge_ids: set[str] = set()
-    for rel in relationships:
+    for rel in relations:
         src = rel.get("source", "")
         tgt = rel.get("target", "")
-        rtype = rel.get("relationship_type", rel.get("type", "related_to"))
-        description = rel.get("description", "")
-        edge_id = f"{src}->{tgt}:{rtype}"
-        if edge_id in seen_edge_ids:
+        rtype = rel.get("relation_type", "related_to")
+        if not src or not tgt:
             continue
-        seen_edge_ids.add(edge_id)
 
         src_id = _find_entity_id(entities, src)
         tgt_id = _find_entity_id(entities, tgt)
         if not src_id or not tgt_id:
             continue
 
+        edge_id = f"{src}->{tgt}:{rtype}"
         edges.append({
             "id": edge_id,
             "source": f"{_entity_type(entities, src)}:{src}",
             "target": f"{_entity_type(entities, tgt)}:{tgt}",
             "label": rtype,
-            "description": description,
+            "description": rtype,
             "relationship_type": rtype,
         })
 
