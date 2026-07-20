@@ -240,6 +240,7 @@ export default function WritingPage() {
                   queryClient.invalidateQueries({ queryKey: ['chapter', projectId, chapterNumber] })
                   queryClient.invalidateQueries({ queryKey: ['outline', projectId] })
                   queryClient.invalidateQueries({ queryKey: ['projects'] })
+                  queryClient.invalidateQueries({ queryKey: ['graph', projectId] })
                 } else if (currentEvent === 'progress') {
                   setPipelineSteps((prev) => {
                     const existing = prev.find((s) => s.node === data.node)
