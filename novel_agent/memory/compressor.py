@@ -44,8 +44,8 @@ class ContextCompressor:
         self.strategy = strategy or CompressionStrategy()
         self._model = ChatOpenAI(
             model=os.getenv("BUDGET_MODEL", "deepseek-chat"),
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            api_key=os.getenv("BUDGET_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
+            base_url=os.getenv("BUDGET_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             max_tokens=600,
             temperature=0.3,
         )
@@ -81,7 +81,7 @@ class ContextCompressor:
 
         # Extract critical info from older chapters
         all_text = "\n".join(
-            c.get("draft_content", "")[:2000] for c in older
+            (c.get("draft_content") or "")[:2000] for c in older
         )
         critical = extract_critical_snippets(
             all_text, self.strategy.preserve_patterns
@@ -103,7 +103,7 @@ class ContextCompressor:
         chapter_texts = []
         for c in chapters:
             cn = c.get("chapter_number", "?")
-            draft = c.get("draft_content", "")[:1500]
+            draft = (c.get("draft_content") or "")[:1500]
             chapter_texts.append(f"第{cn}章:\n{draft}\n")
 
         prompt = (

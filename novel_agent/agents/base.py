@@ -142,6 +142,11 @@ class BaseAgent:
     def tools(self) -> list[BaseTool]:
         return list(self._tools.values())
 
+    @property
+    def latest_trace(self) -> TraceStep | None:
+        """Most recent trace step from the last model call."""
+        return self._latest_trace
+
     def register_tool(self, tool: BaseTool):
         self._tools[tool.name] = tool
 

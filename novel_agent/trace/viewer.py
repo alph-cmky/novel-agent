@@ -101,7 +101,7 @@ def show_trace(filepath: str):
             tools[:25],
         )
 
-    if data["steps"]:
+    if data.get("steps"):
         console.print(table)
     else:
         console.print("[yellow]No steps recorded.[/yellow]")

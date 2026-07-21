@@ -35,7 +35,7 @@ from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.graph.evolution import (
-    DEFAULT_EVO_CONFIG,
+    EvolutionConfig,
     build_improvement_plan_rule,
     composite_score,
     compute_delta,
@@ -71,6 +71,18 @@ def _build_arc_summary(previous_chapters: list[dict]) -> str:
         c_score = cr.get("overall_score", "?")
         entries.append(f"第{cn}章: Editor {e_score}/100, Continuity {c_score}/100")
     return "## 最近章节表现\n" + "\n".join(entries) if entries else ""
+
+
+# ChromaDB ChapterStore 按 persist_dir 缓存，避免每个进化轮都 new PersistentClient
+_chapter_store_cache: dict[str, ChapterStore] = {}
+
+
+def _get_chapter_store(persist_dir: str) -> ChapterStore:
+    store_dir = Path(persist_dir) / "chroma_data"
+    key = str(store_dir.resolve())
+    if key not in _chapter_store_cache:
+        _chapter_store_cache[key] = ChapterStore(store_dir)
+    return _chapter_store_cache[key]
 
 
 # ── Routing thresholds ──────────────────────────────────
@@ -153,13 +165,13 @@ async def orchestrator_node(state: NovelState) -> dict:
         try:
             from novel_agent.storage.manager import ProjectManager
             mgr = ProjectManager(persist_dir)
-            all_chapters = mgr.get_all_chapters(project_id)
+            all_chapters = mgr.get_chapter_reports(project_id)
             previous_chapters = [
                 c for c in all_chapters
                 if c["chapter_number"] < state.get("chapter_number", 1)
             ]
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  [Orchestrator] 加载前文失败，跳过: {exc}")
 
     target_words = state.get("target_chapter_words", 3000)
     narrative_mode = state.get("narrative_mode")
@@ -236,8 +248,8 @@ async def orchestrator_node(state: NovelState) -> dict:
             ]
             if unresolved:
                 print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  [Orchestrator] 加载伏笔失败，跳过: {exc}")
 
     return {
         "orchestrator_strategy": strategy,
@@ -259,7 +271,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     agent_config = _config_for(TaskClass.CREATIVE)
     agent_config.max_tokens = max_tokens
     _persist = state.get("persist_dir", "./novel-data")
-    store = ChapterStore(_persist + "/chroma_data")
+    store = _get_chapter_store(_persist)
     project_id = state.get("project_id", "")
 
     narrative_mode = state.get("narrative_mode")
@@ -329,7 +341,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                 await stream_queue.put(("chunk", content))
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
         else:
-            trace = writer._latest_trace
+            trace = writer.latest_trace
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
     else:
         content, trace = await writer.write(**write_args)
@@ -375,7 +387,7 @@ async def continuity_node(state: NovelState) -> dict:
     """Continuity Agent audits cross-chapter consistency."""
     config = _config_for(TaskClass.REVIEW)
     _persist = state.get("persist_dir", "./novel-data")
-    store = ChapterStore(_persist + "/chroma_data")
+    store = _get_chapter_store(_persist)
     project_id = state.get("project_id", "")
 
     auditor = ContinuityAgent(
@@ -434,7 +446,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     current_round = state.get("evolution_round", 0)
     version = state.get("evolution_version", 0)
     current_scores = extract_scores(state)
-    evo_config = DEFAULT_EVO_CONFIG
+    evo_config = EvolutionConfig(max_rounds=state.get("evolution_max_rounds", 5))
 
     # ── Branch A: First round (no history) ──
     if not state.get("evolution_history"):
@@ -613,8 +625,8 @@ async def worldbuilding_node(state: NovelState) -> dict:
             from novel_agent.storage.manager import ProjectManager
             mgr = ProjectManager(persist_dir)
             existing_fs = mgr.get_foreshadowings(project_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  [Worldbuilding] 加载伏笔失败，跳过: {exc}")
 
     wb = WorldbuildingAgent(
         config=_config_for(TaskClass.EXTRACTION),

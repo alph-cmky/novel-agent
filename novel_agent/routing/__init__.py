@@ -26,7 +26,6 @@ class TaskClass(Enum):
 class RouteConfig:
     model: str
     temperature: float
-    max_tokens: int = 4096
     api_key: str = ""
     base_url: str = ""
 
@@ -79,6 +78,3 @@ class ModelRouter:
             "evolution_orchestrator": TaskClass.META_EVALUATION,
         }
         return self.resolve(mapping.get(agent_name, TaskClass.STRUCTURAL))
-
-
-router = ModelRouter()

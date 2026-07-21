@@ -247,7 +247,7 @@ class WriterAgent(BaseAgent):
             lines.append("### 故事线")
             for s in focused:
                 lines.append(
-                    f"- {s['name']}（聚焦:{s['chapter_focus']}, "
+                    f"- {s.get('name', '?')}（聚焦:{s.get('chapter_focus', '?')}, "
                     f"进度:{s.get('progress', '?')}）"
                 )
             has_content = True
@@ -296,8 +296,8 @@ class WriterAgent(BaseAgent):
         if cs.get("climax_sequence"):
             cq = cs["climax_sequence"]
             lines.append(
-                f"- 高潮序列：第{cq['current_mini_climax']}/"
-                f"{cq['total_mini_climaxes']}个小高潮"
+                f"- 高潮序列：第{cq.get('current_mini_climax', '?')}/"
+                f"{cq.get('total_mini_climaxes', '?')}个小高潮"
                 f"（{cq.get('mini_climax_type', '?')}）"
             )
             if cq.get("previous_resolution"):
@@ -308,13 +308,13 @@ class WriterAgent(BaseAgent):
         if mode in ("unit_arc", "hybrid") and cs.get("unit_arc"):
             ua = cs["unit_arc"]
             lines.append(
-                f"- 单元模式：第{ua['unit_number']}单元"
-                f"「{ua['unit_title']}」({ua.get('unit_type', '?')})"
+                f"- 单元模式：第{ua.get('unit_number', '?')}单元"
+                f"「{ua.get('unit_title', '?')}」({ua.get('unit_type', '?')})"
             )
             lines.append(f"  主线推进：{ua.get('mainline_progress', '?')}")
             if ua.get("carry_over_elements"):
                 lines.append(
-                    f"  跨单元线索：{'；'.join(ua['carry_over_elements'])}"
+                    f"  跨单元线索：{'；'.join(ua.get('carry_over_elements', []))}"
                 )
             has_content = True
 
@@ -354,7 +354,7 @@ class WriterAgent(BaseAgent):
         if cs.get("ending_tone"):
             et = cs["ending_tone"]
             lines.append(
-                f"- 结尾风格：{et['type']}"
+                f"- 结尾风格：{et.get('type', '?')}"
                 f"（歧义度:{et.get('ambiguity_level', 'medium')}）"
             )
             has_content = True
@@ -427,7 +427,7 @@ class WriterAgent(BaseAgent):
             lines.append("- 即将过期的伏笔：")
             for f in high_risk:
                 lines.append(
-                    f"  {f['description']}"
+                    f"  {f.get('description', '?')}"
                     f"（已悬置{f.get('chapters_outstanding', '?')}章，"
                     f"建议{f.get('action_needed', 'maintain')}）"
                 )
