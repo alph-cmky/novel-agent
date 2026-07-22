@@ -150,7 +150,11 @@ async def on_message(message: cl.Message):
 
     # ── select <project_id> ──
     elif text.startswith("select "):
-        pid = text.split()[1].strip()
+        parts = text.split()
+        if len(parts) < 2:
+            await cl.Message(content="Usage: `select <project_id>`").send()
+            return
+        pid = parts[1].strip()
         proj = mgr.get_project(pid)
         if not proj:
             await cl.Message(content=f"Project `{pid}` not found.").send()
@@ -345,7 +349,7 @@ async def _run_pipeline(
     )
 
     graph = build_chapter_graph(persist_dir=str(_get_persist_dir()))
-    config = {"configurable": {"thread_id": f"project-{project_id}"}}
+    config = {"configurable": {"thread_id": f"{project_id}:ch{chapter_number}"}}
 
     # Create LangFuse trace for this chapter run
     create_trace(

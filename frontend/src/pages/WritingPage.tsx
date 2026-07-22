@@ -197,7 +197,9 @@ export default function WritingPage() {
                 setIsStreaming(false)
               }
             } catch {
-              setDraftContent((prev) => prev + raw)
+              if (currentEvent === 'chunk') {
+                setDraftContent((prev) => prev + raw)
+              }
             }
           }
         }
@@ -211,9 +213,15 @@ export default function WritingPage() {
   }, [projectId, chapterNumber, queryClient])
 
   const handleApprove = useCallback(() => {
-    fetch(`/api/projects/${projectId}/chapters/${chapterNumber}/approve`, { method: 'POST' })
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    fetch(`/api/projects/${projectId}/chapters/${chapterNumber}/approve`, { method: 'POST', signal: controller.signal })
       .then(async (res) => {
-        if (!res.ok || !res.body) return
+        if (!res.ok || !res.body) {
+          setError(`HTTP ${res.status}: ${res.statusText}`)
+          return
+        }
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -221,6 +229,7 @@ export default function WritingPage() {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
+          if (controller.signal.aborted) return
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
@@ -251,11 +260,17 @@ export default function WritingPage() {
                     }
                     return [...prev, { node: data.node, label: data.label || data.node, status: data.status, score: data.score }]
                   })
+                } else if (currentEvent === 'error') {
+                  setError(data.message)
                 }
               } catch {}
             }
           }
         }
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        setError(err.message)
       })
   }, [projectId, chapterNumber, queryClient])
 
@@ -271,10 +286,14 @@ export default function WritingPage() {
     setNotice(null)
     setShowRejectBox(false)
 
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comments: rejectComments }),
+      signal: controller.signal,
     }).then(async (res) => {
       if (!res.ok || !res.body) {
         setError(`HTTP ${res.status}`)
@@ -287,6 +306,7 @@ export default function WritingPage() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        if (controller.signal.aborted) return
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
@@ -334,13 +354,16 @@ export default function WritingPage() {
                 setIsStreaming(false)
               }
             } catch {
-              setDraftContent((prev) => prev + line.slice(6))
+              if (currentEvent === 'chunk') {
+                setDraftContent((prev) => prev + line.slice(6))
+              }
             }
           }
         }
       }
       setIsStreaming(false)
     }).catch((err) => {
+      if (err.name === 'AbortError') return
       setError(err.message)
       setIsStreaming(false)
     })
@@ -481,7 +504,7 @@ export default function WritingPage() {
                 {showContent ? (
                   <div className="prose prose-sm max-w-none text-gray-800 whitespace-pre-wrap leading-relaxed font-serif text-[15px]">
                     {draftContent}
-                    {hasExistingChapter && !draftContent && (chapter as Record<string, unknown>).draft_content as string}
+                    {hasExistingChapter && !draftContent && !isStreaming && (chapter as Record<string, unknown>).draft_content as string}
                     {isStreaming && <span className="inline-block w-2 h-4 bg-blue-600 animate-pulse ml-0.5 align-middle" />}
                   </div>
                 ) : (

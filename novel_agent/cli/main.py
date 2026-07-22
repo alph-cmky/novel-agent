@@ -5,7 +5,7 @@ from pathlib import Path
 import click
 
 from novel_agent import __version__
-from novel_agent.api.routes import _build_export_content
+from novel_agent.api.routes import build_export_content
 from novel_agent.storage.manager import ProjectManager
 from novel_agent.trace.viewer import list_traces, show_trace
 
@@ -87,7 +87,7 @@ def export_novel(
 
     chapters = mgr.get_all_chapters(proj["id"])
     outlines = mgr.get_outline(proj["id"])
-    content = _build_export_content(proj, chapters, outlines, fmt)
+    content = build_export_content(proj, chapters, outlines, fmt)
 
     if output:
         Path(output).write_text(content, encoding="utf-8")

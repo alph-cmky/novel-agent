@@ -253,6 +253,10 @@ async def write_chapter(project_id: str, chapter_number: int):
     persist_dir = str(_get_persist_dir())
     graph = await build_chapter_graph_async(persist_dir=persist_dir)
     queue: asyncio.Queue = asyncio.Queue()
+    # 清理同章节旧会话，避免 approve/reject 命中失效 session
+    stale = session_store.find_session(project_id, chapter_number)
+    if stale:
+        session_store.remove(stale)
     session_id = session_store.create(graph, queue)
 
     # Use deterministic thread_id so checkpoints survive server restarts
@@ -362,7 +366,7 @@ async def save_draft(project_id: str, chapter_number: int, req: SaveDraftRequest
     return {"ok": True}
 
 
-def _build_export_content(
+def build_export_content(
     project: dict, chapters: list[dict], outlines: list[dict], fmt: str,
 ) -> str:
     """Build formatted export content."""
@@ -460,7 +464,7 @@ async def export_novel(
     if fmt not in ("md", "txt"):
         fmt = "md"
 
-    content = _build_export_content(project, chapters, outlines, fmt)
+    content = build_export_content(project, chapters, outlines, fmt)
 
     if preview:
         total = len([c for c in chapters if (c.get("draft_content") or "").strip()])

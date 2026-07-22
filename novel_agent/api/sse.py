@@ -62,7 +62,7 @@ class SessionStore:
 
 
 def _sse_event(event: str, data: Any) -> str:
-    payload = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
+    payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
 
 
@@ -295,6 +295,13 @@ async def resume_graph(
         yield _sse_event("error", {"message": "Session not found"})
         return
 
+    if project_id and chapter_number:
+        create_trace(
+            name=f"chapter_{chapter_number}",
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+
     graph = session["graph"]
     config = session.get("config", {})
     queue = session.get("queue")
@@ -331,6 +338,9 @@ async def resume_graph(
             await drain_task
         async for s in _flush_output(output):
             yield s
+        if queue:
+            async for s in _drain_queue(queue):
+                yield s
 
         # Check if graph was interrupted again (e.g. reject → rewrite → human_review)
         # Note: GraphInterrupt may not raise in all LangGraph versions with
@@ -364,6 +374,7 @@ async def resume_graph(
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
             yield _sse_event("done", {"chapter_content": "", "status": "completed"})
+            store.remove(session_id)
 
     except GraphInterrupt as gi:
         running.clear()
@@ -371,6 +382,9 @@ async def resume_graph(
             await drain_task
         async for s in _flush_output(output):
             yield s
+        if queue:
+            async for s in _drain_queue(queue):
+                yield s
 
         interrupt_data = gi.args[0] if gi.args else {}
         yield _sse_event("progress", {
@@ -382,8 +396,12 @@ async def resume_graph(
         running.clear()
         if drain_task:
             await drain_task
+        if queue:
+            async for s in _drain_queue(queue):
+                yield s
         traceback.print_exc()
         yield _sse_event("error", {"message": str(e), "node": current_node})
+        store.remove(session_id)
     finally:
         running.clear()
         if drain_task and not drain_task.done():

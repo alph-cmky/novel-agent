@@ -18,8 +18,6 @@ export default function SettingsPage() {
   const [storyLength, setStoryLength] = useState('')
   const [targetWords, setTargetWords] = useState(0)
   const [worldSetting, setWorldSetting] = useState('')
-  const [qualityModel, setQualityModel] = useState('')
-  const [budgetModel, setBudgetModel] = useState('')
 
   useEffect(() => {
     if (project) {
@@ -73,34 +71,6 @@ export default function SettingsPage() {
                     type="number"
                     value={targetWords}
                     onChange={(e) => setTargetWords(Number(e.target.value))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-3">模型配置</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    QUALITY_MODEL (创作)
-                  </label>
-                  <input
-                    value={qualityModel}
-                    onChange={(e) => setQualityModel(e.target.value)}
-                    placeholder="默认使用 BUDGET_MODEL"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    BUDGET_MODEL (审查)
-                  </label>
-                  <input
-                    value={budgetModel}
-                    onChange={(e) => setBudgetModel(e.target.value)}
-                    placeholder="deepseek-chat"
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>

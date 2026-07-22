@@ -93,6 +93,9 @@ function ChapterDetail({
 }) {
   const navigate = useNavigate()
 
+  const [title, setTitle] = useState(chapter?.title || '')
+  const [summary, setSummary] = useState(chapter?.summary || '')
+
   // Check if chapter has saved content
   const { data: chapterData } = useQuery({
     queryKey: ['chapter', projectId, chapter?.chapter_number],
@@ -116,16 +119,16 @@ function ChapterDetail({
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-1">章节标题</label>
         <input
-          value={chapter.title}
-          onChange={(e) => onSave({ title: e.target.value })}
+          value={title}
+          onChange={(e) => { setTitle(e.target.value); onSave({ title: e.target.value, summary }) }}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
         />
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-1">章节概要</label>
         <textarea
-          value={chapter.summary}
-          onChange={(e) => onSave({ summary: e.target.value })}
+          value={summary}
+          onChange={(e) => { setSummary(e.target.value); onSave({ title, summary: e.target.value }) }}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
           rows={6}
         />
@@ -531,6 +534,7 @@ export default function OutlinePage() {
             {/* Right: Chapter detail */}
             <div className="flex-1 bg-white rounded-lg border border-gray-200 p-6">
               <ChapterDetail
+                key={selected?.chapter_number ?? 'none'}
                 chapter={selected}
                 onSave={handleSaveDetail}
                 projectId={projectId}
