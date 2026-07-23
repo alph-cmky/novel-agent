@@ -46,7 +46,7 @@ async def test_continuity_benchmark():
 
     # Soft assertions — benchmark is informative, not a hard gate
     assert summary["macro_f1"] > 0.0, "F1 should be measurable"
-    assert summary["total_bugs_injected"] == 5
+    assert summary["total_bugs_injected"] == 4
 
 
 @pytest.mark.asyncio

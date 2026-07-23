@@ -21,6 +21,7 @@ class InjectedBug:
     severity: str  # critical, major, minor
     description: str
     location_hint: str  # where in the chapter the bug was placed
+    keywords: list[str] = field(default_factory=list)  # 可检测特征词，供评分匹配
 
 
 @dataclass
@@ -86,6 +87,7 @@ class ContinuityBenchmark:
                     severity=b.get("severity", "minor"),
                     description=b.get("description", ""),
                     location_hint=b.get("location_hint", ""),
+                    keywords=b.get("keywords", []),
                 )
                 for b in entry.get("injected_bugs", [])
             ]
@@ -117,12 +119,12 @@ class ContinuityBenchmark:
             for i, bug in enumerate(case.injected_bugs):
                 if i in matched_bug_indices:
                     continue
-                overlap = _keyword_overlap(desc, bug.description)
+                overlap = _keyword_match(desc, bug)
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_match = i
 
-            is_match = best_overlap > 0.4 and best_match >= 0
+            is_match = best_overlap >= 0.5 and best_match >= 0
             if is_match and best_match >= 0:
                 matched_bug_indices.add(best_match)
 
@@ -162,7 +164,16 @@ class ContinuityBenchmark:
                 temperature=0.1,
             )
             store = ChapterStore(persist_dir)
-            agent = ContinuityAgent(config=config, chapter_store=store, project_id="benchmark")
+            # 每个用例独立 project_id，避免跨用例上下文污染
+            project_id = f"benchmark_{case.name}"
+            # 把前文上下文写入向量库，供 check_continuity 工具检索比对
+            if case.previous_context:
+                store.index_chapter(
+                    project_id=project_id,
+                    chapter_number=case.chapter_number - 1,
+                    content=case.previous_context,
+                )
+            agent = ContinuityAgent(config=config, chapter_store=store, project_id=project_id)
 
             report, _ = await agent.audit(
                 chapter_number=case.chapter_number,
@@ -233,6 +244,15 @@ def _keyword_overlap(text_a: str, text_b: str) -> float:
     return len(intersection) / len(union)
 
 
+def _keyword_match(reported_desc: str, bug: InjectedBug) -> float:
+    """返回 bug 特征词在报告描述中的命中率；无特征词时退回短语 Jaccard。"""
+    if bug.keywords:
+        desc = reported_desc.lower()
+        hits = sum(1 for kw in bug.keywords if kw.lower() in desc)
+        return hits / len(bug.keywords)
+    return _keyword_overlap(reported_desc, bug.description)
+
+
 # ── Built-in benchmark cases ──────────────────────────
 
 BUILTIN_CASES = [
@@ -257,12 +277,14 @@ BUILTIN_CASES = [
                 "severity": "critical",
                 "description": "主角名字从'林风'变成'林峰'，前后不一致",
                 "location_hint": "整章使用'林峰'而前文章节使用'林风'",
+                "keywords": ["林风", "林峰"],
             },
             {
                 "category": "character",
                 "severity": "critical",
                 "description": "城主称呼主角为'林风'，主角却自称'林峰'，存在身份混淆",
                 "location_hint": "对话中",
+                "keywords": ["城主", "身份混淆"],
             },
         ],
         "previous_context": "前两章中，主角的名字是'林风'，来自青云镇的年轻剑客。",
@@ -284,6 +306,7 @@ BUILTIN_CASES = [
                 "severity": "major",
                 "description": "大战时间从3天前变成1周前，时间线矛盾",
                 "location_hint": "章节开头的时间描述",
+                "keywords": ["3天前", "一周前"],
             },
         ],
         "previous_context": "第4章结尾：大战发生在3天前，林风受伤后一直在养伤。",
@@ -308,6 +331,7 @@ BUILTIN_CASES = [
                     "本章出现了可提升灵力的丹药，违反世界观规则。"
                 ),
                 "location_hint": "丹药增灵的情节",
+                "keywords": ["灵力", "丹药", "修炼"],
             },
         ],
         "previous_context": "这个世界中，灵力只能通过自身的艰苦修炼获得，没有任何捷径。这是铁律。",

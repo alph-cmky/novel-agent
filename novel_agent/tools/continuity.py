@@ -10,7 +10,7 @@ class CheckContinuityInput(BaseModel):
     """Input schema for check_continuity tool."""
     chapter_content: str = Field(description="Current chapter content to audit")
     chapter_number: int = Field(description="Current chapter number")
-    project_id: str = Field(description="Project ID for context retrieval")
+    project_id: str = Field(default="", description="Project ID for context retrieval")
 
 
 class CheckContinuityTool(BaseTool):
@@ -31,21 +31,22 @@ class CheckContinuityTool(BaseTool):
 
     async def execute(self, **kwargs) -> ToolResult:
         inp = CheckContinuityInput(**kwargs)
+        project_id = inp.project_id or self._project_id
         # Retrieve relevant past context for comparison
         char_results = self._store.search(
-            project_id=inp.project_id,
+            project_id=project_id,
             query="角色 性格 外貌 能力 人际关系",
             top_k=5,
             chapter_range=(1, inp.chapter_number - 1) if inp.chapter_number > 1 else None,
         )
         event_results = self._store.search(
-            project_id=inp.project_id,
+            project_id=project_id,
             query="时间线 事件 因果关系",
             top_k=5,
             chapter_range=(1, inp.chapter_number - 1) if inp.chapter_number > 1 else None,
         )
         world_results = self._store.search(
-            project_id=inp.project_id,
+            project_id=project_id,
             query="世界观 规则 设定 势力 魔法",
             top_k=5,
             chapter_range=(1, inp.chapter_number - 1) if inp.chapter_number > 1 else None,
