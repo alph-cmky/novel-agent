@@ -405,12 +405,12 @@ BUILTIN_CASES = [
             {
                 "category": "timeline",
                 "severity": "critical",
-                "description": "上一章林风与魔尊同归于尽，本章却毫发无损出现在集市",
+                "description": "上一章林风与魔尊同归于尽，本章却毫发无损出现在市集",
                 "location_hint": "市集场景",
-                "keywords": ["集市", "同归于尽"],
+                "keywords": ["复活", "市集"],
             },
         ],
-        "previous_context": "第8章末林风与魔尊决战坠崖，生死不明，全城已为他搭起灵堂。",
+        "previous_context": "第8章末林风与魔尊同归于尽，坠崖身亡，全城已为他设灵堂出殡。",
     },
     {
         "name": "timeline_event_order",
