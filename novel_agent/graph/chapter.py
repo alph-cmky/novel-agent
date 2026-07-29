@@ -900,6 +900,28 @@ async def _get_checkpointer_async(persist_dir: str) -> AsyncSqliteSaver | Memory
     return _async_checkpointer_cache[db_key]
 
 
+async def aclose_checkpointers() -> None:
+    """Close all cached AsyncSqliteSaver connections and clear the cache.
+
+    aiosqlite spawns a non-daemon worker thread per connection (started on
+    ``await aiosqlite.connect(...)``); without an explicit ``await conn.close()``
+    that thread keeps the interpreter alive at process exit, so a short-lived
+    process that used :func:`build_chapter_graph_async` would hang on exit. Call
+    this on server shutdown (FastAPI lifespan) or at the end of a short-lived
+    run (CLI / eval harness) before the event loop closes.
+    """
+    savers = list(_async_checkpointer_cache.values())
+    _async_checkpointer_cache.clear()
+    for saver in savers:
+        conn = getattr(saver, "conn", None)
+        if conn is None:
+            continue
+        try:
+            await conn.close()
+        except Exception:
+            pass
+
+
 async def build_chapter_graph_async(
     persist_dir: str = "", evolution_enabled: bool = True,
 ) -> StateGraph:

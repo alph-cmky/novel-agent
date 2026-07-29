@@ -5,6 +5,7 @@ Usage:
 """
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,7 +21,18 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from novel_agent.api.routes import router  # noqa: E402
 
-app = FastAPI(title="Novel Agent API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    # 关掉 AsyncSqliteSaver 的 aiosqlite 连接：其 worker thread 是非守护线程，
+    # 不 close 会在进程退出时挂死（见 graph/chapter.py:aclose_checkpointers）。
+    from novel_agent.graph.chapter import aclose_checkpointers
+
+    await aclose_checkpointers()
+
+
+app = FastAPI(title="Novel Agent API", version="0.1.0", lifespan=lifespan)
 
 _cors_origins = [
     o.strip()
