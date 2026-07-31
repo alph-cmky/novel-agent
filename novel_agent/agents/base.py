@@ -16,6 +16,7 @@ from langchain_core.messages import (
 )
 from langchain_openai import ChatOpenAI
 
+from novel_agent.config import REASONING_EFFORT
 from novel_agent.observability.langfuse import get_handler as _get_lf_handler
 from novel_agent.tools.base import BaseTool, ToolResult
 
@@ -124,6 +125,30 @@ def _to_langchain_messages(messages: list[dict]) -> list[BaseMessage]:
     return result
 
 
+def _is_reasoning_model(model: str, base_url: str) -> bool:
+    """判断是否 reasoning 模型：其 max_tokens 会同时计入推理 token。
+
+    推理 token 吃掉预算后 content 会被挤空（step-3.7-flash 进化轮实测只出
+    123 字），需用 reasoning_effort 压低推理深度。StepFun 全系为 reasoning
+    模型（base_url 含 stepfun 或模型名 step- 开头）。
+    """
+    return "stepfun" in (base_url or "") or (model or "").startswith("step-")
+
+
+def _build_chat_model(config: AgentConfig) -> ChatOpenAI:
+    """构造 ChatOpenAI；对 reasoning 模型注入 reasoning_effort 压低推理预算。"""
+    kwargs: dict[str, Any] = {
+        "model": config.model,
+        "api_key": config.api_key,
+        "base_url": config.base_url,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+    }
+    if _is_reasoning_model(config.model, config.base_url):
+        kwargs["reasoning_effort"] = REASONING_EFFORT
+    return ChatOpenAI(**kwargs)
+
+
 class BaseAgent:
     """Base agent with model calling, tool execution, and trace recording."""
 
@@ -164,13 +189,7 @@ class BaseAgent:
         trace = TraceStep(agent=self.name, action=action)
         trace.model = self.config.model
 
-        model = ChatOpenAI(
-            model=self.config.model,
-            api_key=self.config.api_key,
-            base_url=self.config.base_url,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-        )
+        model = _build_chat_model(self.config)
         bound = model.bind_tools(
             [t.get_schema()["function"] for t in tool_list]
         ) if tool_list else model
@@ -220,13 +239,7 @@ class BaseAgent:
         total_output = 0
         reasoning_chars = 0
 
-        model = ChatOpenAI(
-            model=self.config.model,
-            api_key=self.config.api_key,
-            base_url=self.config.base_url,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-        )
+        model = _build_chat_model(self.config)
         config: dict[str, Any] = {}
         lf_handler = _get_lf_handler()
         if lf_handler:
