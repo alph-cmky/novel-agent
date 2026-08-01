@@ -159,7 +159,13 @@ class EvolutionOrchestratorAgent(BaseAgent):
                     "constraints": {
                         "preserve": rc.get("preserve", rpc.get("preserve", [])),
                         "avoid": rc.get("avoid", rpc.get("avoid", [])),
-                        "strategy_override": rc.get("strategy_override", {}),
+                        # strategy_override 必须是 dict（writer_node 会 dict.update）；
+                        # LLM 偶发输出 list/str，这里在源头规范化掉。
+                        "strategy_override": (
+                            rc.get("strategy_override", {})
+                            if isinstance(rc.get("strategy_override"), dict)
+                            else {}
+                        ),
                     },
                 }
         except Exception:

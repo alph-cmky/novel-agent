@@ -311,9 +311,12 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 
     # Merge constraints.strategy_override into orchestrator_strategy
     strategy = state.get("orchestrator_strategy", {})
-    if constraints.get("strategy_override"):
+    override = constraints.get("strategy_override")
+    # LLM 偶发把 strategy_override 输出成 list/str，dict.update 会抛
+    # ValueError（进化第二轮触发）；非 dict 直接忽略。
+    if isinstance(override, dict) and override:
         cs = strategy.setdefault("chapter_strategy", {})
-        cs.update(constraints["strategy_override"])
+        cs.update(override)
 
     write_args = dict(
         chapter_number=state.get("chapter_number", 1),
