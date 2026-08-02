@@ -32,8 +32,21 @@ class TestBuildChatModel:
         )
         assert model.reasoning_effort == "low"
 
+    def test_reasoning_model_disables_stream_chunk_timeout(self):
+        # 推理模型长 thinking 阶段 >120s 不吐 chunk，禁用流式超时避免误判
+        model = _build_chat_model(
+            self._config("step-3.7-flash", "https://api.stepfun.com/step_plan/v1")
+        )
+        assert model.stream_chunk_timeout is None
+
     def test_non_reasoning_model_no_effort(self):
         model = _build_chat_model(
             self._config("gpt-4o", "https://api.openai.com/v1")
         )
         assert model.reasoning_effort is None
+
+    def test_non_reasoning_model_keeps_stream_chunk_timeout(self):
+        model = _build_chat_model(
+            self._config("gpt-4o", "https://api.openai.com/v1")
+        )
+        assert model.stream_chunk_timeout is not None

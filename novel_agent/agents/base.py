@@ -136,7 +136,12 @@ def _is_reasoning_model(model: str, base_url: str) -> bool:
 
 
 def _build_chat_model(config: AgentConfig) -> ChatOpenAI:
-    """构造 ChatOpenAI；对 reasoning 模型注入 reasoning_effort 压低推理预算。"""
+    """构造 ChatOpenAI；对 reasoning 模型注入 reasoning_effort 压低推理预算。
+
+    reasoning 模型（StepFun）在长 thinking 阶段会 >120s 不吐任何 chunk，
+    langchain-openai 默认 stream_chunk_timeout=120 会误判为连接卡死并抛
+    StreamChunkTimeoutError，故对 reasoning 模型禁用流式超时。
+    """
     kwargs: dict[str, Any] = {
         "model": config.model,
         "api_key": config.api_key,
@@ -146,6 +151,7 @@ def _build_chat_model(config: AgentConfig) -> ChatOpenAI:
     }
     if _is_reasoning_model(config.model, config.base_url):
         kwargs["reasoning_effort"] = REASONING_EFFORT
+        kwargs["stream_chunk_timeout"] = None
     return ChatOpenAI(**kwargs)
 
 
