@@ -102,6 +102,7 @@ def _config_for(task: TaskClass) -> AgentConfig:
         kwargs["api_key"] = route.api_key
     if route.base_url:
         kwargs["base_url"] = route.base_url
+    kwargs["is_reasoning"] = route.is_reasoning
     return AgentConfig(**kwargs)
 
 

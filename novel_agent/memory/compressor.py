@@ -4,7 +4,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from langchain_openai import ChatOpenAI
+from novel_agent.agents.base import AgentConfig, build_chat_model
+from novel_agent.config import env_bool
 
 
 @dataclass
@@ -42,13 +43,15 @@ class ContextCompressor:
 
     def __init__(self, strategy: CompressionStrategy | None = None):
         self.strategy = strategy or CompressionStrategy()
-        self._model = ChatOpenAI(
+        config = AgentConfig(
             model=os.getenv("BUDGET_MODEL", "deepseek-chat"),
             api_key=os.getenv("BUDGET_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
             base_url=os.getenv("BUDGET_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             max_tokens=600,
             temperature=0.3,
+            is_reasoning=env_bool("BUDGET_IS_REASONING"),
         )
+        self._model = build_chat_model(config)
 
     def should_compress(self, context: dict[str, str]) -> bool:
         """Check if total context exceeds threshold."""

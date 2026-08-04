@@ -54,10 +54,12 @@ async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
     length_label = "长篇"
     chapter_range = "50-100章"
 
+    route = router.resolve(TaskClass.STRUCTURAL)
     agent_config = AgentConfig(
-        model=router.resolve(TaskClass.STRUCTURAL).model,
+        model=route.model,
         temperature=0.7,
         max_tokens=OUTLINE_MAX_TOKENS,
+        is_reasoning=route.is_reasoning,
     )
 
     agent = OrchestratorAgent(config=agent_config)

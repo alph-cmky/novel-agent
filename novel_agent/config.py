@@ -1,5 +1,7 @@
 """Story length configuration — constants for long-form novel writing."""
 
+import os
+
 # 长篇默认配置（短篇/中篇已移除，只保留长篇）
 DEFAULT_CHAPTER_WORDS = 3000
 DEFAULT_MAX_TOKENS = 4096
@@ -11,3 +13,11 @@ NARRATIVE_PACING = (
     "climax在70-80%处，伏笔长线回收"
 )
 TYPICAL_CHAPTERS = "100章以上"
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    """将环境变量解析为布尔。接受 1/true/yes/on（大小写不敏感）。"""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")

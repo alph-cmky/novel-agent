@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 
+from novel_agent.config import env_bool
+
 
 class TaskClass(Enum):
     CREATIVE = "creative_writing"
@@ -28,6 +30,7 @@ class RouteConfig:
     temperature: float
     api_key: str = ""
     base_url: str = ""
+    is_reasoning: bool = False
 
 
 TASK_ROUTES: dict[TaskClass, tuple[str, float]] = {
@@ -56,16 +59,19 @@ class ModelRouter:
             model = self._quality_override or os.getenv("QUALITY_MODEL") or budget
             api_key = os.getenv("QUALITY_API_KEY") or os.getenv("OPENAI_API_KEY", "")
             base_url = os.getenv("QUALITY_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
+            is_reasoning = env_bool("QUALITY_IS_REASONING")
         else:
             model = budget
             api_key = os.getenv("BUDGET_API_KEY") or os.getenv("OPENAI_API_KEY", "")
             base_url = os.getenv("BUDGET_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
+            is_reasoning = env_bool("BUDGET_IS_REASONING")
 
         return RouteConfig(
             model=model,
             temperature=temperature,
             api_key=api_key,
             base_url=base_url,
+            is_reasoning=is_reasoning,
         )
 
     def route_for(self, agent_name: str) -> RouteConfig:

@@ -3,6 +3,7 @@
 import json
 import os
 import time
+import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
@@ -35,6 +36,7 @@ class AgentConfig:
         base_url: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.8,
+        is_reasoning: bool = False,
     ):
         self.model = model or os.getenv("BUDGET_MODEL", "deepseek-chat")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
@@ -51,9 +53,12 @@ class AgentConfig:
             raise ValueError(f"max_tokens must be a positive int, got: {max_tokens}")
         if not isinstance(temperature, (int, float)) or temperature < 0 or temperature > 2:
             raise ValueError(f"temperature must be 0-2, got: {temperature}")
+        if not isinstance(is_reasoning, bool):
+            raise ValueError(f"is_reasoning must be a bool, got: {type(is_reasoning).__name__}")
 
         self.max_tokens = max_tokens
         self.temperature = float(temperature)
+        self.is_reasoning = is_reasoning
 
         # Warn if API key is empty (but don't crash — user may fix it later)
         if not self.api_key:
@@ -125,22 +130,15 @@ def _to_langchain_messages(messages: list[dict]) -> list[BaseMessage]:
     return result
 
 
-def _is_reasoning_model(model: str, base_url: str) -> bool:
-    """判断是否 reasoning 模型：其 max_tokens 会同时计入推理 token。
-
-    推理 token 吃掉预算后 content 会被挤空（step-3.7-flash 进化轮实测只出
-    123 字），需用 reasoning_effort 压低推理深度。StepFun 全系为 reasoning
-    模型（base_url 含 stepfun 或模型名 step- 开头）。
-    """
-    return "stepfun" in (base_url or "") or (model or "").startswith("step-")
-
-
-def _build_chat_model(config: AgentConfig) -> ChatOpenAI:
+def build_chat_model(config: AgentConfig) -> ChatOpenAI:
     """构造 ChatOpenAI；对 reasoning 模型注入 reasoning_effort 压低推理预算。
 
-    reasoning 模型（StepFun）在长 thinking 阶段会 >120s 不吐任何 chunk，
+    reasoning 模型（如 StepFun）在长 thinking 阶段会 >120s 不吐任何 chunk，
     langchain-openai 默认 stream_chunk_timeout=120 会误判为连接卡死并抛
     StreamChunkTimeoutError，故对 reasoning 模型禁用流式超时。
+
+    是否 reasoning 由 AgentConfig.is_reasoning 声明（env: QUALITY_IS_REASONING
+    / BUDGET_IS_REASONING），不在代码里写死具体模型名。
     """
     kwargs: dict[str, Any] = {
         "model": config.model,
@@ -149,10 +147,22 @@ def _build_chat_model(config: AgentConfig) -> ChatOpenAI:
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
     }
-    if _is_reasoning_model(config.model, config.base_url):
+    if config.is_reasoning:
         kwargs["reasoning_effort"] = REASONING_EFFORT
         kwargs["stream_chunk_timeout"] = None
     return ChatOpenAI(**kwargs)
+
+
+def _warn_undeclared_reasoning(config: AgentConfig, reasoning_content: str) -> None:
+    """reasoning_content 已返回但 is_reasoning 未声明时告警，提示补 env 声明。"""
+    if reasoning_content and not config.is_reasoning:
+        warnings.warn(
+            "检测到 reasoning_content 输出但 is_reasoning=False。请在 env 声明 "
+            "QUALITY_IS_REASONING / BUDGET_IS_REASONING=true 以正确注入 "
+            "reasoning_effort 并禁用 stream_chunk_timeout。",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 class BaseAgent:
@@ -195,7 +205,7 @@ class BaseAgent:
         trace = TraceStep(agent=self.name, action=action)
         trace.model = self.config.model
 
-        model = _build_chat_model(self.config)
+        model = build_chat_model(self.config)
         bound = model.bind_tools(
             [t.get_schema()["function"] for t in tool_list]
         ) if tool_list else model
@@ -212,6 +222,7 @@ class BaseAgent:
             if response.content or getattr(response, "tool_calls", None):
                 break
         assert response is not None  # 循环至少执行一次
+        _warn_undeclared_reasoning(self.config, getattr(response, "reasoning_content", "") or "")
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         usage = getattr(response, "usage_metadata", {}) or {}
@@ -244,8 +255,9 @@ class BaseAgent:
         total_input = 0
         total_output = 0
         reasoning_chars = 0
+        warned = False
 
-        model = _build_chat_model(self.config)
+        model = build_chat_model(self.config)
         config: dict[str, Any] = {}
         lf_handler = _get_lf_handler()
         if lf_handler:
@@ -261,6 +273,9 @@ class BaseAgent:
             rc = getattr(chunk, "reasoning_content", "") or ""
             if rc:
                 reasoning_chars += len(rc)
+                if not warned:
+                    _warn_undeclared_reasoning(self.config, rc)
+                    warned = True
             if content:
                 yield content
 

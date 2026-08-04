@@ -1,52 +1,46 @@
-"""Tests for BaseAgent reasoning-model handling — reasoning_effort injection."""
+"""Tests for BaseAgent reasoning-model handling — is_reasoning 声明与 build_chat_model."""
 
-from novel_agent.agents.base import (
-    AgentConfig,
-    _build_chat_model,
-    _is_reasoning_model,
-)
+import pytest
+
+from novel_agent.agents.base import AgentConfig, build_chat_model
 
 
-class TestIsReasoningModel:
-    def test_stepfun_base_url(self):
-        assert _is_reasoning_model("step-3.7-flash", "https://api.stepfun.com/step_plan/v1")
+class TestAgentConfigIsReasoning:
+    def test_default_false(self):
+        assert AgentConfig(model="gpt-4o", api_key="k").is_reasoning is False
 
-    def test_step_model_name(self):
-        assert _is_reasoning_model("step-3.7-flash", "")
+    def test_explicit_true(self):
+        config = AgentConfig(model="gpt-4o", api_key="k", is_reasoning=True)
+        assert config.is_reasoning is True
 
-    def test_plain_openai_model_is_not_reasoning(self):
-        assert not _is_reasoning_model("gpt-4o", "https://api.openai.com/v1")
-
-    def test_empty_inputs_safe(self):
-        assert not _is_reasoning_model("", "")
+    def test_non_bool_raises(self):
+        with pytest.raises(ValueError):
+            AgentConfig(model="gpt-4o", api_key="k", is_reasoning="yes")
 
 
 class TestBuildChatModel:
     @staticmethod
-    def _config(model: str, base_url: str) -> AgentConfig:
-        return AgentConfig(model=model, api_key="test-key", base_url=base_url)
+    def _config(is_reasoning: bool = False) -> AgentConfig:
+        return AgentConfig(
+            model="gpt-4o",
+            api_key="test-key",
+            base_url="https://api.openai.com/v1",
+            is_reasoning=is_reasoning,
+        )
 
     def test_reasoning_model_injects_low_effort(self):
-        model = _build_chat_model(
-            self._config("step-3.7-flash", "https://api.stepfun.com/step_plan/v1")
-        )
+        model = build_chat_model(self._config(is_reasoning=True))
         assert model.reasoning_effort == "low"
 
     def test_reasoning_model_disables_stream_chunk_timeout(self):
         # 推理模型长 thinking 阶段 >120s 不吐 chunk，禁用流式超时避免误判
-        model = _build_chat_model(
-            self._config("step-3.7-flash", "https://api.stepfun.com/step_plan/v1")
-        )
+        model = build_chat_model(self._config(is_reasoning=True))
         assert model.stream_chunk_timeout is None
 
     def test_non_reasoning_model_no_effort(self):
-        model = _build_chat_model(
-            self._config("gpt-4o", "https://api.openai.com/v1")
-        )
+        model = build_chat_model(self._config(is_reasoning=False))
         assert model.reasoning_effort is None
 
     def test_non_reasoning_model_keeps_stream_chunk_timeout(self):
-        model = _build_chat_model(
-            self._config("gpt-4o", "https://api.openai.com/v1")
-        )
+        model = build_chat_model(self._config(is_reasoning=False))
         assert model.stream_chunk_timeout is not None
