@@ -57,6 +57,8 @@ async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
     route = router.resolve(TaskClass.STRUCTURAL)
     agent_config = AgentConfig(
         model=route.model,
+        api_key=route.api_key,
+        base_url=route.base_url,
         temperature=0.7,
         max_tokens=OUTLINE_MAX_TOKENS,
         is_reasoning=route.is_reasoning,
