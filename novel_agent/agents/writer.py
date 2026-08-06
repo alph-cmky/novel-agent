@@ -125,10 +125,18 @@ class WriterAgent(BaseAgent):
         if recent_summary:
             context_parts.append(f"## 前文提要\n{recent_summary}")
 
+        # 仅当 search_context 工具已注册（project_id 非空）才提示使用工具；
+        # 否则（评测/无项目库场景）模型无法调用工具，会输出 <search_context> 文本
+        # 标签并提前终止，产出空正文。
+        tool_hint = (
+            "创作前请先使用 search_context 工具检索关键信息。"
+            if self._tools
+            else "直接输出章节正文，不要加任何说明。"
+        )
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"
             + "\n\n".join(context_parts)
-            + "\n\n创作前请先使用 search_context 工具检索关键信息。"
+            + f"\n\n{tool_hint}"
         )
         messages.append({"role": "user", "content": user_prompt})
 

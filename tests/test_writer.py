@@ -1,5 +1,8 @@
 """Tests for WriterAgent strategy formatting — nested None safety."""
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.schema.parser import strip_none
 
@@ -47,3 +50,35 @@ class TestFormatStrategy:
     def test_none_chapter_strategy_is_empty(self):
         """chapter_strategy: None should degrade to an empty section."""
         assert WriterAgent()._format_strategy({"chapter_strategy": None}) == ""
+
+
+class _FakeTool:
+    name = "search_context"
+
+
+class TestWriteToolHint:
+    """write() 的工具提示只应在 search_context 工具真正注册时出现。
+
+    无工具（project_id 为空）时提示「使用 search_context 工具」会让模型输出
+    <search_context> 文本标签并提前终止，产出空正文（横评 bug）。
+    """
+
+    @staticmethod
+    def _capture_user_prompt(writer: WriterAgent) -> str:
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
+        ) as mocked:
+            asyncio.run(writer.write(chapter_number=1, outline="大纲"))
+        return mocked.call_args.args[0][1]["content"]
+
+    def test_no_tool_uses_direct_output_hint(self):
+        user = self._capture_user_prompt(WriterAgent())
+        assert "search_context" not in user
+        assert "直接输出章节正文" in user
+
+    def test_tool_registered_uses_search_hint(self):
+        writer = WriterAgent()
+        writer.register_tool(_FakeTool())
+        user = self._capture_user_prompt(writer)
+        assert "search_context" in user
+        assert "直接输出章节正文" not in user
