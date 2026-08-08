@@ -5,6 +5,11 @@ from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.validator import parse_validated
 from novel_agent.tools.continuity import CheckContinuityTool
 
+CONTINUITY_TOOL_SECTION = """## 工具
+使用 check_continuity 工具检索前文的角色/事件/世界观信息进行比对。
+
+"""
+
 CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门检查章节间的一致性。
 
 ## 审计维度
@@ -40,10 +45,7 @@ CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门�
 - **ensemble（群像）**：多线并行，每个角色线独立审计
 - **flashback / non_linear**：不做"时间推进方向"检查，但检查事件因果一致性
 
-## 工具
-使用 check_continuity 工具检索前文的角色/事件/世界观信息进行比对。
-
-## 输出格式
+{TOOL_SECTION}## 输出格式
 
 ```json
 {
@@ -80,7 +82,8 @@ class ContinuityAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        return CONTINUITY_SYSTEM_PROMPT
+        tool = CONTINUITY_TOOL_SECTION if self._tools else ""
+        return CONTINUITY_SYSTEM_PROMPT.replace("{TOOL_SECTION}", tool)
 
     async def audit(
         self, chapter_number: int, draft_content: str,
@@ -94,6 +97,14 @@ class ContinuityAgent(BaseAgent):
         if narrative_mode:
             mode_hint = f"\n当前叙事模式：{narrative_mode}。请根据叙事模式调整审计策略。\n"
 
+        # 仅当 check_continuity 工具已注册（project_id 非空）才提示使用工具；
+        # 否则模型无法调用工具，会输出 <check_continuity> 文本标签并产出空/坏报告。
+        tool_hint = (
+            "先用 check_continuity 工具检索前文的相关设定，然后逐项比对给出审计报告。"
+            if self._tools
+            else "直接逐项比对正文与前文设定，给出审计报告。"
+        )
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
@@ -102,8 +113,7 @@ class ContinuityAgent(BaseAgent):
                     f"请审计第{chapter_number}章的设定一致性。\n"
                     f"{mode_hint}\n"
                     f"## 本章正文\n{draft_content[:4000]}\n\n"
-                    f"先用 check_continuity 工具检索前文的相关设定，"
-                    f"然后逐项比对给出审计报告。只输出JSON，不要其他内容。"
+                    f"{tool_hint}只输出JSON，不要其他内容。"
                 ),
             },
         ]
