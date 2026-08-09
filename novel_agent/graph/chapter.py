@@ -69,8 +69,11 @@ def _build_arc_summary(previous_chapters: list[dict]) -> str:
         except (_json.JSONDecodeError, TypeError):
             cr = {}
         e_score = er.get("overall_score", "?")
-        c_score = cr.get("overall_score", "?")
-        entries.append(f"第{cn}章: Editor {e_score}/100, Continuity {c_score}/100")
+        if cr.get("unavailable"):
+            entries.append(f"第{cn}章: Editor {e_score}/100, Continuity N/A（审计不可用）")
+        else:
+            c_score = cr.get("overall_score", "?")
+            entries.append(f"第{cn}章: Editor {e_score}/100, Continuity {c_score}/100")
     return "## 最近章节表现\n" + "\n".join(entries) if entries else ""
 
 
@@ -663,12 +666,13 @@ def human_review_node(state: NovelState) -> dict:
     Uses LangGraph interrupt() to pause the graph and wait for human input.
     In evolution mode, rejection triggers a fresh evolution cycle (max 2 rounds).
     """
-    editor_report = state.get("editor_report", {})
-    continuity_report = state.get("continuity_report", {})
+    editor_report = state.get("editor_report", {}) or {}
+    continuity_report = state.get("continuity_report", {}) or {}
     wb_report = state.get("worldbuilding_report", {})
 
     editor_score = editor_report.get("overall_score", 0)
-    continuity_score = continuity_report.get("overall_score", 0)
+    continuity_score = continuity_overall(editor_report, continuity_report)
+    continuity_unavailable = bool(continuity_report.get("unavailable"))
 
     evolution_enabled = state.get("evolution_enabled", True)
     evolution_rounds = len(state.get("evolution_history", []))
@@ -681,6 +685,7 @@ def human_review_node(state: NovelState) -> dict:
         "draft_full": state.get("draft_content", ""),
         "editor_score": editor_score,
         "continuity_score": continuity_score,
+        "continuity_unavailable": continuity_unavailable,
         "editor_issues": editor_report.get("issues", [])[:10],
         "continuity_issues": continuity_report.get("inconsistencies", [])[:10],
         "wb_new_entities": len(wb_report.get("new_entities", [])),
@@ -749,10 +754,13 @@ def route_after_continuity(
     state: NovelState,
 ) -> Literal["worldbuilding", "orchestrator_review"]:
     """Legacy router for non-evolution mode."""
-    c_score = state.get("continuity_report", {}).get("overall_score", 0)
-    e_score = state.get("editor_report", {}).get("overall_score", 0)
+    continuity_report = state.get("continuity_report", {}) or {}
+    editor_report = state.get("editor_report", {}) or {}
+    # 空输出（unavailable）时用 editor 分替身，避免假 0 触发无谓重试。
+    c_score = continuity_overall(editor_report, continuity_report)
+    e_score = editor_report.get("overall_score", 0)
     criticals = [
-        i for i in (state.get("continuity_report", {}) or {}).get("inconsistencies") or []
+        i for i in continuity_report.get("inconsistencies") or []
         if isinstance(i, dict) and i.get("severity") == "critical"
     ]
     retry = state.get("retry_count", 0)
