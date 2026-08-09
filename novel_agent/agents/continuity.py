@@ -2,7 +2,8 @@
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
-from novel_agent.schema.validator import parse_validated
+from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import OutputValidator
 from novel_agent.tools.continuity import CheckContinuityTool
 
 CONTINUITY_TOOL_SECTION = """## 工具
@@ -122,19 +123,23 @@ class ContinuityAgent(BaseAgent):
             messages, max_rounds=2, action=f"audit_chapter_{chapter_number}"
         )
 
-        # 空输出（reasoning 模型偶发）→ 标记 unavailable，而不是让 parse_validated
-        # 兜底 overall_score=0 被进化层误读为「最差版本」触发 regressed。
-        if not (content or "").strip():
-            return {
-                "unavailable": True,
-                "overall_score": 0,
-                "inconsistencies": [],
-                "verdict": "manual_review",
-            }, trace
-
-        report = parse_validated("continuity", content, defaults={
+        defaults = {
             "overall_score": 0,
             "inconsistencies": [],
             "verdict": "manual_review",
-        })
+        }
+
+        # 两类「拿不到有效审计报告」的情况都标记 unavailable，避免兜底
+        # overall_score=0 被进化层误读为「最差版本」触发 regressed：
+        #   1. 空输出（reasoning 模型偶发空 content）
+        #   2. 非空但解析失败（JSON 语法错误/截断）—— parse_json_response 失败时
+        #      会带 raw_output 哨兵字段
+        if not (content or "").strip():
+            return {"unavailable": True, **defaults}, trace
+
+        raw = parse_json_response(content, defaults=defaults)
+        if "raw_output" in raw:
+            return {"unavailable": True, **defaults}, trace
+
+        report = OutputValidator.validate("continuity", raw).to_dict()
         return report, trace

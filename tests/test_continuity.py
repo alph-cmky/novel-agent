@@ -52,3 +52,30 @@ class TestContinuityToolHint:
         assert report.get("unavailable") is True
         assert report.get("overall_score") == 0
         assert report.get("inconsistencies") == []
+
+    def test_unparseable_output_returns_unavailable(self):
+        """非空但解析失败（JSON 语法错误/截断）→ unavailable，而非假 0 分。"""
+        auditor = ContinuityAgent()
+        with patch.object(
+            auditor, "run_with_tools",
+            new=AsyncMock(return_value=("这不是JSON", None)),
+        ):
+            report, _ = asyncio.run(
+                auditor.audit(chapter_number=1, draft_content="正文")
+            )
+        assert report.get("unavailable") is True
+        assert report.get("overall_score") == 0
+
+    def test_valid_json_returns_score(self):
+        """正常 JSON 输出 → 正常解析出分数，不带 unavailable。"""
+        auditor = ContinuityAgent()
+        valid = '{"overall_score": 85, "inconsistencies": [], "verdict": "pass"}'
+        with patch.object(
+            auditor, "run_with_tools",
+            new=AsyncMock(return_value=(valid, None)),
+        ):
+            report, _ = asyncio.run(
+                auditor.audit(chapter_number=1, draft_content="正文")
+            )
+        assert report.get("unavailable") is None
+        assert report.get("overall_score") == 85
