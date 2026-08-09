@@ -39,3 +39,16 @@ class TestContinuityToolHint:
         assert "check_continuity" in system
         assert "check_continuity" in user
         assert "直接逐项比对" not in user
+
+    def test_empty_output_returns_unavailable(self):
+        """空输出（reasoning 模型偶发）→ unavailable 标记，而非假 0 分。"""
+        auditor = ContinuityAgent()
+        with patch.object(
+            auditor, "run_with_tools", new=AsyncMock(return_value=("", None))
+        ):
+            report, _ = asyncio.run(
+                auditor.audit(chapter_number=1, draft_content="正文")
+            )
+        assert report.get("unavailable") is True
+        assert report.get("overall_score") == 0
+        assert report.get("inconsistencies") == []

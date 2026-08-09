@@ -7,6 +7,7 @@ from novel_agent.graph.evolution import (
     build_improvement_plan_rule,
     composite_score,
     compute_delta,
+    continuity_overall,
     decide_termination,
     extract_scores,
 )
@@ -44,6 +45,29 @@ class TestExtractScores:
         scores = extract_scores(state)
         assert scores["dimensions"]["rhythm"] == 70
         assert scores["dimensions"]["ai_flavor"] == 0  # missing → 0
+
+    def test_unavailable_continuity_neutralized_to_editor(self):
+        state = {
+            "editor_report": {"overall_score": 72, "dimensions": {}},
+            "continuity_report": {"unavailable": True, "overall_score": 0},
+        }
+        scores = extract_scores(state)
+        assert scores["continuity_overall"] == 72
+
+
+class TestContinuityOverall:
+    def test_unavailable_substitutes_editor(self):
+        assert continuity_overall(
+            {"overall_score": 88}, {"unavailable": True, "overall_score": 0}
+        ) == 88
+
+    def test_available_returns_own_score(self):
+        assert continuity_overall(
+            {"overall_score": 88}, {"overall_score": 75}
+        ) == 75
+
+    def test_missing_reports_default_to_zero(self):
+        assert continuity_overall({"overall_score": 88}, {}) == 0
 
 
 class TestCompositeScore:

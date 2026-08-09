@@ -122,6 +122,16 @@ class ContinuityAgent(BaseAgent):
             messages, max_rounds=2, action=f"audit_chapter_{chapter_number}"
         )
 
+        # 空输出（reasoning 模型偶发）→ 标记 unavailable，而不是让 parse_validated
+        # 兜底 overall_score=0 被进化层误读为「最差版本」触发 regressed。
+        if not (content or "").strip():
+            return {
+                "unavailable": True,
+                "overall_score": 0,
+                "inconsistencies": [],
+                "verdict": "manual_review",
+            }, trace
+
         report = parse_validated("continuity", content, defaults={
             "overall_score": 0,
             "inconsistencies": [],

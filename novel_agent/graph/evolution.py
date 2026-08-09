@@ -30,6 +30,21 @@ EDITOR_DIMENSIONS = ("rhythm", "ai_flavor", "dialogue", "logic", "writing")
 
 # ── Score helpers ───────────────────────────────────────
 
+def continuity_overall(editor_report: dict, continuity_report: dict) -> int:
+    """Continuity overall, neutralized to editor when continuity is unavailable.
+
+    Reasoning models occasionally return empty content; `parse_validated` then
+    falls back to `overall_score=0`, which the evolution layer would misread as
+    "worst possible score" and spuriously trigger a `regressed` termination.
+    When continuity is flagged unavailable, substitute the editor score so the
+    continuity term in `composite_score` is neutral rather than dragging the
+    composite toward 0.
+    """
+    if continuity_report.get("unavailable"):
+        return editor_report.get("overall_score", 0)
+    return continuity_report.get("overall_score", 0)
+
+
 def extract_scores(state: dict) -> dict:
     """Extract structured scores from graph state.
 
@@ -50,7 +65,7 @@ def extract_scores(state: dict) -> dict:
 
     return {
         "editor_overall": editor.get("overall_score", 0),
-        "continuity_overall": continuity.get("overall_score", 0),
+        "continuity_overall": continuity_overall(editor, continuity),
         "dimensions": dimensions,
     }
 

@@ -39,6 +39,7 @@ from novel_agent.graph.evolution import (
     build_improvement_plan_rule,
     composite_score,
     compute_delta,
+    continuity_overall,
     decide_termination,
     extract_scores,
 )
@@ -403,6 +404,9 @@ async def continuity_node(state: NovelState) -> dict:
         narrative_mode=state.get("narrative_mode"),
     )
     score = report.get("overall_score", 0)
+    if report.get("unavailable"):
+        print("  [Continuity] unavailable（空输出，一致性维度跳过）")
+        return {"continuity_report": report}
     criticals = [
         i for i in (report.get("inconsistencies") or [])
         if isinstance(i, dict) and i.get("severity") == "critical"
@@ -514,7 +518,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     best_ct_rpt = state.get("evolution_best_continuity_report", {})
     best_scores = {
         "editor_overall": best_ed_rpt.get("overall_score", 0),
-        "continuity_overall": best_ct_rpt.get("overall_score", 0),
+        "continuity_overall": continuity_overall(best_ed_rpt, best_ct_rpt),
         "dimensions": best_ed_rpt.get("dimensions", {}),
     }
 
