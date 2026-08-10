@@ -7,7 +7,6 @@ import click
 from novel_agent import __version__
 from novel_agent.api.routes import build_export_content
 from novel_agent.storage.manager import ProjectManager
-from novel_agent.trace.viewer import list_traces, show_trace
 
 DEFAULT_PROJECT_DIR = Path.cwd() / "novel-data"
 
@@ -94,28 +93,6 @@ def export_novel(
         click.echo(f"Exported to {output}")
     else:
         click.echo(content)
-
-
-# ── trace ──────────────────────────────────────────────
-
-
-@cli.group()
-def trace():
-    """View and replay pipeline traces."""
-
-
-@trace.command("show")
-@click.argument("filepath", type=click.Path(exists=True))
-def trace_show(filepath: str):
-    """Display a trace file with formatted output."""
-    show_trace(filepath)
-
-
-@trace.command("ls")
-@click.option("--dir", "-d", default="./traces", help="Trace directory")
-def trace_list(dir: str):
-    """List all trace files."""
-    list_traces(dir)
 
 
 if __name__ == "__main__":
