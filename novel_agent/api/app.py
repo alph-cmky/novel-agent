@@ -1,9 +1,10 @@
 """FastAPI application for novel-agent Web UI.
 
 Usage:
-    uv run uvicorn novel_agent.api.app:app --host 0.0.0.0 --port 8000
+    uv run uvicorn novel_agent.api.app:app --host 127.0.0.1 --port 8000
 """
 
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,14 +55,37 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 
 
+@app.middleware("http")
+async def api_token_auth(request: Request, call_next):
+    """Optional API token gate — only active when ``NOVEL_AGENT_API_TOKEN`` is set.
+
+    Without a token configured, every request passes through unchanged (dev-friendly).
+    When set, ``/api/*`` requests must carry the token via ``Authorization: Bearer <t>``
+    or ``X-API-Key: <t>``. Static frontend assets are never gated. Compare with a
+    constant-time check to avoid leaking the token via response timing.
+    """
+    token = os.getenv("NOVEL_AGENT_API_TOKEN", "").strip()
+    if token and request.url.path.startswith("/api/"):
+        auth = request.headers.get("Authorization", "").strip()
+        provided = auth[7:] if auth.lower().startswith("bearer ") else auth
+        provided = provided or request.headers.get("X-API-Key", "").strip()
+        if not hmac.compare_digest(provided, token):
+            return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    return await call_next(request)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(_request: Request, exc: Exception):
-    """Catch-all handler returning JSON errors instead of HTML 500 pages."""
+    """Catch-all handler returning JSON errors instead of HTML 500 pages.
+
+    Returns a generic message to the client — exception details (which may include
+    file paths, API responses, or other internal state) go to server logs only.
+    """
     import traceback
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
-        content={"error": str(exc)},
+        content={"error": "Internal server error"},
     )
 
 
