@@ -254,6 +254,7 @@ async def create_sse_stream(
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
             yield _sse_event("done", {"chapter_content": "", "status": "completed"})
+            store.remove(session_id)
 
     except GraphInterrupt as gi:
         running.clear()
@@ -275,6 +276,7 @@ async def create_sse_stream(
         await drain_task
         traceback.print_exc()
         yield _sse_event("error", {"message": str(e), "node": current_node})
+        store.remove(session_id)
     finally:
         running.clear()
         if not drain_task.done():
