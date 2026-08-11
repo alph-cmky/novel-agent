@@ -35,6 +35,7 @@ from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.graph.evolution import (
+    EDITOR_DIMENSIONS,
     EvolutionConfig,
     build_improvement_plan_rule,
     composite_score,
@@ -519,10 +520,13 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     best_ed_rpt = state.get("evolution_best_editor_report", {})
     best_ct_rpt = state.get("evolution_best_continuity_report", {})
+    # 与 extract_scores 对齐：维度缺失补 0，否则 composite_score 的 dims_avg
+    # 会按「存在的维度数」做除数，与 current_scores（恒 5 维）分母不一致。
+    best_dims = best_ed_rpt.get("dimensions", {}) or {}
     best_scores = {
         "editor_overall": best_ed_rpt.get("overall_score", 0),
         "continuity_overall": continuity_overall(best_ed_rpt, best_ct_rpt),
-        "dimensions": best_ed_rpt.get("dimensions", {}),
+        "dimensions": {d: best_dims.get(d, 0) for d in EDITOR_DIMENSIONS},
     }
 
     # 1. Rule layer: termination decision
