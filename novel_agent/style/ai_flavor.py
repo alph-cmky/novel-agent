@@ -25,10 +25,6 @@ BANNED_CLICHES = [
     "嘴角勾起一抹", "内心深处",
 ]
 
-BANNED_ADVERBS = [
-    "显然", "明显地", "确实如此", "值得注意的是",
-]
-
 BANNED_SENTENCE_PATTERNS = [
     # "不是……而是……"翻案句 — OK in dialogue, flagged in narration
     (r"(?:这|那)?不是[^，。,\.]{1,30}而是[^，。,\.]{1,30}", "翻案句式「不是…而是…」"),
@@ -100,7 +96,7 @@ def check_dialogue_ratio(text: str) -> dict:
     """Estimate dialogue ratio by counting chars within paired quotes."""
     # Match content between paired Chinese/Western quotation marks
     dialogue_parts = re.findall(
-        r'["]([^"]*?)["]|[「]([^」]*?)[」]|[『]([^』]*?)[『]',
+        r'["]([^"]*?)["]|[「]([^」]*?)[」]|[『]([^』]*?)[』]',
         text,
     )
     dialogue_chars = sum(
