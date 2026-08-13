@@ -45,6 +45,32 @@ def continuity_overall(editor_report: dict, continuity_report: dict) -> int:
     return continuity_report.get("overall_score", 0)
 
 
+def editor_overall(editor_report: dict, continuity_report: dict) -> int:
+    """Editor overall, neutralized to continuity when editor is unavailable.
+
+    Symmetric to `continuity_overall`. When editor is flagged unavailable
+    (empty output / parse failure), substitute the continuity score so the
+    editor term — the highest-weighted term in `composite_score` — is neutral
+    rather than dragging the composite toward 0.
+    """
+    if editor_report.get("unavailable"):
+        return continuity_report.get("overall_score", 0)
+    return editor_report.get("overall_score", 0)
+
+
+def _neutralized_dimensions(editor_report: dict, editor_score: int) -> dict:
+    """Editor dimensions, neutralized to the editor score when unavailable.
+
+    When editor is unavailable its `dimensions` are empty, so `dim_deltas`
+    would read as a spurious per-dimension crash (0 vs previous). Substitute
+    the neutralized editor score so the dimensions term stays inert.
+    """
+    dims = editor_report.get("dimensions") or {}
+    if editor_report.get("unavailable"):
+        return {d: editor_score for d in EDITOR_DIMENSIONS}
+    return {d: dims.get(d, 0) for d in EDITOR_DIMENSIONS}
+
+
 def extract_scores(state: dict) -> dict:
     """Extract structured scores from graph state.
 
@@ -58,15 +84,13 @@ def extract_scores(state: dict) -> dict:
     editor = state.get("editor_report") or {}
     continuity = state.get("continuity_report") or {}
 
-    dims = editor.get("dimensions") or {}
-    dimensions = {}
-    for d in EDITOR_DIMENSIONS:
-        dimensions[d] = dims.get(d, 0)
+    editor_score = editor_overall(editor, continuity)
 
     return {
-        "editor_overall": editor.get("overall_score", 0),
+        "editor_overall": editor_score,
         "continuity_overall": continuity_overall(editor, continuity),
-        "dimensions": dimensions,
+        "dimensions": _neutralized_dimensions(editor, editor_score),
+        "editor_unavailable": bool(editor.get("unavailable")),
     }
 
 
@@ -161,6 +185,14 @@ def decide_termination(
     """
     cfg = config or DEFAULT_EVO_CONFIG
     threshold = cfg.convergence_threshold
+
+    # 评估不可用（editor 空输出/解析失败）时，crash/regressed/convergence/plateau
+    # 都基于 editor 派生信号，会把「评估失败」误读为「真实退化」。此时仅保留
+    # max_rounds 防死循环，其余退化类终止一律跳过，让下一轮重跑评估。
+    if current_scores.get("editor_unavailable"):
+        if current_round >= cfg.max_rounds:
+            return ("max_rounds", f"已达最大轮次 {cfg.max_rounds}")
+        return ("", "")
 
     curr_dims = current_scores.get("dimensions", {})
     dim_deltas = delta.get("dimensions", {})

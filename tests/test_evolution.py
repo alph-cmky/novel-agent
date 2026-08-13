@@ -9,6 +9,7 @@ from novel_agent.graph.evolution import (
     compute_delta,
     continuity_overall,
     decide_termination,
+    editor_overall,
     extract_scores,
 )
 
@@ -54,6 +55,17 @@ class TestExtractScores:
         scores = extract_scores(state)
         assert scores["continuity_overall"] == 72
 
+    def test_unavailable_editor_neutralized_to_continuity(self):
+        state = {
+            "editor_report": {"unavailable": True, "overall_score": 0, "dimensions": {}},
+            "continuity_report": {"overall_score": 75},
+        }
+        scores = extract_scores(state)
+        assert scores["editor_overall"] == 75
+        assert scores["editor_unavailable"] is True
+        # dimensions 中和到替身分，避免 dim_delta 假暴跌触发 crash
+        assert all(scores["dimensions"][d] == 75 for d in EDITOR_DIMENSIONS)
+
 
 class TestContinuityOverall:
     def test_unavailable_substitutes_editor(self):
@@ -68,6 +80,21 @@ class TestContinuityOverall:
 
     def test_missing_reports_default_to_zero(self):
         assert continuity_overall({"overall_score": 88}, {}) == 0
+
+
+class TestEditorOverall:
+    def test_unavailable_substitutes_continuity(self):
+        assert editor_overall(
+            {"unavailable": True, "overall_score": 0}, {"overall_score": 75}
+        ) == 75
+
+    def test_available_returns_own_score(self):
+        assert editor_overall(
+            {"overall_score": 88}, {"overall_score": 75}
+        ) == 88
+
+    def test_missing_reports_default_to_zero(self):
+        assert editor_overall({"unavailable": True}, {}) == 0
 
 
 class TestCompositeScore:
@@ -260,6 +287,33 @@ class TestDecideTermination:
             current_round=2,
         )
         assert reason in ("crash", "regressed")
+
+    def test_editor_unavailable_skips_degradation(self):
+        """editor 评估不可用时跳过 crash/regressed 终止，仅保留 max_rounds。"""
+        scores = self._scores(editor=0, continuity=0)
+        scores["editor_unavailable"] = True
+        reason, _ = decide_termination(
+            delta=self._delta(editor=-80, ai_flavor=-80),
+            current_scores=scores,
+            best_scores=self._scores(editor=80, continuity=85),
+            history=[],
+            current_round=2,
+        )
+        assert reason == ""
+
+    def test_editor_unavailable_still_respects_max_rounds(self):
+        """editor 不可用时 max_rounds 仍生效，防死循环。"""
+        scores = self._scores(editor=0, continuity=0)
+        scores["editor_unavailable"] = True
+        reason, _ = decide_termination(
+            delta=self._delta(),
+            current_scores=scores,
+            best_scores=self._scores(),
+            history=[],
+            current_round=5,
+            config=EvolutionConfig(max_rounds=5),
+        )
+        assert reason == "max_rounds"
 
     def test_plateau_skips_none_delta_baseline(self):
         """The v0 baseline entry has delta=None — plateau check must skip it.

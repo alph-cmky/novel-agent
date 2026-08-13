@@ -1,7 +1,8 @@
 """Editor Agent — reviews chapter quality and detects AI writing patterns."""
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
-from novel_agent.schema.validator import parse_validated
+from novel_agent.schema.parser import parse_json_response
+from novel_agent.schema.validator import OutputValidator
 from novel_agent.tools.style import DetectAiFlavorTool
 
 EDITOR_SYSTEM_PROMPT = """你是一个资深网文编辑，擅长审稿和识别AI写作痕迹。
@@ -103,11 +104,25 @@ class EditorAgent(BaseAgent):
             messages, max_rounds=2, action=f"review_chapter_{chapter_number}"
         )
 
-        report = parse_validated("editor", content, defaults={
+        defaults = {
             "overall_score": 0,
             "dimensions": {},
             "issues": [],
             "highlights": [],
             "verdict": "manual_review",
-        })
+        }
+
+        # 与 Continuity 同款：空输出 / 解析失败都标记 unavailable，避免兜底
+        # overall_score=0 被进化层误读为「最差版本」触发 crash/regressed：
+        #   1. 空输出（reasoning 模型偶发空 content）
+        #   2. 非空但解析失败（JSON 语法错误/截断）—— parse_json_response 失败时
+        #      会带 raw_output 哨兵字段
+        if not (content or "").strip():
+            return {"unavailable": True, **defaults}, trace
+
+        raw = parse_json_response(content, defaults=defaults)
+        if "raw_output" in raw:
+            return {"unavailable": True, **defaults}, trace
+
+        report = OutputValidator.validate("editor", raw).to_dict()
         return report, trace

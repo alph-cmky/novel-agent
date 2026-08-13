@@ -35,13 +35,13 @@ from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.graph.evolution import (
-    EDITOR_DIMENSIONS,
     EvolutionConfig,
     build_improvement_plan_rule,
     composite_score,
     compute_delta,
     continuity_overall,
     decide_termination,
+    editor_overall,
     extract_scores,
 )
 from novel_agent.graph.state import NovelState
@@ -387,6 +387,9 @@ async def editor_node(state: NovelState) -> dict:
         draft_content=state.get("draft_content", ""),
         narrative_mode=state.get("narrative_mode"),
     )
+    if report.get("unavailable"):
+        print("  [Editor] unavailable（空输出，审查维度跳过）")
+        return {"editor_report": report}
     score = report.get("overall_score", 0)
     print(f"  [Editor] {score}/100 — {report.get('verdict', '?')}")
     return {"editor_report": report}
@@ -518,16 +521,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     }
     delta = compute_delta(current_scores, previous_scores)
 
-    best_ed_rpt = state.get("evolution_best_editor_report", {})
-    best_ct_rpt = state.get("evolution_best_continuity_report", {})
-    # 与 extract_scores 对齐：维度缺失补 0，否则 composite_score 的 dims_avg
-    # 会按「存在的维度数」做除数，与 current_scores（恒 5 维）分母不一致。
-    best_dims = best_ed_rpt.get("dimensions", {}) or {}
-    best_scores = {
-        "editor_overall": best_ed_rpt.get("overall_score", 0),
-        "continuity_overall": continuity_overall(best_ed_rpt, best_ct_rpt),
-        "dimensions": {d: best_dims.get(d, 0) for d in EDITOR_DIMENSIONS},
-    }
+    best_ed_rpt = state.get("evolution_best_editor_report", {}) or {}
+    best_ct_rpt = state.get("evolution_best_continuity_report", {}) or {}
+    # 与 current_scores 同口径走 extract_scores：维度缺失补 0、editor/continuity
+    # 假 0 一律中和，否则 dims_avg 分母不一致 / best 假 0 拖低对比基准。
+    best_scores = extract_scores({
+        "editor_report": best_ed_rpt,
+        "continuity_report": best_ct_rpt,
+    })
 
     # 1. Rule layer: termination decision
     termination, reason = decide_termination(
@@ -674,8 +675,9 @@ def human_review_node(state: NovelState) -> dict:
     continuity_report = state.get("continuity_report", {}) or {}
     wb_report = state.get("worldbuilding_report", {})
 
-    editor_score = editor_report.get("overall_score", 0)
+    editor_score = editor_overall(editor_report, continuity_report)
     continuity_score = continuity_overall(editor_report, continuity_report)
+    editor_unavailable = bool(editor_report.get("unavailable"))
     continuity_unavailable = bool(continuity_report.get("unavailable"))
 
     evolution_enabled = state.get("evolution_enabled", True)
@@ -689,6 +691,7 @@ def human_review_node(state: NovelState) -> dict:
         "draft_full": state.get("draft_content", ""),
         "editor_score": editor_score,
         "continuity_score": continuity_score,
+        "editor_unavailable": editor_unavailable,
         "continuity_unavailable": continuity_unavailable,
         "editor_issues": editor_report.get("issues", [])[:10],
         "continuity_issues": continuity_report.get("inconsistencies", [])[:10],
@@ -760,9 +763,9 @@ def route_after_continuity(
     """Legacy router for non-evolution mode."""
     continuity_report = state.get("continuity_report", {}) or {}
     editor_report = state.get("editor_report", {}) or {}
-    # 空输出（unavailable）时用 editor 分替身，避免假 0 触发无谓重试。
+    # unavailable 时用对侧分替身（continuity↔editor 对称），避免假 0 触发无谓重试。
     c_score = continuity_overall(editor_report, continuity_report)
-    e_score = editor_report.get("overall_score", 0)
+    e_score = editor_overall(editor_report, continuity_report)
     criticals = [
         i for i in continuity_report.get("inconsistencies") or []
         if isinstance(i, dict) and i.get("severity") == "critical"
