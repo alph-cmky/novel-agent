@@ -129,6 +129,12 @@ class TestDialogueRatio:
         result = check_dialogue_ratio(text)
         assert result["dialogue_ratio"] > 0
 
+    def test_double_angle_quotes_detected(self):
+        # 『』（双直角引号）是修复点：右引号原误写成『，无法闭合匹配。
+        text = "『你来了。』林风说道。这里有一些叙述内容。" * 10
+        result = check_dialogue_ratio(text)
+        assert result["dialogue_ratio"] > 0
+
     def test_empty_text(self):
         result = check_dialogue_ratio("")
         assert result["dialogue_ratio"] == 0
