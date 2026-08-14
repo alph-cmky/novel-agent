@@ -28,6 +28,12 @@ Python 3.12+, LangGraph (graph orchestration), LangChain + OpenAI (LLM), ChromaD
 - 数据库 schema 变更需同时更新 `novel_agent/storage/models.py` 和 `novel_agent/storage/manager.py`
 - 全局配置常量放在 `novel_agent/config.py`
 
+## 测试约定
+
+- Agent 层测试不调真实 LLM：`patch.object(agent, "run_with_tools", new=AsyncMock(return_value=("<json>", None)))`（或直接赋值 async 函数），只验证输入组装与输出解析；纯函数（`strip_none`、`_format_strategy` 等）直接测。
+- Bug 修复必须配回归测试锁定改动行为（「可验证才算完成」的延伸）。
+- 覆盖率用「模块 → `tests/test_<模块名>.py`」映射人工评估，不引入 pytest-cov（避免新增依赖）。
+
 ## 流水线架构
 
 v2 递归自进化流水线（默认 `evolution_enabled=True`）：
