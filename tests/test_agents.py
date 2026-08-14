@@ -1,0 +1,127 @@
+"""Tests for agent 层 — Editor / Orchestrator / Worldbuilding。
+
+Agent 测试不调真实 LLM：patch ``run_with_tools`` 返回假 JSON，
+只验证输入组装与输出解析。纯函数（Orchestrator 的 prompt helper）直接测。
+"""
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+from novel_agent.agents.editor import EditorAgent
+from novel_agent.agents.orchestrator import OrchestratorAgent
+from novel_agent.agents.worldbuilding import WorldbuildingAgent
+
+
+class TestEditorReview:
+    @staticmethod
+    def _capture_user_prompt(agent, **kwargs):
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=('{"overall_score": 85}', None)),
+        ) as mocked:
+            asyncio.run(agent.review(chapter_number=1, draft_content="正文", **kwargs))
+        return mocked.call_args.args[0][1]["content"]
+
+    def test_review_parses_report(self):
+        agent = EditorAgent()
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=('{"overall_score": 85, "verdict": "pass"}', None)),
+        ):
+            report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
+        assert report["overall_score"] == 85
+        assert report["verdict"] == "pass"
+
+    def test_narrative_mode_injected(self):
+        user = self._capture_user_prompt(EditorAgent(), narrative_mode="unit_arc")
+        assert "unit_arc" in user
+
+    def test_no_narrative_mode_no_hint(self):
+        user = self._capture_user_prompt(EditorAgent())
+        assert "当前叙事模式" not in user
+
+    def test_empty_output_returns_unavailable(self):
+        """空输出（reasoning 模型偶发）→ unavailable 标记，而非假 0 分。"""
+        agent = EditorAgent()
+        with patch.object(
+            agent, "run_with_tools", new=AsyncMock(return_value=("", None))
+        ):
+            report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
+        assert report.get("unavailable") is True
+        assert report.get("overall_score") == 0
+        assert report.get("verdict") == "manual_review"
+
+    def test_unparseable_output_returns_unavailable(self):
+        """非空但解析失败（JSON 语法错误/截断）→ unavailable，而非假 0 分。"""
+        agent = EditorAgent()
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=("这不是JSON", None)),
+        ):
+            report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
+        assert report.get("unavailable") is True
+        assert report.get("overall_score") == 0
+
+
+class TestOrchestratorPromptHelpers:
+    def test_mode_instruction_none(self):
+        assert OrchestratorAgent._build_mode_instruction(None) == ""
+
+    def test_mode_instruction_unit_arc(self):
+        text = OrchestratorAgent._build_mode_instruction("unit_arc")
+        assert "unit_arc" in text
+        assert "unit_number" in text
+
+    def test_mode_instruction_multi_perspective(self):
+        text = OrchestratorAgent._build_mode_instruction("multi_perspective")
+        assert "pov_config" in text
+
+    def test_mode_instruction_linear_default(self):
+        text = OrchestratorAgent._build_mode_instruction("linear")
+        assert "linear" in text
+
+    def test_perspective_hint_first_person(self):
+        text = OrchestratorAgent._build_perspective_hint("first_person")
+        assert "第一人称" in text
+
+    def test_perspective_hint_unknown_or_empty(self):
+        assert OrchestratorAgent._build_perspective_hint("") == ""
+        assert OrchestratorAgent._build_perspective_hint("bogus") == ""
+
+
+class TestWorldbuildingExtract:
+    @staticmethod
+    def _capture_user_prompt(agent):
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=('{"new_entities": []}', None)),
+        ) as mocked:
+            asyncio.run(agent.extract(chapter_number=1, draft_content="正文"))
+        return mocked.call_args.args[0][1]["content"]
+
+    def test_open_foreshadowings_in_context(self):
+        agent = WorldbuildingAgent(
+            existing_foreshadowings=[
+                {"description": "神秘信物", "planted_chapter": 1,
+                 "status": "open", "risk_level": "high"},
+                {"description": "已解决", "planted_chapter": 1, "status": "resolved"},
+            ],
+        )
+        user = self._capture_user_prompt(agent)
+        assert "已有伏笔" in user
+        assert "神秘信物" in user
+        assert "已解决" not in user  # resolved 不进 context
+
+    def test_no_foreshadowings_no_context(self):
+        user = self._capture_user_prompt(WorldbuildingAgent())
+        assert "已有伏笔" not in user
+
+    def test_extract_parses_report(self):
+        agent = WorldbuildingAgent()
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=('{"new_entities": [{"name": "林风"}]}', None)),
+        ):
+            report, _ = asyncio.run(agent.extract(chapter_number=1, draft_content="正文"))
+        # parse_validated 会按 schema 补齐字段，这里只断言关键字段被保留
+        assert report["new_entities"][0]["name"] == "林风"
