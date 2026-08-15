@@ -82,3 +82,39 @@ class TestWriteToolHint:
         user = self._capture_user_prompt(writer)
         assert "search_context" in user
         assert "直接输出章节正文" not in user
+
+
+class TestImprovementPlanFormatting:
+    """测试演化迭代改进计划格式化，确保篇幅保护和结构硬约束不被丢弃。"""
+
+    def test_improvement_plan_includes_length_and_structure_protection(self):
+        from novel_agent.graph.chapter import _format_improvement_plan
+
+        plan = {
+            "focus_dimensions": ["dialogue", "ai_flavor"],
+            "primary_instruction": "增强对白冲突，剔除套话",
+            "secondary_instructions": ["增加环境声", "加快节奏"],
+            "constraints": {
+                "preserve": ["核心情节走向"],
+                "avoid": ["大段哲学议论"],
+            },
+        }
+
+        formatted = _format_improvement_plan(plan, version=1)
+
+        # 验证重点维度与核心指令
+        assert "第 2 次迭代" in formatted
+        assert "对话" in formatted
+        assert "AI味" in formatted
+        assert "增强对白冲突，剔除套话" in formatted
+
+        # 核心：必须包含全篇完整性与篇幅保护硬约束
+        assert "篇幅与结构硬性要求" in formatted
+        assert "必须输出完整的全章节正文" in formatted
+        assert "绝对禁止只输出修改片段" in formatted
+        assert "字数必须达标" in formatted
+
+    def test_empty_plan_returns_empty_string(self):
+        from novel_agent.graph.chapter import _format_improvement_plan
+        assert _format_improvement_plan(None, 0) == ""
+        assert _format_improvement_plan({}, 0) == ""

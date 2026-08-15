@@ -62,6 +62,16 @@ class TestEditorReview:
         assert report.get("unavailable") is True
         assert report.get("overall_score") == 0
 
+    def test_editor_system_prompt_contains_deductive_rubric(self):
+        """Editor 系统提示词必须包含严苛扣分阶梯（篇幅不足扣分、禁用词扣分、结尾升华扣分）。"""
+        agent = EditorAgent()
+        prompt = agent.system_prompt
+        assert "严苛扣分阶梯" in prompt
+        assert "字数/篇幅严重不足" in prompt
+        assert "结尾总结升华" in prompt
+        assert "出现公文禁用词" in prompt
+        assert "rhythm" in prompt and "ai_flavor" in prompt and "dialogue" in prompt
+
 
 class TestOrchestratorPromptHelpers:
     def test_mode_instruction_none(self):
