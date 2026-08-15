@@ -364,6 +364,20 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         content, trace = await writer.write(**write_args)
         tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
+    # 篇幅硬底线保障：若因 reasoning 抽风导致输出严重低于目标字数（<400字且目标>=1000），原地补偿重写一次
+    if len(content.strip()) < 400 and target_words >= 1000:
+        print(f"  [Writer] 章节字数过短 ({len(content)} chars)，触发保底补偿生成...")
+        compensated_args = dict(write_args)
+        compensated_args["rewrite_instructions"] = (
+            f"【紧急注意】：上一版输出字数严重不足。请务必充分展开场景与对话细节，"
+            f"写满至少 {target_words} 字，严禁概括！\n" + (write_args.get("rewrite_instructions") or "")
+        )
+        content_comp, trace_comp = await writer.write(**compensated_args)
+        if len(content_comp.strip()) > len(content.strip()):
+            content = content_comp
+            trace = trace_comp
+            tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
+
     evolution_enabled = state.get("evolution_enabled", True)
     if evolution_enabled:
         label = f"(v{evolution_version})"
