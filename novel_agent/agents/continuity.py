@@ -13,33 +13,29 @@ CONTINUITY_TOOL_SECTION = """## 工具
 
 CONTINUITY_SYSTEM_PROMPT = """你是一个长篇小说设定审计员，专门检查章节间的一致性。
 
-## 审计维度
+## 核心审计维度（对齐严苛事实一致性标准）
 
-### 1. 角色一致性
-- 外貌（眼睛颜色、身高体型、特征标记）是否前后一致？
-- 性格标签是否一致？行为是否符合已建立的性格？
-- 能力体系是否被破坏？（主角突然会了不该会的技能）
-- 人际关系是否矛盾？（前文说A和B第一次见，本章说他们认识很久）
+### 1. 角色与实体一致性（Character & Entity Consistency）
+- **姓名与身份**：绝不允许出现受害者/角色前后改名（如前文叫周婉，本章误写为林晚）。
+- **人际与血缘关系**：严查生父/养父/师徒等关键人设关系是否混淆（如养女误写为生父教导）。
+- **能力与状态**：技能等级、伤病状态、持有道具是否与前文事实完全吻合。
 
-### 2. 时间线一致性
-- 事件顺序是否有矛盾？
-- 时间流逝描述是否合理？
-- 角色年龄是否匹配？
+### 2. 时间线与数值逻辑（Timeline & Numeric Logic）
+- **时间跨度与时长**：严查天数、年份、间隔时间（如前文写三天前失踪，本章账本写五天前，属于重大矛盾）。
+- **事件先后因果**：前置事件是否发生？死亡角色是否复活？
 
-### 3. 世界观一致性
-- 规则体系是否被违反？（前文说魔法需念咒，本章默发）
-- 势力关系是否前后矛盾？
-- 物品状态是否一致？（前文说宝剑已断，本章又在用）
+### 3. 世界观与场景实体（Worldbuilding & Physical Rules）
+- **材质与物理属性**：城墙材质（黑曜石 vs 青石）、法宝规则、门派试炼场数（三场 vs 两场）等硬性设定是否矛盾。
+- **势力与地域规则**：地理位置、宗门禁地与势力阵营前后是否自洽。
 
-## 严重程度定义
-- **critical**: 核心设定被破坏，不修改会崩世界观
-- **major**: 明显矛盾，读者可能注意到
-- **minor**: 小瑕疵（如颜色记错、数字不一致）
+## 严重程度定义与打分标准
+- **critical (-30~50分)**：核心设定被破坏、主要角色改名/身世矛盾、核心时间线崩溃。
+- **major (-15~30分)**：局部规则冲突、次要时间矛盾、读者能明显察觉的不一致。
+- **minor (-5~10分)**：用词瑕疵、无关紧要的微小数值出入。
+- **若存在 1 处 critical 矛盾，overall_score 严禁超过 60 分！**
 
 ## 叙事模式感知
-
 根据项目的 narrative_mode 调整审计策略：
-
 - **linear（线性）**：标准3维度审计
 - **unit_arc（单元剧）**：角色状态在单元之间可"重置"，不做跨单元状态一致性检查
 - **multi_perspective（多视角）**：逐 POV 线审计，不同 POV 线间允许信息不一致，但同一线内部必须一致
@@ -129,17 +125,20 @@ class ContinuityAgent(BaseAgent):
             "verdict": "manual_review",
         }
 
-        # 两类「拿不到有效审计报告」的情况都标记 unavailable，避免兜底
-        # overall_score=0 被进化层误读为「最差版本」触发 regressed：
-        #   1. 空输出（reasoning 模型偶发空 content）
-        #   2. 非空但解析失败（JSON 语法错误/截断）—— parse_json_response 失败时
-        #      会带 raw_output 哨兵字段
-        if not (content or "").strip():
-            return {"unavailable": True, **defaults}, trace
+        # 若首轮返回空或解析失败，针对 reasoning 模型执行一次简化重试（直接 prompt 约束）
+        for attempt in range(2):
+            if attempt > 0:
+                messages.append({"role": "user", "content": "请务必只输出合法的 JSON 格式审计结果，包含 overall_score, inconsistencies, verdict。"})
+                content, trace = await self.run_with_tools(
+                    messages, max_rounds=1, action=f"audit_chapter_{chapter_number}_retry"
+                )
 
-        raw = parse_json_response(content, defaults=defaults)
-        if "raw_output" in raw:
-            return {"unavailable": True, **defaults}, trace
+            if not (content or "").strip():
+                continue
 
-        report = OutputValidator.validate("continuity", raw).to_dict()
-        return report, trace
+            raw = parse_json_response(content, defaults=defaults)
+            if "raw_output" not in raw:
+                report = OutputValidator.validate("continuity", raw).to_dict()
+                return report, trace
+
+        return {"unavailable": True, **defaults}, trace

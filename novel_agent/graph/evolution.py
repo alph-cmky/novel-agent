@@ -216,11 +216,12 @@ def decide_termination(
             f" + {cfg.regression_threshold}",
         )
 
-    # 4. Ceiling — all dimensions > 90 and both scores > 90
-    if (all(curr_dims.get(d, 0) > cfg.ceiling_score for d in EDITOR_DIMENSIONS)
+    # 4. Ceiling — 至少经历 1 轮演化且所有维度达到天花板阈值（防止首轮无迭代直接早退）
+    if (current_round >= 1
+            and all(curr_dims.get(d, 0) > cfg.ceiling_score for d in EDITOR_DIMENSIONS)
             and current_scores.get("editor_overall", 0) > cfg.ceiling_score
             and current_scores.get("continuity_overall", 0) > cfg.ceiling_score):
-        return ("ceiling", f"所有维度 > {cfg.ceiling_score}，已达天花板")
+        return ("ceiling", f"演化迭代达标且所有维度 > {cfg.ceiling_score}，已达天花板")
 
     # 5. Max rounds
     if current_round >= cfg.max_rounds:
