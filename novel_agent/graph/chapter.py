@@ -364,13 +364,14 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         content, trace = await writer.write(**write_args)
         tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
-    # 篇幅硬底线保障：若因 reasoning 抽风导致输出严重低于目标字数（<400字且目标>=1000），原地补偿重写一次
-    if len(content.strip()) < 400 and target_words >= 1000:
-        print(f"  [Writer] 章节字数过短 ({len(content)} chars)，触发保底补偿生成...")
+    # 篇幅硬底线保障：若因 reasoning 偶发压缩导致输出严重不足（<600字且目标>=1000），原地补偿重写一次
+    min_required_words = max(600, int(target_words * 0.6))
+    if len(content.strip()) < min_required_words and target_words >= 1000:
+        print(f"  [Writer] 章节字数过短 ({len(content)} chars < {min_required_words})，触发保底补偿生成...")
         compensated_args = dict(write_args)
         compensated_args["rewrite_instructions"] = (
-            f"【紧急注意】：上一版输出字数严重不足。请务必充分展开场景与对话细节，"
-            f"写满至少 {target_words} 字，严禁概括！\n" + (write_args.get("rewrite_instructions") or "")
+            f"【紧急注意】：上一版输出字数严重不足（仅有 {len(content)} 字）。请务必充分展开场景细节、人物神态、环境氛围与多轮交锋对话，"
+            f"写满至少 {target_words} 字，严禁大纲式概括！\n" + (write_args.get("rewrite_instructions") or "")
         )
         content_comp, trace_comp = await writer.write(**compensated_args)
         if len(content_comp.strip()) > len(content.strip()):
