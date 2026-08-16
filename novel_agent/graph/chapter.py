@@ -857,65 +857,42 @@ def _get_checkpointer(persist_dir: str) -> SqliteSaver | MemorySaver:
 
 
 def _build_workflow(evolution_enabled: bool = True) -> StateGraph:
-    """Build the StateGraph — conditionally compiled based on evolution_enabled."""
+    """Build the pure self-evolution StateGraph for chapter generation."""
     workflow = StateGraph(NovelState)
 
+    # 1. 宏观规划与上下文装配
     workflow.add_node("orchestrator", orchestrator_node)
 
-    # Common nodes — register before conditional branches
+    # 2. 递归自演化子图节点
+    workflow.add_node("evolution_writer", writer_node)
+    workflow.add_node("evolution_editor", editor_node)
+    workflow.add_node("evolution_continuity", continuity_node)
+    workflow.add_node("evolution_orchestrator", evolution_orchestrator_node)
+    workflow.add_node("evolution_select_best", select_best_version_node)
+
+    # 3. 设定固化与人工审核
     workflow.add_node("worldbuilding", worldbuilding_node)
     workflow.add_node("human_review", human_review_node)
 
-    if evolution_enabled:
-        # ── Evolution path ──
-        workflow.add_node("evolution_writer", writer_node)
-        workflow.add_node("evolution_editor", editor_node)
-        workflow.add_node("evolution_continuity", continuity_node)
-        workflow.add_node("evolution_orchestrator", evolution_orchestrator_node)
-        workflow.add_node("evolution_select_best", select_best_version_node)
-
-        workflow.set_entry_point("orchestrator")
-        workflow.add_edge("orchestrator", "evolution_writer")
-        workflow.add_edge("evolution_writer", "evolution_editor")
-        workflow.add_edge("evolution_editor", "evolution_continuity")
-        workflow.add_edge("evolution_continuity", "evolution_orchestrator")
-        workflow.add_conditional_edges(
-            "evolution_orchestrator", route_after_evolution,
-            {
-                "evolution_writer": "evolution_writer",
-                "evolution_select_best": "evolution_select_best",
-            },
-        )
-        workflow.add_edge("evolution_select_best", "worldbuilding")
-        workflow.add_edge("worldbuilding", "human_review")
-        workflow.add_conditional_edges(
-            "human_review", route_after_human_evolution,
-            {"__end__": END, "evolution_writer": "evolution_writer"},
-        )
-    else:
-        # ── Legacy path ──
-        workflow.add_node("writer", writer_node)
-        workflow.add_node("editor", editor_node)
-        workflow.add_node("continuity", continuity_node)
-        workflow.add_node("orchestrator_review", orchestrator_review_node)
-
-        workflow.set_entry_point("orchestrator")
-        workflow.add_edge("orchestrator", "writer")
-        workflow.add_edge("writer", "editor")
-        workflow.add_edge("editor", "continuity")
-        workflow.add_conditional_edges(
-            "continuity", route_after_continuity,
-            {
-                "worldbuilding": "worldbuilding",
-                "orchestrator_review": "orchestrator_review",
-            },
-        )
-        workflow.add_edge("orchestrator_review", "writer")
-        workflow.add_edge("worldbuilding", "human_review")
-        workflow.add_conditional_edges(
-            "human_review", route_after_human_legacy,
-            {"__end__": END, "orchestrator_review": "orchestrator_review"},
-        )
+    # 状态拓扑编排
+    workflow.set_entry_point("orchestrator")
+    workflow.add_edge("orchestrator", "evolution_writer")
+    workflow.add_edge("evolution_writer", "evolution_editor")
+    workflow.add_edge("evolution_editor", "evolution_continuity")
+    workflow.add_edge("evolution_continuity", "evolution_orchestrator")
+    workflow.add_conditional_edges(
+        "evolution_orchestrator", route_after_evolution,
+        {
+            "evolution_writer": "evolution_writer",
+            "evolution_select_best": "evolution_select_best",
+        },
+    )
+    workflow.add_edge("evolution_select_best", "worldbuilding")
+    workflow.add_edge("worldbuilding", "human_review")
+    workflow.add_conditional_edges(
+        "human_review", route_after_human_evolution,
+        {"__end__": END, "evolution_writer": "evolution_writer"},
+    )
 
     return workflow
 
