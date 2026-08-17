@@ -3,7 +3,7 @@
 Run with:
     pytest tests/eval/test_continuity_benchmark.py -v -s
 
-Set OPENAI_API_KEY, OPENAI_BASE_URL, BUDGET_MODEL env vars.
+Set RUN_LLM_TESTS=1 together with OPENAI_API_KEY, OPENAI_BASE_URL and BUDGET_MODEL.
 """
 
 import os
@@ -19,8 +19,8 @@ from tests.eval.continuity_benchmark import (
 @pytest.mark.asyncio
 @pytest.mark.slow
 @pytest.mark.skipif(
-    not os.getenv("OPENAI_API_KEY"),
-    reason="OPENAI_API_KEY not set",
+    not os.getenv("RUN_LLM_TESTS") or not os.getenv("OPENAI_API_KEY"),
+    reason="Set RUN_LLM_TESTS=1 and OPENAI_API_KEY to run the paid benchmark",
 )
 async def test_continuity_benchmark():
     """Run all built-in benchmark cases and report results."""

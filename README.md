@@ -17,7 +17,7 @@
 | 双模型路由 | Quality 模型负责创作，Budget 模型负责审查/分析/抽取，按任务自动分配 |
 | 质量保障 | 递归自进化（版本对比 + Delta 分析 + 7 种终止条件）+ 人工审批，支持 Web / Chainlit 两种审批方式 |
 | 双层记忆 | 短期摘要（ContextCompressor）+ 长期向量/结构化存储（ChromaDB + SQLite） |
-| 可观测性 | JSON trace 采集 + LangFuse 全链路追踪 |
+| 可观测性 | 调用元数据采集 + LangFuse 全链路追踪 |
 | 三种交互方式 | CLI（服务/导出/运维）/ Web SPA（React）/ Chainlit（对话式，legacy），共享同一后端 |
 
 ## 系统架构
@@ -89,7 +89,7 @@ graph TD
 | Worldbuilding | 实体提取、冲突检测、持久化到 SQLite | Budget |
 | Human Review | LangGraph `interrupt()` — 暂停流水线，等待人类输入 | — |
 
-> **降级模式**（`evolution_enabled=False`）走线性路径，兼容旧反馈闭环：`Orchestrator → Writer → Editor → Continuity → [通过 → Worldbuilding | 失败 → Orchestrator Review → Writer]`。
+> 当前主流程始终使用递归自进化图。`evolution_enabled` 主要影响人工拒绝后的处理逻辑，旧版线性反馈路径仅保留作兼容代码，不是推荐入口。
 
 ## 快速开始
 
@@ -139,9 +139,6 @@ novel-agent export -p <project-id>  # 指定项目（默认第一个项目）
 novel-agent export -o novel.md      # 保存到文件
 novel-agent export -f txt -o novel.txt  # 纯文本格式
 
-# 调试 trace
-novel-agent trace ls
-novel-agent trace show traces/trace-xxx.json
 ```
 
 ### Web UI
@@ -221,7 +218,7 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 ```
 novel_agent/
 ├── agents/              # 6 个专用 Agent + 基类
-│   ├── base.py          # BaseAgent（工具调用循环 + trace 记录）
+│   ├── base.py          # BaseAgent（工具调用循环 + 调用元数据）
 │   ├── orchestrator.py  # 叙事策略 + 上下文组装
 │   ├── writer.py        # 章节创作（含 search_context 工具）
 │   ├── editor.py        # 5 维审查 + DetectAiFlavorTool
@@ -245,7 +242,6 @@ novel_agent/
 │   └── validator.py     # OutputValidator（类型强制 + 默认值兜底）
 ├── routing/             # 模型路由（双模型、运行时读环境变量）
 ├── observability/       # LangFuse 全链路追踪（未配置则 no-op）
-├── trace/               # JSON trace 采集 + Rich CLI 查看器
 ├── tools/               # 工具协议（MCP 兼容 schema 模式）
 ├── style/               # AI 味检测引擎（禁用句式 + 启发式检查）
 ├── api/                 # FastAPI REST + SSE + Chainlit UI
@@ -255,7 +251,7 @@ novel_agent/
 │   ├── outline.py       # AI 大纲生成
 │   ├── app.py           # FastAPI 应用（CORS + 静态资源 + 生命周期）
 │   └── chainlit_app.py  # Chainlit 兼容入口
-└── cli/                 # Click CLI（serve / export / trace）
+└── cli/                 # Click CLI（serve / export）
 
 frontend/                # React SPA（Vite + TypeScript + Tailwind）
 └── src/pages/           # 看板 / 大纲 / 写作 / 设置
@@ -264,3 +260,10 @@ frontend/                # React SPA（Vite + TypeScript + Tailwind）
 ## License
 
 MIT
+
+## 当前限制
+
+- 项目处于 Alpha 阶段，核心目标是验证 Agent 工作流、状态恢复、记忆和人工审批机制。
+- 真实模型调用、长篇质量和运行成本取决于所选模型与配置；仓库测试默认不调用真实 LLM。
+- 旧版 Chainlit 入口和部分兼容字段仍保留，但 Web UI 是推荐入口。
+- 仓库不包含个人运行数据、数据库、checkpoint 或 API 密钥；请从 `.env.example` 创建本地配置。

@@ -107,7 +107,7 @@ Entry → orchestrator_node
 
 ## 四、Agent 设计
 
-所有 Agent 继承 `BaseAgent`（`novel_agent/agents/base.py`），统一 LLM 调用、工具执行和 trace 记录。
+所有 Agent 继承 `BaseAgent`（`novel_agent/agents/base.py`），统一 LLM 调用、工具执行和调用元数据采集。
 
 ### 4.1 BaseAgent — 基础设施
 
@@ -361,10 +361,6 @@ WAL 模式 + 外键约束。迁移系统基于 `PRAGMA table_info` 检查已有�
 
 **成本：** LangFuse Cloud Free 提供 50,000 events/月，对当前项目规模完全足够。
 
-### 10.2 Trace 系统
-
-`novel_agent/trace/` — 本地 JSON trace 记录 + Rich CLI 查看器。每步记录 agent、action、token 消耗、耗时、工具调用。
-
 ## 十一、Web API
 
 ### 11.1 REST 端点（`novel_agent/api/routes.py`）
@@ -418,8 +414,6 @@ React + TypeScript + Tailwind CSS + Vite，4 个页面：
 ```
 novel-agent serve [--host HOST] [--port PORT] [--reload]   # 启动 Web 服务
 novel-agent export [-p PROJECT] [-f md|txt] [-o OUTPUT]    # 导出小说
-novel-agent trace show <file>                                # 查看 trace
-novel-agent trace ls                                         # 列出 trace
 ```
 
 项目管理、大纲规划、章节写作均在 Web UI 完成。
@@ -483,9 +477,6 @@ novel_agent/
 │   ├── search.py     # SearchContextTool
 │   ├── continuity.py # CheckContinuityTool
 │   └── style.py      # DetectAiFlavorTool
-├── trace/            # 本地 trace
-│   ├── collector.py
-│   └── viewer.py
 └── config.py         # 长篇写作常量
 
 frontend/             # React Web UI

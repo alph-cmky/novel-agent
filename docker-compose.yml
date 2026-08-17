@@ -17,7 +17,6 @@ services:
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
     volumes:
       - ./novel-data:/app/novel-data
-      - ./traces:/app/traces
 
   # CLI mode — interactive use (stdin/tty required)
   cli:
@@ -31,7 +30,6 @@ services:
       - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
     volumes:
       - ./novel-data:/app/novel-data
-      - ./traces:/app/traces
     stdin_open: true
     tty: true
     entrypoint: ["uv", "run", "novel-agent"]

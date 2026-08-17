@@ -53,16 +53,11 @@ Orchestrator → Evolution Subgraph [
 - **Worldbuilding**: 实体提取 + 冲突检测 + 持久化到 SQLite
 - **Human Review**: LangGraph `interrupt()` 暂停流水线，拒绝后触发新进化周期（max 2 轮）
 
-### 降级模式（`evolution_enabled=False`）
+### 兼容参数（`evolution_enabled=False`）
 
-关闭进化时走线性路径，兼容旧的反馈闭环：
-
-```
-Orchestrator → Writer → Editor → Continuity → [
-    pass → Worldbuilding → Human Review,
-    fail → Orchestrator Review → Writer (feedback loop)
-]
-```
+当前 `_build_workflow()` 仍构建同一套递归自进化图；该参数主要影响
+`human_review` 拒绝后的处理逻辑。旧版线性反馈节点仍作为兼容代码保留，尚未作为独立
+运行模式接线，不应在新功能中依赖。
 
 ## 递归自进化
 
@@ -105,18 +100,11 @@ LLM 结构化输出有三类偶发失败：**JSON 语法错误**（漏引号、�
 
 **易错点**：`dict.get(key, default)` 只在键**不存在**时返回 default；键存在但值为 None 时返回 None。因此所有 LLM 输出必须经过 `strip_none`，否则下游 `None.get(...)` 崩溃。
 
-## 可观测性
-
-- `novel_agent/trace/collector.py` — JSON trace 记录
-- `novel_agent/trace/viewer.py` — Rich CLI trace 查看器
-
 ## CLI 命令
 
 ```
 novel-agent serve [--host 0.0.0.0] [--port 8000] [--reload]   # 启动 Web 服务
 novel-agent export [-p project] [-f md|txt] [-o output]        # 导出小说
-novel-agent trace show <file>                                  # 查看 trace
-novel-agent trace ls                                           # 列出 trace
 ```
 
 项目管理、大纲规划、章节写作请在 Web UI 中完成。

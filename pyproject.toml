@@ -63,6 +63,14 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Long Chinese prompt literals and their examples are intentionally kept readable.
+"novel_agent/agents/continuity.py" = ["E501"]
+"novel_agent/agents/editor.py" = ["E501"]
+"novel_agent/agents/orchestrator.py" = ["E501"]
+"novel_agent/agents/writer.py" = ["E501"]
+"novel_agent/graph/chapter.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
