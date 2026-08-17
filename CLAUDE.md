@@ -36,7 +36,7 @@ Python 3.12+, LangGraph (graph orchestration), LangChain + OpenAI (LLM), ChromaD
 
 ## 流水线架构
 
-v2 递归自进化流水线（默认 `evolution_enabled=True`）：
+v2 递归自进化流水线：
 
 ```
 Orchestrator → Evolution Subgraph [
@@ -53,11 +53,10 @@ Orchestrator → Evolution Subgraph [
 - **Worldbuilding**: 实体提取 + 冲突检测 + 持久化到 SQLite
 - **Human Review**: LangGraph `interrupt()` 暂停流水线，拒绝后触发新进化周期（max 2 轮）
 
-### 兼容参数（`evolution_enabled=False`）
+### 已弃用参数（`evolution_enabled`）
 
-当前 `_build_workflow()` 仍构建同一套递归自进化图；该参数主要影响
-`human_review` 拒绝后的处理逻辑。旧版线性反馈节点仍作为兼容代码保留，尚未作为独立
-运行模式接线，不应在新功能中依赖。
+`build_chapter_graph()` / `build_chapter_graph_async()` 的 `evolution_enabled`
+参数已弃用，仅为兼容旧调用方保留；流水线始终构建递归自进化图，不接受其他模式。
 
 ## 递归自进化
 
@@ -71,9 +70,9 @@ Orchestrator → Evolution Subgraph [
 
 ## NovelState 关键字段
 
-- 进化控制：`evolution_enabled` / `evolution_max_rounds` / `evolution_convergence_threshold`
+- 进化控制：`evolution_max_rounds` / `evolution_convergence_threshold`
 - 进化状态：`evolution_round` / `evolution_version` / `evolution_history` / `evolution_improvement_plan` / `evolution_termination` / `evolution_best_*`
-- 旧版兼容（`evolution_enabled=False`）：`retry_count` / `rewrite_instructions`
+- 历史兼容字段：`retry_count` / `rewrite_instructions`（仅用于旧 checkpoint 反序列化）
 
 完整字段见 `graph/state.py`。
 

@@ -89,7 +89,7 @@ graph TD
 | Worldbuilding | 实体提取、冲突检测、持久化到 SQLite | Budget |
 | Human Review | LangGraph `interrupt()` — 暂停流水线，等待人类输入 | — |
 
-> 当前主流程始终使用递归自进化图。`evolution_enabled` 主要影响人工拒绝后的处理逻辑，旧版线性反馈路径仅保留作兼容代码，不是推荐入口。
+> `evolution_enabled` 参数已弃用，仅为兼容旧调用方保留；流水线始终使用递归自进化图。
 
 ## 快速开始
 
@@ -227,7 +227,7 @@ novel_agent/
 │   └── evolution_orchestrator.py # 元评估 + 改进计划（LLM 增强层）
 ├── graph/               # LangGraph StateGraph
 │   ├── state.py         # NovelState TypedDict
-│   ├── chapter.py       # 流水线组装（进化路径 + 降级路径 + HITL）
+│   ├── chapter.py       # 流水线组装（进化子图 + HITL）
 │   └── evolution.py     # 进化规则层（Delta / 终止判断 / 改进计划）
 ├── memory/              # 双层记忆系统
 │   ├── compressor.py    # ContextCompressor（40K token 阈值）

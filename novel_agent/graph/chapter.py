@@ -90,11 +90,7 @@ def _get_chapter_store(persist_dir: str) -> ChapterStore:
     return _chapter_store_cache[key]
 
 
-# ── Routing thresholds ──────────────────────────────────
-
-MAX_RETRIES = 3
-CONTINUITY_PASS_SCORE = 80
-EDITOR_APPROVE_SCORE = 60
+# ── Node config ─────────────────────────────────────────
 
 
 def _config_for(task: TaskClass) -> AgentConfig:
@@ -379,27 +375,14 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             trace = trace_comp
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
-    evolution_enabled = state.get("evolution_enabled", True)
-    if evolution_enabled:
-        label = f"(v{evolution_version})"
-        wmsg = f"  [Writer] {len(content)} chars {label} "
-        wmsg += f"(target: {target_words}w, tokens: {tok_info})"
-        print(wmsg)
-        return {
-            "draft_content": content,
-            "evolution_round": state.get("evolution_round", 0),
-        }
-    else:
-        retry = state.get("retry_count", 0) + 1
-        label = f"(retry {retry})" if retry > 1 else ""
-        wmsg = f"  [Writer] {len(content)} chars {label} "
-        wmsg += f"(target: {target_words}w, tokens: {tok_info})"
-        print(wmsg)
-        return {
-            "draft_content": content,
-            "retry_count": retry,
-            "rewrite_instructions": "",
-        }
+    label = f"(v{evolution_version})"
+    wmsg = f"  [Writer] {len(content)} chars {label} "
+    wmsg += f"(target: {target_words}w, tokens: {tok_info})"
+    print(wmsg)
+    return {
+        "draft_content": content,
+        "evolution_round": state.get("evolution_round", 0),
+    }
 
 
 async def editor_node(state: NovelState) -> dict:
@@ -443,37 +426,6 @@ async def continuity_node(state: NovelState) -> dict:
     ]
     print(f"  [Continuity] {score}/100, Critical: {len(criticals)}")
     return {"continuity_report": report}
-
-
-async def orchestrator_review_node(state: NovelState) -> dict:
-    """Orchestrator analyzes failure reports and generates rewrite instructions.
-
-    Only used in non-evolution (legacy) mode.
-    """
-    orchestrator = OrchestratorAgent(config=_config_for(TaskClass.STRUCTURAL))
-
-    human_feedback = state.get("human_feedback") or None
-    source = "human" if human_feedback else "auto"
-
-    print(f"  [Orchestrator Review] Analyzing {source} feedback, generating rewrite guide...")
-
-    result = await orchestrator.review_feedback(
-        chapter_number=state.get("chapter_number", 1),
-        chapter_outline=state.get("chapter_outline", ""),
-        draft_content=state.get("draft_content", ""),
-        editor_report=state.get("editor_report", {}),
-        continuity_report=state.get("continuity_report", {}),
-        human_feedback=human_feedback,
-    )
-
-    instr_len = len(result.get("instructions", ""))
-    constraints = result.get("constraints", {})
-    print(f"  [Orchestrator Review] Guide: {instr_len} chars, "
-          f"constraints: {list(constraints.keys())}")
-
-    return {
-        "rewrite_instructions": result,
-    }
 
 
 async def evolution_orchestrator_node(state: NovelState) -> dict:
@@ -703,7 +655,6 @@ def human_review_node(state: NovelState) -> dict:
     editor_unavailable = bool(editor_report.get("unavailable"))
     continuity_unavailable = bool(continuity_report.get("unavailable"))
 
-    evolution_enabled = state.get("evolution_enabled", True)
     evolution_rounds = len(state.get("evolution_history", []))
     evolution_termination = state.get("evolution_termination", "")
 
@@ -737,18 +688,9 @@ def human_review_node(state: NovelState) -> dict:
     if approved:
         return {"human_approved": True, "human_feedback": feedback}
 
-    # Rejected — handle differently based on mode
+    # Rejected — human feedback triggers a fresh evolution cycle
     rejects = state.get("evolution_human_rejects", 0) + 1
 
-    if not evolution_enabled:
-        # Legacy mode: simple reject → orchestrator_review
-        return {
-            "human_approved": False,
-            "human_feedback": feedback,
-            "retry_count": state.get("retry_count", 0),
-        }
-
-    # Evolution mode: human feedback → fresh evolution
     if rejects >= 3:
         # Safety valve: force approve after 3 rejects
         return {"human_approved": True, "human_feedback": feedback}
@@ -780,30 +722,6 @@ def human_review_node(state: NovelState) -> dict:
 
 # ── Routers ────────────────────────────────────────────
 
-def route_after_continuity(
-    state: NovelState,
-) -> Literal["worldbuilding", "orchestrator_review"]:
-    """Legacy router for non-evolution mode."""
-    continuity_report = state.get("continuity_report", {}) or {}
-    editor_report = state.get("editor_report", {}) or {}
-    # unavailable 时用对侧分替身（continuity↔editor 对称），避免假 0 触发无谓重试。
-    c_score = continuity_overall(editor_report, continuity_report)
-    e_score = editor_overall(editor_report, continuity_report)
-    criticals = [
-        i for i in continuity_report.get("inconsistencies") or []
-        if isinstance(i, dict) and i.get("severity") == "critical"
-    ]
-    retry = state.get("retry_count", 0)
-
-    if c_score >= CONTINUITY_PASS_SCORE and not criticals and e_score >= EDITOR_APPROVE_SCORE:
-        return "worldbuilding"
-
-    if retry < MAX_RETRIES:
-        return "orchestrator_review"
-
-    return "worldbuilding"
-
-
 def route_after_evolution(
     state: NovelState,
 ) -> Literal["evolution_writer", "evolution_select_best"]:
@@ -816,15 +734,6 @@ def route_after_evolution(
         return "evolution_select_best"
 
     return "evolution_writer"
-
-
-def route_after_human_legacy(state: NovelState) -> Literal["__end__", "orchestrator_review"]:
-    """Human approved → done. Rejected + retries left → feedback loop."""
-    if state.get("human_approved", False):
-        return "__end__"
-    if state.get("retry_count", 0) >= MAX_RETRIES:
-        return "__end__"
-    return "orchestrator_review"
 
 
 def route_after_human_evolution(state: NovelState) -> Literal["__end__", "evolution_writer"]:
@@ -857,8 +766,8 @@ def _get_checkpointer(persist_dir: str) -> SqliteSaver | MemorySaver:
     return _checkpointer_cache[db_key]
 
 
-def _build_workflow(evolution_enabled: bool = True) -> StateGraph:
-    """Build the pure self-evolution StateGraph for chapter generation."""
+def _build_workflow() -> StateGraph:
+    """Build the recursive self-evolution StateGraph for chapter generation."""
     workflow = StateGraph(NovelState)
 
     # 1. 宏观规划与上下文装配
@@ -899,8 +808,13 @@ def _build_workflow(evolution_enabled: bool = True) -> StateGraph:
 
 
 def build_chapter_graph(persist_dir: str = "", evolution_enabled: bool = True) -> StateGraph:
-    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit)."""
-    workflow = _build_workflow(evolution_enabled=evolution_enabled)
+    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit).
+
+    ``evolution_enabled`` is deprecated and kept only for backward compatibility
+    with older callers; the graph is always the evolution pipeline.
+    """
+    _ = evolution_enabled
+    workflow = _build_workflow()
     checkpointer = _get_checkpointer(persist_dir)
     return workflow.compile(checkpointer=checkpointer)
 
@@ -948,7 +862,12 @@ async def aclose_checkpointers() -> None:
 async def build_chapter_graph_async(
     persist_dir: str = "", evolution_enabled: bool = True,
 ) -> StateGraph:
-    """Async version for SSE endpoints (uses AsyncSqliteSaver)."""
-    workflow = _build_workflow(evolution_enabled=evolution_enabled)
+    """Async version for SSE endpoints (uses AsyncSqliteSaver).
+
+    ``evolution_enabled`` is deprecated and kept only for backward compatibility
+    with older callers; the graph is always the evolution pipeline.
+    """
+    _ = evolution_enabled
+    workflow = _build_workflow()
     checkpointer = await _get_checkpointer_async(persist_dir)
     return workflow.compile(checkpointer=checkpointer)

@@ -7,7 +7,6 @@ conditional edges in graph/chapter.py.
 
 from novel_agent.agents.base import AgentConfig, BaseAgent
 from novel_agent.memory.compressor import ContextCompressor
-from novel_agent.schema.parser import parse_json_response
 from novel_agent.schema.validator import parse_validated
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书的创作方向和节奏。
@@ -388,98 +387,6 @@ class OrchestratorAgent(BaseAgent):
         }
 
         return hints.get(perspective, "")
-
-    async def review_feedback(
-        self,
-        chapter_number: int,
-        chapter_outline: str,
-        draft_content: str,
-        editor_report: dict,
-        continuity_report: dict,
-        human_feedback: dict | None = None,
-    ) -> dict:
-        """Analyze Editor/Continuity/Human feedback and produce rewrite instructions.
-
-        Called when the pipeline detects issues — either automatically (scores low)
-        or when a human reviewer rejects the draft. Returns structured dict with
-        instructions (plain text guidance) and constraints (structured fix hints).
-        """
-        editor_score = editor_report.get("overall_score", 0)
-        continuity_score = continuity_report.get("overall_score", 0)
-
-        # Summarize key issues for the prompt
-        editor_issues = editor_report.get("issues", [])[:5]
-        editor_issues_text = "\n".join(
-            f"- [{i.get('severity', '?')}] [{i.get('category', '?')}] "
-            f"{i.get('description', '')}\n  Suggestion: {i.get('suggestion', 'N/A')}"
-            for i in editor_issues
-        ) or "无"
-
-        continuity_issues = continuity_report.get("inconsistencies", [])[:5]
-        continuity_issues_text = "\n".join(
-            f"- [{i.get('severity', '?')}] [{i.get('category', '?')}] "
-            f"{i.get('description', '')}\n  Current: {i.get('current', '?')}\n  "
-            f"Previous: {i.get('previous', '?')}"
-            for i in continuity_issues
-        ) or "无"
-
-        human_note = ""
-        if human_feedback:
-            action = human_feedback.get("action", "?")
-            comments = human_feedback.get("comments", "")
-            edited = human_feedback.get("edited_text", "")
-            human_note = f"## 人类审阅反馈\n- 决定: {action}\n- 意见: {comments}\n"
-            if edited:
-                human_note += f"- 编辑文本参考: {edited[:500]}\n"
-
-        messages = [
-            {"role": "system", "content": (
-                "你是小说主编。你的任务是分析审阅反馈并给出具体的重写指导。\n\n"
-                "## 分析要点\n"
-                "1. 哪些是结构性问题（逻辑矛盾、角色不一致）→ Writer 必须修正\n"
-                "2. 哪些是风格问题（AI味、节奏、对话）→ Writer 应该改进\n"
-                "3. 哪些是低优先级问题 → 可暂不处理\n\n"
-                "## 输出格式\n"
-                "输出 JSON（只输出 JSON）：\n"
-                "```json\n"
-                "{\n"
-                '  "instructions": "重写指导（纯文本，分节：必须修正/应该改进/保持）",\n'
-                '  "constraints": {\n'
-                '    "focus_areas": ["需要重点修正的方面"],\n'
-                '    "strategy_override": {\n'
-                '      "pacing": "slow|normal|fast（可选覆盖原策略节奏）",\n'
-                '      "character_emotional_state": {"角色名": {"mood": "..."}}\n'
-                "    },\n"
-                '    "avoid": ["重写时不应出现的模式或语气"],\n'
-                '    "reference_chapter": 0,\n'
-                '    "reference_excerpt": "参考前文的语气/风格片段"\n'
-                "  }\n"
-                "}\n"
-                "```"
-            )},
-            {"role": "user", "content": (
-                f"第{chapter_number}章需要重写。请分析以下反馈并给出重写指导。\n\n"
-                f"## 本章大纲\n{chapter_outline}\n\n"
-                f"## 评分\n- Editor: {editor_score}/100\n"
-                f"- Continuity: {continuity_score}/100\n\n"
-                f"## Editor 问题\n{editor_issues_text}\n\n"
-                f"## Continuity 问题\n{continuity_issues_text}\n\n"
-                f"{human_note}"
-                f"## 当前草稿（前800字）\n{draft_content[:800]}\n"
-            )},
-        ]
-
-        content, _ = await self.run_with_tools(
-            messages,
-            max_rounds=1,
-            action=f"review_feedback_ch{chapter_number}",
-        )
-
-        result = parse_json_response(content, defaults={
-            "instructions": content.strip(),
-            "constraints": {},
-        })
-        return result
 
     def get_arc_summary(self) -> list[dict]:
         """Return the story arc tracking data."""

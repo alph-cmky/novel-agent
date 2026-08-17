@@ -1,7 +1,7 @@
 """Shared state that flows through the chapter-writing StateGraph.
 
-v2: Evolution architecture replacing the old retry_count + feedback loop.
-Legacy fields (retry_count, rewrite_instructions) retained for evolution_enabled=False path.
+v2: Evolution architecture. The old retry_count + linear feedback loop has been
+removed; its fields are retained only for backward-compatible checkpoint loading.
 """
 
 from typing import TypedDict
@@ -60,7 +60,7 @@ class NovelState(TypedDict, total=False):
     evolution_best_editor_report: dict
     evolution_best_continuity_report: dict
 
-    # ── 旧版兼容字段（evolution_enabled=False 时使用）──
+    # ── 历史兼容字段（v2 图未使用，保留用于旧 checkpoint 反序列化）──
     retry_count: int
     rewrite_instructions: str | dict  # str | {"instructions": str, "constraints": dict}
 

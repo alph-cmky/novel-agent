@@ -13,6 +13,9 @@ wheels/
 .vscode/
 .idea/
 
+# Local agent process notes
+.superpowers/
+
 # OS
 .DS_Store
 Thumbs.db

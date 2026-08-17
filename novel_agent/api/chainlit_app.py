@@ -1,7 +1,7 @@
 """Chainlit Web UI for novel-agent — interactive chapter writing with HITL.
 
 Usage:
-    chainlit run novel_agent/api/app.py
+    chainlit run novel_agent/api/chainlit_app.py
 """
 
 import json

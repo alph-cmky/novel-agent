@@ -78,13 +78,8 @@ async def _drain_queue(queue: asyncio.Queue):
 
 _NODE_LABELS: dict[str, str] = {
     "orchestrator": "策略规划",
-    "writer": "内容创作",
-    "editor": "编辑审查",
-    "continuity": "一致性审计",
-    "orchestrator_review": "反馈分析",
     "worldbuilding": "世界观提取",
     "human_review": "人工审批",
-    # Evolution nodes
     "evolution_writer": "内容创作",
     "evolution_editor": "编辑审查",
     "evolution_continuity": "一致性审计",

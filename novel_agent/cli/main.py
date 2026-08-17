@@ -1,5 +1,6 @@
 """CLI entry point for novel-agent — service + operations."""
 
+import os
 from pathlib import Path
 
 import click
@@ -8,11 +9,13 @@ from novel_agent import __version__
 from novel_agent.api.routes import build_export_content
 from novel_agent.storage.manager import ProjectManager
 
-DEFAULT_PROJECT_DIR = Path.cwd() / "novel-data"
+
+def _default_project_dir() -> Path:
+    return Path(os.getenv("NOVEL_DATA_DIR", "./novel-data"))
 
 
 def _get_manager(project_dir: str | None) -> ProjectManager:
-    path = Path(project_dir) if project_dir else DEFAULT_PROJECT_DIR
+    path = Path(project_dir) if project_dir else _default_project_dir()
     return ProjectManager(path)
 
 
