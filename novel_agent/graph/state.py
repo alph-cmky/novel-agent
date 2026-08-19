@@ -27,6 +27,11 @@ class NovelState(TypedDict, total=False):
     continuity_report: dict
     worldbuilding_report: dict
     orchestrator_strategy: dict
+    skip_orchestrator: bool
+    skip_reviews: bool
+    skip_worldbuilding: bool
+    review_interval: int
+    skip_evolution_enrichment: bool
 
     # ── Orchestrator 注入的上下文 ──
     character_context: str
@@ -43,7 +48,6 @@ class NovelState(TypedDict, total=False):
     evolution_human_rejects: int          # 人类拒绝次数（最多3次）
 
     # ── 进化控制 ──
-    evolution_enabled: bool
     evolution_max_rounds: int             # 最大轮次，默认 5
     evolution_convergence_threshold: float  # 收敛阈值，默认 3.0
     evolution_round: int                  # 当前轮次 (0-based)
@@ -59,10 +63,11 @@ class NovelState(TypedDict, total=False):
     evolution_best_draft: str             # 最优版本完整文本（只在 state，最后落库）
     evolution_best_editor_report: dict
     evolution_best_continuity_report: dict
-
-    # ── 历史兼容字段（v2 图未使用，保留用于旧 checkpoint 反序列化）──
-    retry_count: int
-    rewrite_instructions: str | dict  # str | {"instructions": str, "constraints": dict}
+    evolution_best_quality_guard: dict
+    evolution_best_worldbuilding_report: dict
+    evolution_best_outline_coverage: float
+    evolution_best_required_facts_missing: int
+    quality_guard_report: dict
 
     # ── 存储路径 ──
     persist_dir: str

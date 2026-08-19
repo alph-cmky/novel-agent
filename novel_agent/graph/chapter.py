@@ -14,6 +14,7 @@ Evolution disabled (legacy):
 
 import asyncio
 import json as _json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Literal
@@ -37,18 +38,31 @@ from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.graph.evolution import (
     EvolutionConfig,
     build_improvement_plan_rule,
+    build_quality_guard_report,
+    check_quality_guards,
     composite_score,
     compute_delta,
     continuity_overall,
     decide_termination,
     editor_overall,
     extract_scores,
+    is_better_candidate,
 )
 from novel_agent.graph.state import NovelState
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.routing import ModelRouter, TaskClass
 
 router = ModelRouter()
+
+
+def _text_units(text: str) -> int:
+    """Count CJK characters or whitespace-delimited words for length guards."""
+    if not text:
+        return 0
+    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+    if cjk >= len(text) * 0.2:
+        return cjk
+    return len(re.findall(r"\b[\w']+\b", text))
 
 # ── Helpers ─────────────────────────────────────────────
 
@@ -165,6 +179,14 @@ def _format_improvement_plan(plan: dict | None, version: int) -> str:
 
 async def orchestrator_node(state: NovelState) -> dict:
     """Orchestrator analyzes narrative position and assembles context."""
+    if state.get("skip_orchestrator"):
+        return {
+            "orchestrator_strategy": {
+                "narrative_stage": "development",
+                "chapter_strategy": {"pacing": "normal"},
+                "context_needed": {},
+            }
+        }
     orchestrator = OrchestratorAgent(config=_config_for(TaskClass.STRUCTURAL))
     story_length = state.get("story_length", "long")
 
@@ -360,23 +382,28 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         content, trace = await writer.write(**write_args)
         tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
-    # 篇幅硬底线保障：若因 reasoning 偶发压缩导致输出严重不足（<600字且目标>=1000），原地补偿重写一次
-    min_required_words = max(600, int(target_words * 0.6))
-    if len(content.strip()) < min_required_words and target_words >= 1000:
-        print(f"  [Writer] 章节字数过短 ({len(content)} chars < {min_required_words})，触发保底补偿生成...")
+    # 篇幅硬底线保障：新版本至少保留目标的 85%，否则补偿生成一次。
+    content_units = _text_units(content.strip())
+    min_required_units = max(600, int(target_words * 0.85))
+    if content_units < min_required_units and target_words >= 1000:
+        print(
+            f"  [Writer] 章节篇幅过短 ({content_units} units < {min_required_units})，"
+            "触发保底补偿生成..."
+        )
         compensated_args = dict(write_args)
         compensated_args["rewrite_instructions"] = (
-            f"【紧急注意】：上一版输出字数严重不足（仅有 {len(content)} 字）。请务必充分展开场景细节、人物神态、环境氛围与多轮交锋对话，"
+            f"【紧急注意】：上一版输出篇幅严重不足（仅有 {content_units} units）。"
+            "请务必充分展开场景细节、人物神态、环境氛围与多轮交锋对话，"
             f"写满至少 {target_words} 字，严禁大纲式概括！\n" + (write_args.get("rewrite_instructions") or "")
         )
         content_comp, trace_comp = await writer.write(**compensated_args)
-        if len(content_comp.strip()) > len(content.strip()):
+        if _text_units(content_comp.strip()) > content_units:
             content = content_comp
             trace = trace_comp
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
     label = f"(v{evolution_version})"
-    wmsg = f"  [Writer] {len(content)} chars {label} "
+    wmsg = f"  [Writer] {len(content)} chars/{_text_units(content)} units {label} "
     wmsg += f"(target: {target_words}w, tokens: {tok_info})"
     print(wmsg)
     return {
@@ -440,6 +467,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     # ── Branch A: First round (no history) ──
     if not state.get("evolution_history"):
+        initial_guard = build_quality_guard_report(state, state)
         entry = {
             "v": version,
             "editor": current_scores["editor_overall"],
@@ -448,6 +476,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "dimensions": current_scores["dimensions"],
             "delta": None,
             "focus": None,
+            "quality_guard": initial_guard,
         }
 
         # Rule-based improvement plan for v0
@@ -455,20 +484,23 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
         # LLM enrichment (optional — fails gracefully to rule_plan)
         plan = rule_plan
-        try:
-            agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
-            enriched = await agent.enrich_plan(
-                current_version=version,
-                current_scores=current_scores,
-                delta=None,
-                rule_plan=rule_plan,
-                history=[],
-                draft_preview=state.get("draft_content", ""),
-            )
-            if enriched and enriched.get("primary_instruction"):
-                plan = enriched
-        except Exception:
-            pass
+        if state.get("evolution_max_rounds", 5) > 0 and not state.get(
+            "skip_evolution_enrichment"
+        ):
+            try:
+                agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
+                enriched = await agent.enrich_plan(
+                    current_version=version,
+                    current_scores=current_scores,
+                    delta=None,
+                    rule_plan=rule_plan,
+                    history=[],
+                    draft_preview=state.get("draft_content", ""),
+                )
+                if enriched and enriched.get("primary_instruction"):
+                    plan = enriched
+            except Exception:
+                pass
 
         editor_score = current_scores["editor_overall"]
         continuity_score = current_scores["continuity_overall"]
@@ -483,6 +515,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_best_draft": state.get("draft_content", ""),
             "evolution_best_editor_report": state.get("editor_report", {}),
             "evolution_best_continuity_report": state.get("continuity_report", {}),
+            "evolution_best_quality_guard": initial_guard,
+            "quality_guard_report": initial_guard,
             "evolution_improvement_plan": plan,
             "evolution_termination": "",
         }
@@ -504,10 +538,25 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "editor_report": best_ed_rpt,
         "continuity_report": best_ct_rpt,
     })
+    best_state = {
+        "draft_content": state.get("evolution_best_draft", ""),
+        "editor_report": best_ed_rpt,
+        "continuity_report": best_ct_rpt,
+        "worldbuilding_report": state.get("evolution_best_worldbuilding_report", {}),
+        "outline_coverage": state.get("evolution_best_outline_coverage"),
+        "required_facts_missing": state.get("evolution_best_required_facts_missing", 0),
+    }
+    guard_report = check_quality_guards(state, best_state, evo_config)
 
     # 1. Rule layer: termination decision
     termination, reason = decide_termination(
-        delta, current_scores, best_scores, state["evolution_history"], evo_config, current_round,
+        delta,
+        current_scores,
+        best_scores,
+        state["evolution_history"],
+        evo_config,
+        current_round,
+        guard_report,
     )
 
     # 2. Rule layer: improvement plan
@@ -515,7 +564,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     # 3. LLM enrichment (only if continuing)
     plan = rule_plan
-    if not termination:
+    if not termination and not state.get("skip_evolution_enrichment"):
         try:
             agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
             enriched = await agent.enrich_plan(
@@ -540,21 +589,27 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "dimensions": current_scores["dimensions"],
         "delta": delta,
         "focus": plan.get("focus_dimensions", []) if plan else [],
+        "quality_guard": guard_report,
     }
 
     result: dict = {
         "evolution_history": state["evolution_history"] + [new_entry],
         "evolution_termination": termination,
+        "quality_guard_report": guard_report,
     }
 
     # 5. Check if new best version
-    is_new_best = composite_score(current_scores) > composite_score(best_scores)
+    is_new_best, selection_report = is_better_candidate(state, best_state, evo_config)
     if is_new_best:
         result.update({
             "evolution_best_version": version,
             "evolution_best_draft": state.get("draft_content", ""),
             "evolution_best_editor_report": state.get("editor_report", {}),
             "evolution_best_continuity_report": state.get("continuity_report", {}),
+            "evolution_best_quality_guard": selection_report,
+            "evolution_best_worldbuilding_report": state.get("worldbuilding_report", {}),
+            "evolution_best_outline_coverage": state.get("outline_coverage"),
+            "evolution_best_required_facts_missing": state.get("required_facts_missing", 0),
         })
 
     # 6. If continuing, increment counters + issue plan
@@ -606,6 +661,8 @@ def select_best_version_node(state: NovelState) -> dict:
 
 async def worldbuilding_node(state: NovelState) -> dict:
     """Worldbuilding Agent extracts entities, conflicts, and foreshadowings."""
+    if state.get("skip_worldbuilding"):
+        return {"worldbuilding_report": {}}
     existing = state.get("existing_world_entities", [])
 
     persist_dir = state.get("persist_dir", "./novel-data")
@@ -730,10 +787,21 @@ def route_after_evolution(
         return "evolution_select_best"
 
     max_rounds = state.get("evolution_max_rounds", 5)
-    if state.get("evolution_round", 0) >= max_rounds:
+    # The first evolution_orchestrator pass records v0 and does not rewrite.
+    # max_rounds therefore counts actual Writer rewrites, not bookkeeping passes.
+    if max(state.get("evolution_round", 0) - 1, 0) >= max_rounds:
         return "evolution_select_best"
 
     return "evolution_writer"
+
+
+def route_after_writer(state: NovelState) -> Literal["evolution_editor", "worldbuilding"]:
+    """Fast evaluation profile skips reviews when no rewrite can consume them."""
+    interval = max(state.get("review_interval", 1), 1)
+    chapter_number = state.get("chapter_number", 1)
+    if state.get("skip_reviews") or chapter_number % interval != 0:
+        return "worldbuilding"
+    return "evolution_editor"
 
 
 def route_after_human_evolution(state: NovelState) -> Literal["__end__", "evolution_writer"]:
@@ -787,7 +855,11 @@ def _build_workflow() -> StateGraph:
     # 状态拓扑编排
     workflow.set_entry_point("orchestrator")
     workflow.add_edge("orchestrator", "evolution_writer")
-    workflow.add_edge("evolution_writer", "evolution_editor")
+    workflow.add_conditional_edges(
+        "evolution_writer",
+        route_after_writer,
+        {"evolution_editor": "evolution_editor", "worldbuilding": "worldbuilding"},
+    )
     workflow.add_edge("evolution_editor", "evolution_continuity")
     workflow.add_edge("evolution_continuity", "evolution_orchestrator")
     workflow.add_conditional_edges(
@@ -807,13 +879,8 @@ def _build_workflow() -> StateGraph:
     return workflow
 
 
-def build_chapter_graph(persist_dir: str = "", evolution_enabled: bool = True) -> StateGraph:
-    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit).
-
-    ``evolution_enabled`` is deprecated and kept only for backward compatibility
-    with older callers; the graph is always the evolution pipeline.
-    """
-    _ = evolution_enabled
+def build_chapter_graph(persist_dir: str = "") -> StateGraph:
+    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit)."""
     workflow = _build_workflow()
     checkpointer = _get_checkpointer(persist_dir)
     return workflow.compile(checkpointer=checkpointer)
@@ -860,14 +927,9 @@ async def aclose_checkpointers() -> None:
 
 
 async def build_chapter_graph_async(
-    persist_dir: str = "", evolution_enabled: bool = True,
+    persist_dir: str = "",
 ) -> StateGraph:
-    """Async version for SSE endpoints (uses AsyncSqliteSaver).
-
-    ``evolution_enabled`` is deprecated and kept only for backward compatibility
-    with older callers; the graph is always the evolution pipeline.
-    """
-    _ = evolution_enabled
+    """Async version for SSE endpoints (uses AsyncSqliteSaver)."""
     workflow = _build_workflow()
     checkpointer = await _get_checkpointer_async(persist_dir)
     return workflow.compile(checkpointer=checkpointer)
