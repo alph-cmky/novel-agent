@@ -84,12 +84,10 @@ graph TD
 | Writer | 章节创作 + 去 AI 味规则 + 工具调用 | Quality |
 | Editor | 5 维度审查（节奏、AI 味、对话、逻辑、文笔） | Budget |
 | Continuity | 跨章节一致性审计（角色、时间线、世界观规则） | Budget |
-| EvolutionOrchestrator | 元评估：版本对比、Delta 分析、终止判断、改进计划 | Budget |
-| SelectBest | 选择最优版本，一次性落库 | —（规则层） |
+| EvolutionOrchestrator | 元评估：版本对比、Delta 分析、硬约束检查、终止判断、改进计划 | Budget |
+| SelectBest | 硬约束优先 + 多目标选择（Pareto → 综合分兜底），一次性落库 | —（规则层） |
 | Worldbuilding | 实体提取、冲突检测、持久化到 SQLite | Budget |
 | Human Review | LangGraph `interrupt()` — 暂停流水线，等待人类输入 | — |
-
-> `evolution_enabled` 参数已弃用，仅为兼容旧调用方保留；流水线始终使用递归自进化图。
 
 ## 快速开始
 
@@ -181,9 +179,46 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 
 流水线内建自动迭代与人工审批两层机制，自动修复不动的才交给人。
 
-**进化子图** — 每轮 `Writer → Editor → Continuity` 产出评估报告，`EvolutionOrchestrator` 对比上轮计算各维度 Delta，生成结构化 `improvement_plan`（focus_dimensions + preserve + avoid）驱动下一轮创作。进化过程中不写 DB（只存 LangGraph checkpoint），结束一次性落库。默认最多 5 轮，7 种终止条件：单维度崩溃、Editor 暴跌、综合退化、天花板、最大轮次、收敛、平台期。
+**进化子图** — 每轮 `Writer → Editor → Continuity` 产出评估报告，`EvolutionOrchestrator` 对比上轮计算各维度 Delta，生成结构化 `improvement_plan`（focus_dimensions + preserve + avoid）驱动下一轮创作。进化过程中不写 DB（只存 LangGraph checkpoint），结束一次性落库。
+
+**max_rounds 语义** — `max_rounds` 计数 Writer 的真实重写次数，不含首次评估记录：
+- `max_rounds=0`：只生成初稿，不进行任何重写
+- `max_rounds=1`：允许一次真实重写
+- `max_rounds=2`：允许两次真实重写
+
+**终止条件** — 8 种终止状态（按优先级）：
+
+| 终止状态 | 触发条件 |
+|---------|---------|
+| `hard_constraint_violation` | 篇幅低于最优版本 85%、一致性错误增加、大纲覆盖率下降 |
+| `quality_regression` | 单维度或 Editor 总分暴跌超过阈值 |
+| `regressed` | 综合分低于历史最优 5 分以上 |
+| `ceiling` | 所有维度均超 90 分 |
+| `max_rounds` | 达到最大重写轮次 |
+| `convergence` | 所有维度 Delta 绝对值低于阈值 |
+| `plateau` | 连续 2 轮所有 Delta 均低于阈值 |
+| `timeout` / `rate_limited` | 外部调用超时或触发频率限制 |
+
+**硬约束（Quality Guards）** — 版本选择优先检查硬约束，不通过则拒绝替换最优版本：
+- 篇幅不得低于最优版本的 85%
+- 不得引入新的 critical / major 一致性错误
+- 大纲覆盖率不得下降
+- 必要事实不得丢失
+
+**版本选择（SelectBest）** — 硬约束通过后，使用 Pareto + 综合分兜底的多目标选择：所有维度不退化且至少一个维度提升 → 直接接受；否则按加权综合分决定。
 
 **人工审批** — 进化终止后，流水线在 `Human Review` 节点暂停，等待人类决定。Web UI 按钮式审批（Approve/Reject），Chainlit 对话式审批，均可附带修改意见触发新一轮进化（拒绝后最多再迭代 2 轮，累计最多 3 次拒绝）。
+
+### Fast Profile
+
+长篇场景下可启用 fast profile 降低单章耗时：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `skip_reviews` | 跳过 Editor + Continuity 审查 | `false` |
+| `review_interval` | 每 N 章执行一次完整审查 | `1` |
+| `skip_worldbuilding` | 跳过 Worldbuilding 实体提取 | `false` |
+| `skip_evolution_enrichment` | 关闭 EvolutionOrchestrator 的 LLM enrichment | `false` |
 
 ### 双层记忆
 
