@@ -5,12 +5,14 @@ from novel_agent.graph.evolution import (
     EDITOR_DIMENSIONS,
     EvolutionConfig,
     build_improvement_plan_rule,
+    check_quality_guards,
     composite_score,
     compute_delta,
     continuity_overall,
     decide_termination,
     editor_overall,
     extract_scores,
+    is_better_candidate,
 )
 
 
@@ -228,7 +230,7 @@ class TestDecideTermination:
         assert reason == ""
 
     def test_crash_single_dimension(self):
-        """Any dimension delta < -10 → crash."""
+        """Any dimension delta < -10 → quality regression."""
         reason, detail = decide_termination(
             delta=self._delta(ai_flavor=-15),
             current_scores=self._scores(ai_flavor=55),
@@ -236,7 +238,7 @@ class TestDecideTermination:
             history=[],
             current_round=1,
         )
-        assert reason == "crash"
+        assert reason == "quality_regression"
         assert "ai_flavor" in detail
 
     def test_max_rounds(self):
@@ -277,7 +279,7 @@ class TestDecideTermination:
         assert reason == "ceiling"
 
     def test_regression_vs_best(self):
-        """Composite drops below best-5 → regressed."""
+        """Composite drops below best-5 → quality regression."""
         # current composite should be lower than best composite
         reason, _ = decide_termination(
             delta=self._delta(editor=-15),
@@ -286,7 +288,7 @@ class TestDecideTermination:
             history=[],
             current_round=2,
         )
-        assert reason in ("crash", "regressed")
+        assert reason == "quality_regression"
 
     def test_editor_unavailable_skips_degradation(self):
         """editor 评估不可用时跳过 crash/regressed 终止，仅保留 max_rounds。"""
@@ -364,6 +366,54 @@ class TestBuildImprovementPlan:
         }
         plan = build_improvement_plan_rule(current, delta=delta)
         assert "rhythm" in plan["focus_dimensions"]  # regressed
+
+
+def _candidate_state(content: str, *, critical: int = 0, outline: float = 1.0):
+    return {
+        "draft_content": content,
+        "outline_coverage": outline,
+        "editor_report": {
+            "overall_score": 80,
+            "outline_coverage": outline,
+            "dimensions": {
+                "rhythm": 80,
+                "ai_flavor": 80,
+                "dialogue": 80,
+                "logic": 80,
+                "writing": 80,
+            },
+        },
+        "continuity_report": {
+            "overall_score": 80,
+            "inconsistencies": [
+                {"severity": "critical", "category": "timeline"}
+            ] * critical,
+        },
+    }
+
+
+def test_quality_guard_rejects_length_regression():
+    best = _candidate_state("x" * 100)
+    current = _candidate_state("x" * 50)
+    report = check_quality_guards(current, best)
+    assert report["passed"] is False
+    assert "length_regression" in report["violations"]
+
+
+def test_quality_guard_rejects_new_critical_error():
+    best = _candidate_state("x" * 100)
+    current = _candidate_state("x" * 100, critical=1)
+    report = check_quality_guards(current, best)
+    assert report["passed"] is False
+    assert "critical_consistency_regression" in report["violations"]
+
+
+def test_better_candidate_requires_guards_before_composite():
+    best = _candidate_state("x" * 100)
+    current = _candidate_state("x" * 50)
+    accepted, report = is_better_candidate(current, best)
+    assert accepted is False
+    assert report["passed"] is False
 
     def test_preserve_improved_dimensions(self):
         """Dimensions that improved >+3 should be in preserve."""
