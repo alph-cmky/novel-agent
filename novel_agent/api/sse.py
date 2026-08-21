@@ -66,6 +66,37 @@ def _sse_event(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _review_payload(values: dict, chapter_number: int) -> dict:
+    wb = values.get("worldbuilding_report", {}) or {}
+    ed = values.get("editor_report", {}) or {}
+    ct = values.get("continuity_report", {}) or {}
+    return {
+        "type": "human_review",
+        "chapter_number": chapter_number,
+        "draft_preview": values.get("draft_content", "")[:1000],
+        "draft_full": values.get("draft_content", ""),
+        "editor_score": ed.get("overall_score", 0),
+        "continuity_score": ct.get("overall_score", 0),
+        "editor_issues": ed.get("issues", [])[:10],
+        "continuity_issues": ct.get("inconsistencies", [])[:10],
+        "wb_new_entities": len(wb.get("new_entities", [])),
+        "wb_conflicts": len(wb.get("conflicts", [])),
+        "retry_count": values.get("retry_count", 0),
+        "evolution_rounds": len(values.get("evolution_history", [])),
+        "evolution_termination": values.get("evolution_termination", ""),
+    }
+
+
+async def replay_review(values: dict, chapter_number: int):
+    """Re-send a persisted human-review checkpoint after a process restart."""
+    yield _sse_event("start", {"message": "恢复人工审批..."})
+    yield _sse_event("progress", {
+        "node": "human_review", "label": "人工审批", "status": "running",
+        "score": None, "detail": None,
+    })
+    yield _sse_event("review_required", _review_payload(values, chapter_number))
+
+
 async def _drain_queue(queue: asyncio.Queue):
     """Drain chunk events from the queue, yielding SSE strings."""
     try:
@@ -221,34 +252,21 @@ async def create_sse_stream(
         if final_state and final_state.next:
             # Graph is paused at human_review — build payload from state
             vals = final_state.values or {}
-            wb = vals.get("worldbuilding_report", {})
-            ed = vals.get("editor_report", {})
-            ct = vals.get("continuity_report", {})
             yield _sse_event("progress", {
                 "node": "human_review", "label": "人工审批", "status": "running",
                 "score": None, "detail": None,
             })
-            yield _sse_event("review_required", {
-                "type": "human_review",
-                "chapter_number": chapter_number,
-                "draft_preview": vals.get("draft_content", "")[:1000],
-                "draft_full": vals.get("draft_content", ""),
-                "editor_score": ed.get("overall_score", 0),
-                "continuity_score": ct.get("overall_score", 0),
-                "editor_issues": ed.get("issues", [])[:10],
-                "continuity_issues": ct.get("inconsistencies", [])[:10],
-                "wb_new_entities": len(wb.get("new_entities", [])),
-                "wb_conflicts": len(wb.get("conflicts", [])),
-                "retry_count": vals.get("retry_count", 0),
-                "evolution_rounds": len(vals.get("evolution_history", [])),
-                "evolution_termination": vals.get("evolution_termination", ""),
-            })
+            yield _sse_event("review_required", _review_payload(vals, chapter_number))
         else:
             # Graph completed normally
             if final_state and final_state.values:
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
-            yield _sse_event("done", {"chapter_content": "", "status": "completed"})
+            status = (
+                "approved" if (final_state and final_state.values or {}).get("human_approved")
+                else "draft"
+            )
+            yield _sse_event("done", {"chapter_content": "", "status": status})
             store.remove(session_id)
 
     except GraphInterrupt as gi:
@@ -270,6 +288,7 @@ async def create_sse_stream(
         running.clear()
         await drain_task
         traceback.print_exc()
+        mgr.mark_chapter_failed(project_id, chapter_number)
         yield _sse_event("error", {"message": str(e), "node": current_node})
         store.remove(session_id)
     finally:
@@ -345,32 +364,21 @@ async def resume_graph(
         final_state = await graph.aget_state(config)
         if final_state and final_state.next:
             vals = final_state.values or {}
-            wb = vals.get("worldbuilding_report", {})
-            ed = vals.get("editor_report", {})
-            ct = vals.get("continuity_report", {})
             yield _sse_event("progress", {
                 "node": "human_review", "label": "人工审批", "status": "running",
                 "score": None, "detail": None,
             })
-            yield _sse_event("review_required", {
-                "type": "human_review",
-                "chapter_number": chapter_number,
-                "draft_preview": vals.get("draft_content", "")[:1000],
-                "draft_full": vals.get("draft_content", ""),
-                "editor_score": ed.get("overall_score", 0),
-                "continuity_score": ct.get("overall_score", 0),
-                "editor_issues": ed.get("issues", [])[:10],
-                "continuity_issues": ct.get("inconsistencies", [])[:10],
-                "wb_new_entities": len(wb.get("new_entities", [])),
-                "wb_conflicts": len(wb.get("conflicts", [])),
-                "retry_count": vals.get("retry_count", 0),
-            })
+            yield _sse_event("review_required", _review_payload(vals, chapter_number))
         else:
             # Graph completed normally
             if final_state and final_state.values:
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
-            yield _sse_event("done", {"chapter_content": "", "status": "completed"})
+            status = (
+                "approved" if (final_state and final_state.values or {}).get("human_approved")
+                else "draft"
+            )
+            yield _sse_event("done", {"chapter_content": "", "status": status})
             store.remove(session_id)
 
     except GraphInterrupt as gi:
@@ -397,6 +405,8 @@ async def resume_graph(
             async for s in _drain_queue(queue):
                 yield s
         traceback.print_exc()
+        if mgr:
+            mgr.mark_chapter_failed(project_id, chapter_number)
         yield _sse_event("error", {"message": str(e), "node": current_node})
         store.remove(session_id)
     finally:
@@ -423,30 +433,40 @@ def _save_foreshadowings(
     wb_report: dict,
 ) -> None:
     """Persist new and resolved foreshadowings from worldbuilding report."""
-    # Save new foreshadowings
+    # Upsert open foreshadowings so progress does not create duplicates.
     for fs in wb_report.get("foreshadowings", []) or []:
         if not isinstance(fs, dict) or not fs.get("description"):
             continue
         try:
-            mgr.add_foreshadowing(
-                project_id=project_id,
-                description=str(fs["description"]),
-                planted_chapter=int(fs.get("planted_chapter", chapter_number)),
+            description = str(fs["description"])
+            planted = int(fs.get("planted_chapter", chapter_number))
+            changed = mgr.update_foreshadowing_status(
+                project_id, description, planted,
+                status="open",
                 expected_resolve_chapter=(
                     int(fs["expected_resolve_chapter"])
                     if fs.get("expected_resolve_chapter") else None
                 ),
                 risk_level=str(fs.get("risk_level", "medium")),
+                action_needed=str(fs.get("action_needed", "maintain")),
                 reader_knows=bool(fs.get("reader_knows", False)),
-                characters_aware=(
-                    fs["characters_aware"] if isinstance(fs.get("characters_aware"), list) else []
-                ),
-                characters_unaware=(
-                    fs["characters_unaware"]
-                    if isinstance(fs.get("characters_unaware"), list)
-                    else []
-                ),
+                characters_aware=fs.get("characters_aware", []),
+                characters_unaware=fs.get("characters_unaware", []),
             )
+            if not changed:
+                mgr.add_foreshadowing(
+                    project_id=project_id, description=description,
+                    planted_chapter=planted,
+                    expected_resolve_chapter=(
+                        int(fs["expected_resolve_chapter"])
+                        if fs.get("expected_resolve_chapter") else None
+                    ),
+                    risk_level=str(fs.get("risk_level", "medium")),
+                    action_needed=str(fs.get("action_needed", "maintain")),
+                    reader_knows=bool(fs.get("reader_knows", False)),
+                    characters_aware=fs.get("characters_aware", []),
+                    characters_unaware=fs.get("characters_unaware", []),
+                )
         except Exception:
             pass
 
@@ -458,7 +478,10 @@ def _save_foreshadowings(
             mgr.update_foreshadowing_status(
                 project_id=project_id,
                 description=str(fs["description"]),
-                planted_chapter=int(fs.get("planted_chapter", 0)),
+                planted_chapter=(
+                    int(fs["planted_chapter"])
+                    if fs.get("planted_chapter") is not None else None
+                ),
                 status="resolved",
                 resolved_chapter=chapter_number,
             )
@@ -477,11 +500,10 @@ def _save_chapter_result(
     continuity_report = result.get("continuity_report", {})
     outline = result.get("chapter_outline", "")
 
-    status = (
-        ChapterStatus.APPROVED.value
-        if result.get("human_approved")
-        else ChapterStatus.DRAFT.value
-    )
+    approved = bool(result.get("human_approved"))
+    # Commit the durable record as a draft first. Approval is published only
+    # after world state and vector indexing have succeeded.
+    status = ChapterStatus.DRAFT.value
 
     # Build evolution summary from state
     evolution_history = result.get("evolution_history", [])
@@ -506,6 +528,7 @@ def _save_chapter_result(
         continuity_report=json.dumps(continuity_report, ensure_ascii=False),
         version=version,
         evolution_summary=evolution_summary,
+        index=False,
     )
 
     # Save worldbuilding report to chapter record
@@ -513,8 +536,36 @@ def _save_chapter_result(
 
     # Save world entities
     if wb_report:
-        mgr.save_world_entities(project_id, wb_report)
+        mgr.save_world_entities(project_id, wb_report, chapter_number)
         mgr.save_world_relations(project_id, chapter_number, wb_report)
 
     # Save foreshadowing lifecycle
     _save_foreshadowings(mgr, project_id, chapter_number, wb_report)
+
+    if approved:
+        # Index before publishing the approved status. A vector-store failure
+        # therefore leaves a retryable draft instead of a false approval.
+        mgr.save_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            outline=outline,
+            draft_content=draft,
+            status=ChapterStatus.DRAFT.value,
+            editor_report=json.dumps(editor_report, ensure_ascii=False),
+            continuity_report=json.dumps(continuity_report, ensure_ascii=False),
+            version=version,
+            evolution_summary=evolution_summary,
+            index=True,
+        )
+        mgr.save_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            outline=outline,
+            draft_content=draft,
+            status=ChapterStatus.APPROVED.value,
+            editor_report=json.dumps(editor_report, ensure_ascii=False),
+            continuity_report=json.dumps(continuity_report, ensure_ascii=False),
+            version=version,
+            evolution_summary=evolution_summary,
+            index=False,
+        )

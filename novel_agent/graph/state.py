@@ -46,6 +46,7 @@ class NovelState(TypedDict, total=False):
     human_approved: bool
     human_feedback: dict
     evolution_human_rejects: int          # 人类拒绝次数（最多3次）
+    human_review_exhausted: bool
 
     # ── 进化控制 ──
     evolution_max_rounds: int             # 最大轮次，默认 5

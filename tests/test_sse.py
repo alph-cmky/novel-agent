@@ -6,7 +6,7 @@ SessionStore 必须提供幂等的 remove 能力，供会话完成 / 异常后�
 
 import asyncio
 
-from novel_agent.api.sse import SessionStore
+from novel_agent.api.sse import SessionStore, replay_review
 
 
 class TestSessionStore:
@@ -64,3 +64,12 @@ class TestSessionStore:
         # 对不存在的会话 set 不应抛异常
         store.set_config("missing", {"x": 1})
         store.set_context("missing", "p", 1)
+
+
+async def test_replay_review_emits_persisted_checkpoint():
+    events = [event async for event in replay_review(
+        {"draft_content": "恢复正文", "editor_report": {"overall_score": 80}}, 2
+    )]
+
+    assert 'event: review_required' in events[-1]
+    assert '恢复正文' in events[-1]

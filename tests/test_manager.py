@@ -69,6 +69,17 @@ class TestChapterCRUD:
         mgr.save_chapter(pid, 2, status=ChapterStatus.APPROVED.value)
         assert mgr.get_chapter_count(pid) == 1  # 只数 approved
 
+    def test_mark_chapter_failed_updates_chapter_and_outline(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_outline(pid, [{"chapter_number": 1, "title": "开篇"}])
+
+        mgr.mark_chapter_failed(pid, 1)
+
+        assert mgr.get_chapter(pid, 1)["status"] == "failed"
+        assert mgr.get_outline(pid)[0]["status"] == "failed"
+        assert mgr.get_chapter_count(pid) == 0
+
 
 class TestForeshadowing:
     def test_lifecycle(self, tmp_path):
@@ -93,6 +104,17 @@ class TestForeshadowing:
         assert ok is True
         assert mgr.get_foreshadowings(pid)[0]["status"] == "resolved"
 
+    def test_update_can_match_resolution_without_planted_chapter(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.add_foreshadowing(pid, "暗门", planted_chapter=2)
+        assert mgr.update_foreshadowing_status(
+            pid, "暗门", status="resolved", resolved_chapter=6
+        )
+        fs = mgr.get_foreshadowings(pid)[0]
+        assert fs["status"] == "resolved"
+        assert fs["resolved_chapter"] == 6
+
 
 class TestWorldEntities:
     def test_save_and_dedup(self, tmp_path):
@@ -115,6 +137,22 @@ class TestWorldEntities:
         ents = mgr.get_all_world_entities(pid)
         assert len(ents) == 1
         assert '"age": 21' in ents[0]["properties"]
+
+    def test_updates_merge_properties_and_preserve_first_appearance(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_world_entities(pid, {
+            "new_entities": [{"entity_type": "item", "name": "玉佩",
+                              "properties": {"颜色": "青"}}],
+        }, chapter_number=2)
+        mgr.save_world_entities(pid, {
+            "updated_entities": [{"entity_type": "item", "name": "玉佩",
+                                  "properties": {"主人": "林风"}}],
+        }, chapter_number=8)
+        entity = mgr.get_all_world_entities(pid)[0]
+        assert entity["first_appearance_chapter"] == 2
+        assert '"颜色": "青"' in entity["properties"]
+        assert '"主人": "林风"' in entity["properties"]
 
 
 class TestOutline:

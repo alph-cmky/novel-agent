@@ -74,6 +74,28 @@ class TestEditorReview:
 
 
 class TestOrchestratorPromptHelpers:
+    def test_analyze_includes_story_length_and_foreshadowings(self):
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=4,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                    character_context="",
+                    world_context="",
+                    story_length="short",
+                    unresolved_foreshadowings=["[第1章] 神秘信物"],
+                )
+            )
+        prompt = mocked.call_args.args[0][1]["content"]
+        assert "篇幅：短篇" in prompt
+        assert "神秘信物" in prompt
+
     def test_mode_instruction_none(self):
         assert OrchestratorAgent._build_mode_instruction(None) == ""
 
@@ -135,3 +157,13 @@ class TestWorldbuildingExtract:
             report, _ = asyncio.run(agent.extract(chapter_number=1, draft_content="正文"))
         # parse_validated 会按 schema 补齐字段，这里只断言关键字段被保留
         assert report["new_entities"][0]["name"] == "林风"
+
+    def test_extracts_complete_long_chapter(self):
+        content = "前文" + ("铺垫" * 2500) + "尾部关键设定"
+        agent = WorldbuildingAgent()
+        with patch.object(
+            agent, "run_with_tools",
+            new=AsyncMock(return_value=('{"new_entities": []}', None)),
+        ) as mocked:
+            asyncio.run(agent.extract(chapter_number=1, draft_content=content))
+        assert "尾部关键设定" in mocked.call_args.args[0][1]["content"]

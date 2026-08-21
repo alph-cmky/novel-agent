@@ -151,7 +151,9 @@ class WorldbuildingReport(BaseModel):
     new_entities: list[WorldEntity] = Field(default_factory=list)
     conflicts: list[WorldbuildingConflict] = Field(default_factory=list)
     chapter_events: list[str] = Field(default_factory=list)
-    updated_entities: list[str] = Field(default_factory=list)
+    # Existing entities may be reported by name for compatibility, or with
+    # properties that should be merged into the stored entity.
+    updated_entities: list[dict[str, Any] | str] = Field(default_factory=list)
     # Foreshadowing lifecycle — extracted by WorldbuildingAgent
     foreshadowings: list[dict[str, Any]] = Field(default_factory=list)
     resolved_foreshadowings: list[dict[str, Any]] = Field(default_factory=list)

@@ -208,6 +208,7 @@ class OrchestratorAgent(BaseAgent):
         narrative_mode: str | None = None,
         narrative_perspective: str = "",
         arc_summary: str = "",
+        unresolved_foreshadowings: list[str] | None = None,
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
@@ -220,7 +221,13 @@ class OrchestratorAgent(BaseAgent):
             f"第{c.get('chapter_number', '?')}章" for c in recent
         )
 
-        length_label = "长篇"
+        length_label = {
+            "short": "短篇",
+            "medium": "中篇",
+            "long": "长篇",
+        }.get(story_length, story_length or "长篇")
+        unresolved = unresolved_foreshadowings or []
+        foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
@@ -242,6 +249,7 @@ class OrchestratorAgent(BaseAgent):
                     f"## 世界观设定\n{world_context or '暂无'}\n\n"
                     f"## 已有章节\n{recent_titles or '无'}\n\n"
                     f"{arc_summary}\n\n"
+                    f"## 待回收伏笔\n{foreshadowing_context or '暂无'}\n\n"
                     f"只输出JSON。"
                 ),
             },

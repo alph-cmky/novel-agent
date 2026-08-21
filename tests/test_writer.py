@@ -64,11 +64,11 @@ class TestWriteToolHint:
     """
 
     @staticmethod
-    def _capture_user_prompt(writer: WriterAgent) -> str:
+    def _capture_user_prompt(writer: WriterAgent, **kwargs) -> str:
         with patch.object(
             writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
         ) as mocked:
-            asyncio.run(writer.write(chapter_number=1, outline="大纲"))
+            asyncio.run(writer.write(chapter_number=1, outline="大纲", **kwargs))
         return mocked.call_args.args[0][1]["content"]
 
     def test_no_tool_uses_direct_output_hint(self):
@@ -82,6 +82,14 @@ class TestWriteToolHint:
         user = self._capture_user_prompt(writer)
         assert "search_context" in user
         assert "直接输出章节正文" not in user
+
+    def test_unresolved_foreshadowings_are_injected(self):
+        user = self._capture_user_prompt(
+            WriterAgent(),
+            unresolved_foreshadowings=["[第1章] 神秘信物"],
+        )
+        assert "待回收伏笔" in user
+        assert "神秘信物" in user
 
 
 class TestImprovementPlanFormatting:

@@ -71,7 +71,13 @@ WORLDBUILDING_SYSTEM_PROMPT = """你是一个小说世界观管理员，负责�
     }
   ],
   "chapter_events": ["本章发生的关键事件"],
-  "updated_entities": ["设定有更新或进展的已有实体"],
+  "updated_entities": [
+    {
+      "entity_type": "character|location|faction|rule|item|event",
+      "name": "已有实体名称",
+      "properties": {"发生变化的属性": "新值"}
+    }
+  ],
   "foreshadowings": [
     {
       "description": "伏笔描述",
@@ -159,7 +165,7 @@ class WorldbuildingAgent(BaseAgent):
                     f"{mode_hint}\n"
                     f"## 已有设定\n{existing_json}\n\n"
                     f"{fs_context}"
-                    f"## 本章正文\n{draft_content[:4000]}\n\n"
+                    f"## 本章正文\n{draft_content}\n\n"
                     f"只输出JSON。"
                 ),
             },

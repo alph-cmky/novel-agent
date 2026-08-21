@@ -96,7 +96,7 @@ class TestRouteAfterHumanEvolution:
         result = route_after_human_evolution(self._evo_state(approved=False, rejects=0))
         assert result == "evolution_writer"
 
-    def test_rejected_3_times_force_ends(self):
-        """Safety valve: 3 rejects → force end."""
+    def test_rejected_3_times_ends_as_unapproved_draft(self):
+        """Reject limit ends the run without turning rejection into approval."""
         result = route_after_human_evolution(self._evo_state(approved=False, rejects=3))
         assert result == "__end__"

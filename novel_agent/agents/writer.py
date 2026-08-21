@@ -83,6 +83,7 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 0,
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
+        unresolved_foreshadowings: list[str] | None = None,
     ) -> tuple[str, TraceStep]:
         """Generate a chapter.
 
@@ -112,6 +113,11 @@ class WriterAgent(BaseAgent):
             context_parts.append(f"## 世界观设定\n{world_context}")
         if recent_summary:
             context_parts.append(f"## 前文提要\n{recent_summary}")
+        if unresolved_foreshadowings:
+            context_parts.append(
+                "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
+                + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
+            )
 
         # 仅当 search_context 工具已注册（project_id 非空）才提示使用工具；
         # 否则（评测/无项目库场景）模型无法调用工具，会输出 <search_context> 文本
@@ -145,6 +151,7 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 0,
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
+        unresolved_foreshadowings: list[str] | None = None,
     ) -> AsyncIterator[str]:
         """Generate a chapter with streaming output. Yields text chunks.
 
@@ -163,6 +170,11 @@ class WriterAgent(BaseAgent):
             context_parts.append(f"## 世界观设定\n{world_context}")
         if recent_summary:
             context_parts.append(f"## 前文提要\n{recent_summary}")
+        if unresolved_foreshadowings:
+            context_parts.append(
+                "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
+                + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
+            )
 
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"

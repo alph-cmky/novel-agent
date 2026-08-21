@@ -95,6 +95,7 @@ class ProjectManager:
         continuity_report: str = "{}",
         version: int = 0,
         evolution_summary: str = "{}",
+        index: bool = True,
     ) -> str:
         """Save a chapter. Returns chapter_id."""
         chapter_id = str(uuid.uuid4())[:8]
@@ -136,7 +137,7 @@ class ProjectManager:
             )
 
         # Index in ChromaDB
-        if draft_content:
+        if draft_content and index:
             self.chapter_store.index_chapter(project_id, chapter_number, draft_content)
 
         return chapter_id
@@ -166,6 +167,30 @@ class ProjectManager:
                 (project_id, chapter_number),
             ).fetchone()
         return dict(row) if row else None
+
+    def mark_chapter_failed(self, project_id: str, chapter_number: int) -> None:
+        """Persist a failed run without discarding an existing approved chapter."""
+        existing = self.get_chapter(project_id, chapter_number)
+        if existing and existing.get("status") == ChapterStatus.APPROVED.value:
+            return
+        if existing:
+            with self._conn() as conn:
+                conn.execute(
+                    "UPDATE chapters SET status = ?, updated_at = datetime('now') "
+                    "WHERE project_id = ? AND chapter_number = ?",
+                    (ChapterStatus.FAILED.value, project_id, chapter_number),
+                )
+                conn.execute(
+                    "UPDATE outlines SET status = ? WHERE project_id = ? "
+                    "AND chapter_number = ?",
+                    (OutlineStatus.FAILED.value, project_id, chapter_number),
+                )
+            return
+        self.save_chapter(
+            project_id,
+            chapter_number,
+            status=ChapterStatus.FAILED.value,
+        )
 
     def get_all_chapters(self, project_id: str) -> list[dict]:
         with self._conn() as conn:
@@ -263,45 +288,66 @@ class ProjectManager:
         self,
         project_id: str,
         worldbuilding_report: dict,
+        chapter_number: int | None = None,
     ) -> int:
-        """Persist extracted world entities to SQLite. Returns count of saved entities."""
+        """Persist new and updated entities, preserving history and merging properties."""
         import json
 
-        new_entities = worldbuilding_report.get("new_entities", [])
-        if not new_entities:
+        new_entities = worldbuilding_report.get("new_entities", []) or []
+        updated_entities = worldbuilding_report.get("updated_entities", []) or []
+        if not new_entities and not updated_entities:
             return 0
 
         with self._conn() as conn:
             saved = 0
-            for entity in new_entities:
+            entities = list(new_entities) + list(updated_entities)
+            for entity in entities:
+                if isinstance(entity, str):
+                    entity = {"name": entity}
+                if not isinstance(entity, dict):
+                    continue
                 entity_type = entity.get("entity_type", "unknown")
                 name = entity.get("name", "")
                 if not name:
                     continue
-                props = json.dumps(
-                    entity.get("properties", {}), ensure_ascii=False
-                )
-                chapter = entity.get("first_appearance_chapter", 0)
+                incoming = entity.get("properties", {})
+                incoming = incoming if isinstance(incoming, dict) else {}
+                chapter = entity.get("first_appearance_chapter") or chapter_number or 0
 
-                existing = conn.execute(
-                    "SELECT id FROM world_entities "
-                    "WHERE project_id = ? AND entity_type = ? AND name = ?",
-                    (project_id, entity_type, name),
-                ).fetchone()
+                if entity_type == "unknown":
+                    existing = conn.execute(
+                        "SELECT id, properties, first_appearance_chapter FROM world_entities "
+                        "WHERE project_id = ? AND name = ? ORDER BY id LIMIT 1",
+                        (project_id, name),
+                    ).fetchone()
+                else:
+                    existing = conn.execute(
+                        "SELECT id, properties, first_appearance_chapter FROM world_entities "
+                        "WHERE project_id = ? AND entity_type = ? AND name = ?",
+                        (project_id, entity_type, name),
+                    ).fetchone()
 
                 if existing:
+                    try:
+                        current = json.loads(existing["properties"] or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        current = {}
+                    merged = current if isinstance(current, dict) else {}
+                    merged.update(incoming)
+                    first_chapter = existing["first_appearance_chapter"] or chapter
                     conn.execute(
                         "UPDATE world_entities "
                         "SET properties = ?, first_appearance_chapter = ? "
                         "WHERE id = ?",
-                        (props, chapter, existing["id"]),
+                        (json.dumps(merged, ensure_ascii=False), first_chapter, existing["id"]),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO world_entities "
                         "(id, project_id, entity_type, name, properties, first_appearance_chapter) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
-                        (str(uuid.uuid4())[:8], project_id, entity_type, name, props, chapter),
+                        (str(uuid.uuid4())[:8], project_id, entity_type, name,
+                         json.dumps(incoming, ensure_ascii=False), chapter),
                     )
                 saved += 1
 
@@ -432,6 +478,7 @@ class ProjectManager:
         planted_chapter: int,
         expected_resolve_chapter: int | None = None,
         risk_level: str = "medium",
+        action_needed: str = "maintain",
         reader_knows: bool = False,
         characters_aware: list[str] | None = None,
         characters_unaware: list[str] | None = None,
@@ -444,11 +491,11 @@ class ProjectManager:
             conn.execute(
                 "INSERT INTO foreshadowings "
                 "(id, project_id, description, planted_chapter, "
-                "expected_resolve_chapter, status, risk_level, reader_knows, "
-                "characters_aware, characters_unaware) "
-                "VALUES (?, ?, ?, ?, ?, 'planted', ?, ?, ?, ?)",
-                (fid, project_id, description, planted_chapter,
-                 expected_resolve_chapter, risk_level,
+                 "expected_resolve_chapter, status, risk_level, action_needed, reader_knows, "
+                 "characters_aware, characters_unaware) "
+                 "VALUES (?, ?, ?, ?, ?, 'planted', ?, ?, ?, ?, ?)",
+                 (fid, project_id, description, planted_chapter,
+                  expected_resolve_chapter, risk_level, action_needed,
                  1 if reader_knows else 0,
                  _json.dumps(characters_aware or [], ensure_ascii=False),
                  _json.dumps(characters_unaware or [], ensure_ascii=False)),
@@ -459,7 +506,7 @@ class ProjectManager:
         self,
         project_id: str,
         description: str,
-        planted_chapter: int,
+        planted_chapter: int | None = None,
         **kwargs,
     ) -> bool:
         """Update foreshadowing lifecycle fields (risk_level, action_needed, etc.)."""
@@ -476,11 +523,15 @@ class ProjectManager:
         for i, (k, v) in enumerate(list(updates.items())):
             if k in ("characters_aware", "characters_unaware") and isinstance(v, list):
                 values[i] = _json.dumps(v, ensure_ascii=False)
-        values.extend([project_id, description, planted_chapter])
+        values.extend([project_id, description])
+        where = "project_id = ? AND description = ?"
+        if planted_chapter is not None:
+            values.append(planted_chapter)
+            where += " AND planted_chapter = ?"
         with self._conn() as conn:
             cur = conn.execute(
                 f"UPDATE foreshadowings SET {set_clause} "
-                f"WHERE project_id = ? AND description = ? AND planted_chapter = ?",
+                f"WHERE {where}",
                 values,
             )
             updated = cur.rowcount > 0
@@ -499,8 +550,8 @@ class ProjectManager:
     def get_chapter_count(self, project_id: str) -> int:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM chapters WHERE project_id = ? AND status != ?",
-                (project_id, ChapterStatus.DRAFT.value),
+                "SELECT COUNT(*) as cnt FROM chapters WHERE project_id = ? AND status = ?",
+                (project_id, ChapterStatus.APPROVED.value),
             ).fetchone()
         return row["cnt"] if row else 0
 

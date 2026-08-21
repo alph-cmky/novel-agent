@@ -79,3 +79,12 @@ class TestContinuityToolHint:
             )
         assert report.get("unavailable") is None
         assert report.get("overall_score") == 85
+
+    def test_audits_complete_long_chapter(self):
+        content = "前文" + ("铺垫" * 2500) + "尾部关键矛盾"
+        auditor = ContinuityAgent()
+        with patch.object(
+            auditor, "run_with_tools", new=AsyncMock(return_value=("{}", None))
+        ) as mocked:
+            asyncio.run(auditor.audit(chapter_number=1, draft_content=content))
+        assert "尾部关键矛盾" in mocked.call_args.args[0][1]["content"]

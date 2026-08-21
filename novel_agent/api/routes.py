@@ -13,7 +13,12 @@ from pydantic import BaseModel
 
 from novel_agent.api.graph_data import build_graph_data
 from novel_agent.api.outline import generate_outline
-from novel_agent.api.sse import SessionStore, create_sse_stream, resume_graph
+from novel_agent.api.sse import (
+    SessionStore,
+    create_sse_stream,
+    replay_review,
+    resume_graph,
+)
 from novel_agent.graph.chapter import build_chapter_graph_async
 from novel_agent.schema.enums import ChapterStatus, OutlineStatus
 from novel_agent.storage.manager import ProjectManager
@@ -28,6 +33,21 @@ def _get_persist_dir() -> Path:
 
 def _get_manager() -> ProjectManager:
     return ProjectManager(_get_persist_dir())
+
+
+async def _restore_session(project_id: str, chapter_number: int) -> str | None:
+    """Recreate the in-memory SSE handle from a durable pending checkpoint."""
+    persist_dir = str(_get_persist_dir())
+    graph = await build_chapter_graph_async(persist_dir=persist_dir)
+    thread_id = f"{project_id}:ch{chapter_number}"
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await graph.aget_state(config)
+    if not state or not state.next:
+        return None
+    session_id = session_store.create(graph, asyncio.Queue())
+    session_store.set_config(session_id, config)
+    session_store.set_context(session_id, project_id, chapter_number)
+    return session_id
 
 
 # ── Request / Response models ──────────────────────────
@@ -243,7 +263,22 @@ async def write_chapter(project_id: str, chapter_number: int):
     if not chapter_outline:
         chapter_outline = f"第{chapter_number}章"
 
-    # Mark chapter as writing
+    # Mark the run durably before starting the graph without clearing a draft.
+    existing_chapter = mgr.get_chapter(project_id, chapter_number)
+    if existing_chapter is None:
+        mgr.save_chapter(project_id, chapter_number, status=ChapterStatus.WRITING.value)
+    elif existing_chapter.get("status") != ChapterStatus.APPROVED.value:
+        mgr.save_chapter(
+            project_id,
+            chapter_number,
+            outline=existing_chapter.get("outline", ""),
+            draft_content=existing_chapter.get("draft_content", ""),
+            status=ChapterStatus.WRITING.value,
+            editor_report=existing_chapter.get("editor_report", "{}"),
+            continuity_report=existing_chapter.get("continuity_report", "{}"),
+            version=existing_chapter.get("version", 0),
+            evolution_summary=existing_chapter.get("evolution_summary", "{}"),
+        )
     mgr.update_outline_item(project_id, chapter_number, status=OutlineStatus.WRITING.value)
 
     # Build context
@@ -263,11 +298,15 @@ async def write_chapter(project_id: str, chapter_number: int):
     thread_id = f"{project_id}:ch{chapter_number}"
     config = {"configurable": {"thread_id": thread_id, "stream_queue": queue}}
 
-    # Clear stale checkpoint from a prior session (e.g. server restarted
-    # during human review). A fresh write always starts from scratch.
+    # An interrupted checkpoint is the durable source of truth across restarts.
     existing = await graph.aget_state(config)
-    if existing and existing.values:
-        await graph.checkpointer.adelete_thread(thread_id)
+    if existing and existing.next:
+        session_store.set_config(session_id, config)
+        session_store.set_context(session_id, project_id, chapter_number)
+        return StreamingResponse(
+            replay_review(existing.values or {}, chapter_number),
+            media_type="text/event-stream",
+        )
 
     initial_state = {
         "project_id": project_id,
@@ -303,6 +342,8 @@ async def write_chapter(project_id: str, chapter_number: int):
 async def approve_chapter(project_id: str, chapter_number: int):
     session_id = session_store.find_session(project_id, chapter_number)
     if not session_id:
+        session_id = await _restore_session(project_id, chapter_number)
+    if not session_id:
         raise HTTPException(status_code=404, detail="No active writing session")
 
     mgr = _get_manager()
@@ -325,6 +366,8 @@ async def approve_chapter(project_id: str, chapter_number: int):
 @router.post("/projects/{project_id}/chapters/{chapter_number}/reject")
 async def reject_chapter(project_id: str, chapter_number: int, req: RejectRequest):
     session_id = session_store.find_session(project_id, chapter_number)
+    if not session_id:
+        session_id = await _restore_session(project_id, chapter_number)
     if not session_id:
         raise HTTPException(status_code=404, detail="No active writing session")
 

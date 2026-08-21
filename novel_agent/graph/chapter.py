@@ -197,10 +197,11 @@ async def orchestrator_node(state: NovelState) -> dict:
         try:
             from novel_agent.storage.manager import ProjectManager
             mgr = ProjectManager(persist_dir)
-            all_chapters = mgr.get_chapter_reports(project_id)
+            all_chapters = mgr.get_all_chapters(project_id)
             previous_chapters = [
                 c for c in all_chapters
                 if c["chapter_number"] < state.get("chapter_number", 1)
+                and c.get("status") != "failed"
             ]
         except Exception as exc:
             print(f"  [Orchestrator] 加载前文失败，跳过: {exc}")
@@ -210,6 +211,37 @@ async def orchestrator_node(state: NovelState) -> dict:
     narrative_perspective = state.get("narrative_perspective", "")
 
     arc_summary = _build_arc_summary(previous_chapters)
+
+    context_for_compression = {
+        "chapters": "\n".join(c.get("draft_content", "") for c in previous_chapters),
+        "character_context": state.get("character_context", ""),
+        "world_context": state.get("world_context", ""),
+    }
+    if orchestrator._compressor.should_compress(context_for_compression):
+        compressed = await orchestrator._compressor.compress(previous_chapters)
+        recent_summary = compressed.get("recent_summary", "")
+        critical = compressed.get("critical_snippets", "")
+        if critical:
+            recent_summary = f"{recent_summary}\n\n## 关键长期事实\n{critical}"
+    else:
+        recent_summary = state.get("recent_summary", "")
+
+    # Load unresolved foreshadowings before planning so the same long-range
+    # constraints reach both the orchestrator and the writer.
+    unresolved: list[str] = []
+    if project_id:
+        try:
+            mgr2 = ProjectManager(persist_dir)
+            all_fs = mgr2.get_foreshadowings(project_id)
+            open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
+            unresolved = [
+                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
+                for f in open_fs
+            ]
+            if unresolved:
+                print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
+        except Exception as exc:
+            print(f"  [Orchestrator] 加载伏笔失败，跳过: {exc}")
 
     strategy = await orchestrator.analyze(
         chapter_number=state.get("chapter_number", 1),
@@ -222,6 +254,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
         arc_summary=arc_summary,
+        unresolved_foreshadowings=unresolved,
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -258,30 +291,12 @@ async def orchestrator_node(state: NovelState) -> dict:
             if world_ctx else timeline_hint
         )
 
-    recent_summary = state.get("recent_summary", "")
     recent_ref = context_needed.get("recent_reference", "")
     if recent_ref:
         ref_hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
         recent_summary = (
             f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
         )
-
-    # Load unresolved foreshadowings from DB
-    unresolved: list[str] = []
-    if project_id:
-        try:
-            from novel_agent.storage.manager import ProjectManager
-            mgr2 = ProjectManager(persist_dir)
-            all_fs = mgr2.get_foreshadowings(project_id)
-            open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
-            unresolved = [
-                f"[第{f.get('planted_chapter','?')}章] {f.get('description','')}"
-                for f in open_fs
-            ]
-            if unresolved:
-                print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
-        except Exception as exc:
-            print(f"  [Orchestrator] 加载伏笔失败，跳过: {exc}")
 
     return {
         "orchestrator_strategy": strategy,
@@ -356,6 +371,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         character_context=state.get("character_context", ""),
         world_context=state.get("world_context", ""),
         recent_summary=state.get("recent_summary", ""),
+        unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
         target_chapter_words=target_words,
         rewrite_instructions=rewrite_text,
         orchestrator_strategy=strategy,
@@ -749,8 +765,14 @@ def human_review_node(state: NovelState) -> dict:
     rejects = state.get("evolution_human_rejects", 0) + 1
 
     if rejects >= 3:
-        # Safety valve: force approve after 3 rejects
-        return {"human_approved": True, "human_feedback": feedback}
+        # Do not convert repeated rejection into consent. End as a draft so
+        # the user can explicitly retry, edit, or abandon the chapter.
+        return {
+            "human_approved": False,
+            "human_feedback": feedback,
+            "evolution_human_rejects": rejects,
+            "human_review_exhausted": True,
+        }
 
     # Build improvement plan from human feedback
     plan = {
@@ -809,7 +831,7 @@ def route_after_human_evolution(state: NovelState) -> Literal["__end__", "evolut
     if state.get("human_approved", False):
         return "__end__"
 
-    # Safety valve: max 3 rejects
+    # Rejection limit ends the run as an unapproved draft, never as approval.
     if state.get("evolution_human_rejects", 0) >= 3:
         return "__end__"
 
@@ -845,6 +867,9 @@ def _build_workflow() -> StateGraph:
     workflow.add_node("evolution_writer", writer_node)
     workflow.add_node("evolution_editor", editor_node)
     workflow.add_node("evolution_continuity", continuity_node)
+    # Extract facts before selecting a version so hard constraints can use
+    # worldbuilding conflicts; run it again after selection for final state.
+    workflow.add_node("evolution_worldbuilding", worldbuilding_node)
     workflow.add_node("evolution_orchestrator", evolution_orchestrator_node)
     workflow.add_node("evolution_select_best", select_best_version_node)
 
@@ -861,7 +886,8 @@ def _build_workflow() -> StateGraph:
         {"evolution_editor": "evolution_editor", "worldbuilding": "worldbuilding"},
     )
     workflow.add_edge("evolution_editor", "evolution_continuity")
-    workflow.add_edge("evolution_continuity", "evolution_orchestrator")
+    workflow.add_edge("evolution_continuity", "evolution_worldbuilding")
+    workflow.add_edge("evolution_worldbuilding", "evolution_orchestrator")
     workflow.add_conditional_edges(
         "evolution_orchestrator", route_after_evolution,
         {

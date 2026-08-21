@@ -12,6 +12,7 @@ import chainlit as cl
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
+from novel_agent.api.sse import _save_foreshadowings
 from novel_agent.graph.chapter import build_chapter_graph
 from novel_agent.observability.langfuse import create_trace, score_trace
 from novel_agent.schema.enums import ChapterStatus
@@ -385,23 +386,44 @@ async def _run_pipeline(
     worldbuilding = result.get("worldbuilding_report", {})
 
     # Save result with full reports
-    status = (
-        ChapterStatus.APPROVED.value
-        if result.get("human_approved")
-        else ChapterStatus.DRAFT.value
-    )
+    approved = bool(result.get("human_approved"))
     mgr.save_chapter(
         project_id=project_id,
         chapter_number=chapter_number,
         outline=outline,
         draft_content=draft,
-        status=status,
+        status=ChapterStatus.DRAFT.value,
         editor_report=json.dumps(editor, ensure_ascii=False),
         continuity_report=json.dumps(continuity, ensure_ascii=False),
+        index=False,
     )
     if worldbuilding:
         mgr.update_chapter_worldbuilding(project_id, chapter_number, worldbuilding)
-        mgr.save_world_entities(project_id, worldbuilding)
+        mgr.save_world_entities(project_id, worldbuilding, chapter_number)
+        mgr.save_world_relations(project_id, chapter_number, worldbuilding)
+        _save_foreshadowings(mgr, project_id, chapter_number, worldbuilding)
+
+    if approved:
+        mgr.save_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            outline=outline,
+            draft_content=draft,
+            status=ChapterStatus.DRAFT.value,
+            editor_report=json.dumps(editor, ensure_ascii=False),
+            continuity_report=json.dumps(continuity, ensure_ascii=False),
+            index=True,
+        )
+        mgr.save_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            outline=outline,
+            draft_content=draft,
+            status=ChapterStatus.APPROVED.value,
+            editor_report=json.dumps(editor, ensure_ascii=False),
+            continuity_report=json.dumps(continuity, ensure_ascii=False),
+            index=False,
+        )
 
     # Push quality scores to LangFuse trace
     scores = {}

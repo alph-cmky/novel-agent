@@ -15,6 +15,8 @@ class ChapterStatus(StrEnum):
     """
 
     DRAFT = "draft"
+    WRITING = "writing"
+    FAILED = "failed"
     APPROVED = "approved"
 
 
@@ -26,5 +28,6 @@ class OutlineStatus(StrEnum):
 
     PENDING = "pending"
     WRITING = "writing"
+    FAILED = "failed"
     DRAFTED = "drafted"
     APPROVED = "approved"

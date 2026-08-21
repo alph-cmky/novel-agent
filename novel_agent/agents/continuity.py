@@ -109,7 +109,7 @@ class ContinuityAgent(BaseAgent):
                 "content": (
                     f"请审计第{chapter_number}章的设定一致性。\n"
                     f"{mode_hint}\n"
-                    f"## 本章正文\n{draft_content[:4000]}\n\n"
+                    f"## 本章正文\n{draft_content}\n\n"
                     f"{tool_hint}只输出JSON，不要其他内容。"
                 ),
             },
