@@ -72,6 +72,7 @@ class NovelState(TypedDict, total=False):
     evolution_best_candidate_version: int
     quality_guard_report: dict
     quality_gate_report: dict
+    deterministic_gate_first: bool
 
     # ── 存储路径 ──
     persist_dir: str

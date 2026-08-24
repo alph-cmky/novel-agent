@@ -906,7 +906,10 @@ def route_after_evolution(
 
 
 def route_after_writer(state: NovelState) -> Literal["evolution_editor", "worldbuilding"]:
-    """Fast evaluation profile skips reviews when no rewrite can consume them."""
+    """Run expensive reviews only when the deterministic gate needs them."""
+    gate = state.get("quality_gate_report") or {}
+    if state.get("deterministic_gate_first") and gate.get("passed"):
+        return "worldbuilding"
     interval = max(state.get("review_interval", 1), 1)
     chapter_number = state.get("chapter_number", 1)
     if state.get("skip_reviews") or chapter_number % interval != 0:

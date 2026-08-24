@@ -3,6 +3,7 @@
 from novel_agent.graph.chapter import (
     route_after_evolution,
     route_after_human_evolution,
+    route_after_writer,
 )
 
 
@@ -45,6 +46,18 @@ class TestRouteAfterEvolution:
         """Termination set → select best version."""
         result = route_after_evolution(_evo_state(termination="converged"))
         assert result == "evolution_select_best"
+
+
+def test_deterministic_gate_skips_expensive_reviews_when_draft_passes():
+    state = _evo_state()
+    state.update({
+        "deterministic_gate_first": True,
+        "quality_gate_report": {"passed": True},
+        "skip_reviews": False,
+        "review_interval": 1,
+    })
+
+    assert route_after_writer(state) == "worldbuilding"
 
     def test_select_best_after_actual_rewrites(self):
         """Bookkeeping v0 plus five rewrites reaches max_rounds=5."""
