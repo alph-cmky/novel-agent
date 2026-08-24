@@ -4,7 +4,6 @@ Usage:
     chainlit run novel_agent/api/chainlit_app.py
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -12,10 +11,10 @@ import chainlit as cl
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
-from novel_agent.api.sse import _save_foreshadowings
+from novel_agent.api.run_service import ChapterRunService
+from novel_agent.context import ContextCompiler
 from novel_agent.graph.chapter import build_chapter_graph
 from novel_agent.observability.langfuse import create_trace, score_trace
-from novel_agent.schema.enums import ChapterStatus
 from novel_agent.storage.manager import ProjectManager
 
 
@@ -59,7 +58,10 @@ def _build_initial_state(
         "character_context": ctx["character_context"],
         "world_context": ctx["world_context"],
         "recent_summary": ctx["recent_summary"],
-        "unresolved_foreshadowings": [],
+        "unresolved_foreshadowings": ctx.get("unresolved_foreshadowings", []),
+        "context_packet_hash": ctx.get("context_packet_hash", ""),
+        "context_packet": ctx.get("context_packet", {}),
+        "scene_first": True,
         "trace_id": "",
         "persist_dir": str(_get_persist_dir().absolute()),
     }
@@ -340,7 +342,9 @@ async def _run_pipeline(
     narrative_mode = proj.get("narrative_mode") if proj else None
     narrative_perspective = proj.get("narrative_perspective", "") if proj else ""
 
-    ctx = mgr.build_context(project_id, chapter_number)
+    service = ChapterRunService(mgr)
+    run = service.create_run(project_id, chapter_number, run_type="chainlit")
+    ctx = ContextCompiler(mgr).compile_for_run(run["id"]).to_state()
     existing_entities = mgr.get_all_world_entities(project_id)
     initial_state = _build_initial_state(
         project_id, chapter_number, outline, ctx,
@@ -348,9 +352,10 @@ async def _run_pipeline(
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
     )
+    initial_state["writing_run_id"] = run["id"]
 
     graph = build_chapter_graph(persist_dir=str(_get_persist_dir()))
-    config = {"configurable": {"thread_id": f"{project_id}:ch{chapter_number}"}}
+    config = {"configurable": {"thread_id": run["id"]}}
 
     # Create LangFuse trace for this chapter run
     create_trace(
@@ -385,45 +390,30 @@ async def _run_pipeline(
     continuity = result.get("continuity_report", {})
     worldbuilding = result.get("worldbuilding_report", {})
 
-    # Save result with full reports
     approved = bool(result.get("human_approved"))
-    mgr.save_chapter(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        outline=outline,
-        draft_content=draft,
-        status=ChapterStatus.DRAFT.value,
-        editor_report=json.dumps(editor, ensure_ascii=False),
-        continuity_report=json.dumps(continuity, ensure_ascii=False),
-        index=False,
+    version_record = service.attach_candidate(
+        run["id"],
+        draft,
+        origin="evolution" if result.get("evolution_history") else "initial_generation",
+        scene_plan=result.get("scene_plan", []),
+        scene_drafts=result.get("scene_drafts", []),
     )
     if worldbuilding:
-        mgr.update_chapter_worldbuilding(project_id, chapter_number, worldbuilding)
-        mgr.save_world_entities(project_id, worldbuilding, chapter_number)
-        mgr.save_world_relations(project_id, chapter_number, worldbuilding)
-        _save_foreshadowings(mgr, project_id, chapter_number, worldbuilding)
+        mgr.create_canon_proposal(
+            project_id,
+            chapter_number,
+            "worldbuilding",
+            worldbuilding,
+            run_id=run["id"],
+            version_id=version_record["id"],
+        )
 
     if approved:
-        mgr.save_chapter(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            outline=outline,
-            draft_content=draft,
-            status=ChapterStatus.DRAFT.value,
-            editor_report=json.dumps(editor, ensure_ascii=False),
-            continuity_report=json.dumps(continuity, ensure_ascii=False),
-            index=True,
-        )
-        mgr.save_chapter(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            outline=outline,
-            draft_content=draft,
-            status=ChapterStatus.APPROVED.value,
-            editor_report=json.dumps(editor, ensure_ascii=False),
-            continuity_report=json.dumps(continuity, ensure_ascii=False),
-            index=False,
-        )
+        for proposal in mgr.list_canon_proposals(
+            project_id, run_id=run["id"], status="proposed"
+        ):
+            mgr.review_canon_proposal(proposal["id"], "accepted", "章节已批准")
+        service.commit(run["id"])
 
     # Push quality scores to LangFuse trace
     scores = {}

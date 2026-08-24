@@ -21,11 +21,19 @@ from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from novel_agent.api.routes import router  # noqa: E402
+from novel_agent.storage.manager import ProjectManager  # noqa: E402
+from novel_agent.storage.outbox_worker import OutboxWorker  # noqa: E402
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    worker = None
+    if os.getenv("NOVEL_OUTBOX_WORKER", "1") == "1":
+        worker = OutboxWorker(ProjectManager(Path(os.getenv("NOVEL_DATA_DIR", "./novel-data"))))
+        await worker.start()
     yield
+    if worker:
+        await worker.stop()
     # 关掉 AsyncSqliteSaver 的 aiosqlite 连接：其 worker thread 是非守护线程，
     # 不 close 会在进程退出时挂死（见 graph/chapter.py:aclose_checkpointers）。
     from novel_agent.graph.chapter import aclose_checkpointers

@@ -12,6 +12,7 @@ class NovelState(TypedDict, total=False):
 
     # ── 项目上下文 ──
     project_id: str
+    writing_run_id: str
     chapter_number: int
     chapter_outline: str
     story_length: str
@@ -38,6 +39,13 @@ class NovelState(TypedDict, total=False):
     world_context: str
     recent_summary: str
     unresolved_foreshadowings: list[str]
+    context_packet_hash: str
+    context_packet: dict
+    timeline_events: list[dict]
+    timeline_findings: list[dict]
+    scene_first: bool
+    scene_plan: list[dict]
+    scene_drafts: list[str]
 
     # ── Worldbuilding 上下文 ──
     existing_world_entities: list[dict]
@@ -57,18 +65,13 @@ class NovelState(TypedDict, total=False):
     # ── 进化状态 ──
     # 每轮 {v, editor, ct, composite, dimensions, delta, focus}
     evolution_history: list[dict]
+    evolution_candidates: list[dict]
     evolution_improvement_plan: dict      # 当前轮改进计划，Writer 消费
     # "" | "converged" | "regressed" | "plateau" | "max_rounds" | "ceiling"
     evolution_termination: str
-    evolution_best_version: int
-    evolution_best_draft: str             # 最优版本完整文本（只在 state，最后落库）
-    evolution_best_editor_report: dict
-    evolution_best_continuity_report: dict
-    evolution_best_quality_guard: dict
-    evolution_best_worldbuilding_report: dict
-    evolution_best_outline_coverage: float
-    evolution_best_required_facts_missing: int
+    evolution_best_candidate_version: int
     quality_guard_report: dict
+    quality_gate_report: dict
 
     # ── 存储路径 ──
     persist_dir: str

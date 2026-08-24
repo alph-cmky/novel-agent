@@ -209,6 +209,9 @@ class OrchestratorAgent(BaseAgent):
         narrative_perspective: str = "",
         arc_summary: str = "",
         unresolved_foreshadowings: list[str] | None = None,
+        context_packet: dict | None = None,
+        timeline_events: list[dict] | None = None,
+        timeline_findings: list[dict] | None = None,
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
@@ -226,8 +229,18 @@ class OrchestratorAgent(BaseAgent):
             "medium": "中篇",
             "long": "长篇",
         }.get(story_length, story_length or "长篇")
+        if context_packet:
+            character_context = context_packet.get("character_context", character_context)
+            world_context = context_packet.get("world_context", world_context)
+            unresolved_foreshadowings = context_packet.get(
+                "unresolved_foreshadowings", unresolved_foreshadowings
+            )
+            timeline_events = context_packet.get("timeline_events", timeline_events)
+            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
         unresolved = unresolved_foreshadowings or []
         foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
+        timeline_context = "\n".join(str(item) for item in (timeline_events or [])[-10:])
+        timeline_warnings = "\n".join(str(item) for item in (timeline_findings or [])[:10])
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
@@ -250,6 +263,8 @@ class OrchestratorAgent(BaseAgent):
                     f"## 已有章节\n{recent_titles or '无'}\n\n"
                     f"{arc_summary}\n\n"
                     f"## 待回收伏笔\n{foreshadowing_context or '暂无'}\n\n"
+                    f"## 关键事件\n{timeline_context or '暂无'}\n\n"
+                    f"## 时间线警告\n{timeline_warnings or '暂无'}\n\n"
                     f"只输出JSON。"
                 ),
             },

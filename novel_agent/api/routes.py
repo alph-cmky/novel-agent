@@ -1,6 +1,7 @@
 """REST API routes for novel-agent Web UI."""
 
 import asyncio
+import difflib
 import os
 import re
 from datetime import UTC, datetime
@@ -11,15 +12,24 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from novel_agent.agents.continuity import ContinuityAgent
+from novel_agent.agents.editor import EditorAgent
 from novel_agent.api.graph_data import build_graph_data
 from novel_agent.api.outline import generate_outline
+from novel_agent.api.run_service import ChapterRunService
 from novel_agent.api.sse import (
     SessionStore,
     create_sse_stream,
     replay_review,
     resume_graph,
 )
-from novel_agent.graph.chapter import build_chapter_graph_async
+from novel_agent.context import ContextCompiler
+from novel_agent.graph.chapter import (
+    _config_for,
+    _get_chapter_store,
+    build_chapter_graph_async,
+)
+from novel_agent.routing import TaskClass
 from novel_agent.schema.enums import ChapterStatus, OutlineStatus
 from novel_agent.storage.manager import ProjectManager
 
@@ -35,6 +45,10 @@ def _get_manager() -> ProjectManager:
     return ProjectManager(_get_persist_dir())
 
 
+def _get_run_service() -> ChapterRunService:
+    return ChapterRunService(_get_manager())
+
+
 async def _restore_session(project_id: str, chapter_number: int) -> str | None:
     """Recreate the in-memory SSE handle from a durable pending checkpoint."""
     persist_dir = str(_get_persist_dir())
@@ -45,8 +59,20 @@ async def _restore_session(project_id: str, chapter_number: int) -> str | None:
     if not state or not state.next:
         return None
     session_id = session_store.create(graph, asyncio.Queue())
+    runs = _get_manager().list_writing_runs(project_id, chapter_number)
+    active_run = next(
+        (run for run in runs if run["status"] in {
+            "queued", "running", "waiting_review", "waiting_user", "retrying"
+        }),
+        None,
+    )
     session_store.set_config(session_id, config)
-    session_store.set_context(session_id, project_id, chapter_number)
+    session_store.set_context(
+        session_id,
+        project_id,
+        chapter_number,
+        active_run["id"] if active_run else None,
+    )
     return session_id
 
 
@@ -86,6 +112,25 @@ class RejectRequest(BaseModel):
 
 
 class SaveDraftRequest(BaseModel):
+    content: str
+
+
+class CreateRunRequest(BaseModel):
+    run_type: str = "draft"
+    workflow_version: str = "v2"
+
+
+class CreateVersionRequest(BaseModel):
+    content: str
+    origin: str = "initial_generation"
+    status: str = "candidate"
+
+
+class ProposalReviewRequest(BaseModel):
+    reviewer_note: str = ""
+
+
+class SceneRewriteRequest(BaseModel):
     content: str
 
 
@@ -224,7 +269,7 @@ async def get_chapter(project_id: str, chapter_number: int):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     # Include context data for the writing page
-    ctx = mgr.build_context(project_id, chapter_number)
+    ctx = ContextCompiler(mgr).compile(project_id, chapter_number).to_state()
     outline_items = mgr.get_outline(project_id)
     for item in outline_items:
         if item["chapter_number"] == chapter_number:
@@ -234,6 +279,265 @@ async def get_chapter(project_id: str, chapter_number: int):
     chapter["world_context"] = ctx.get("world_context", "")
     chapter["recent_summary"] = ctx.get("recent_summary", "")
     return chapter
+
+
+@router.post("/projects/{project_id}/chapters/{chapter_number}/runs")
+async def create_writing_run(
+    project_id: str,
+    chapter_number: int,
+    req: CreateRunRequest,
+):
+    """Create a durable V2 run without starting the legacy graph yet."""
+    mgr = _get_manager()
+    if not mgr.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        return _get_run_service().create_run(
+            project_id,
+            chapter_number,
+            run_type=req.run_type,
+            workflow_version=req.workflow_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}")
+async def get_writing_run(run_id: str):
+    run = _get_manager().get_writing_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@router.post("/runs/{run_id}/versions")
+async def create_chapter_version(run_id: str, req: CreateVersionRequest):
+    mgr = _get_manager()
+    run = mgr.get_writing_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    try:
+        return _get_run_service().attach_candidate(
+            run_id,
+            req.content,
+            origin=req.origin,
+            status=req.status,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/commit")
+async def commit_writing_run(run_id: str):
+    mgr = _get_manager()
+    run = mgr.get_writing_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    version_id = run.get("current_version_id")
+    if not version_id:
+        raise HTTPException(status_code=409, detail="Run has no candidate version")
+    try:
+        return _get_run_service().commit(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/proposals")
+async def list_run_proposals(run_id: str):
+    mgr = _get_manager()
+    run = mgr.get_writing_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return mgr.list_canon_proposals(project_id=run["project_id"], run_id=run_id)
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_number}/scenes")
+async def list_chapter_scenes(project_id: str, chapter_number: int):
+    mgr = _get_manager()
+    chapter = mgr.get_chapter(project_id, chapter_number)
+    if not chapter or not chapter.get("current_version_id"):
+        return []
+    return mgr.get_scene_manifest(chapter["current_version_id"])
+
+
+@router.post("/runs/{run_id}/scenes/{scene_index}/rewrite")
+async def rewrite_scene(
+    run_id: str,
+    scene_index: int,
+    req: SceneRewriteRequest,
+):
+    mgr = _get_manager()
+    run = mgr.get_writing_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    try:
+        return _get_run_service().rewrite_scene(run_id, scene_index, req.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/versions/{version_id}/diff")
+async def diff_chapter_version(version_id: str):
+    mgr = _get_manager()
+    version = mgr.get_chapter_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    parent_id = version.get("parent_version_id")
+    parent = mgr.get_chapter_version(parent_id) if parent_id else None
+    diff = difflib.unified_diff(
+        (parent["content"] if parent else "").splitlines(),
+        version["content"].splitlines(),
+        fromfile=f"version:{parent_id or 'empty'}",
+        tofile=f"version:{version_id}",
+        lineterm="",
+    )
+    return {"version_id": version_id, "parent_version_id": parent_id, "diff": list(diff)}
+
+
+@router.post("/versions/{version_id}/scenes/{scene_index}/review")
+async def review_scene_version(version_id: str, scene_index: int):
+    mgr = _get_manager()
+    version = mgr.get_chapter_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    scene = next(
+        (
+            item for item in mgr.get_scene_manifest(version_id)
+            if item.get("scene_index") == scene_index
+        ),
+        None,
+    )
+    if scene is None:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    project = mgr.get_project(version["project_id"]) or {}
+    draft = scene.get("content", "")
+    editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
+    editor_report, _ = await editor.review(
+        chapter_number=version["chapter_number"],
+        draft_content=draft,
+        narrative_mode=project.get("narrative_mode"),
+    )
+    continuity = ContinuityAgent(
+        config=_config_for(TaskClass.REVIEW),
+        chapter_store=_get_chapter_store(str(_get_persist_dir())),
+        project_id=version["project_id"],
+    )
+    continuity_report, _ = await continuity.audit(
+        chapter_number=version["chapter_number"],
+        draft_content=draft,
+        narrative_mode=project.get("narrative_mode"),
+    )
+    valid = not editor_report.get("unavailable") and not continuity_report.get("unavailable")
+    return {
+        "version_id": version_id,
+        "scene_index": scene_index,
+        "valid": valid,
+        "editor_report": editor_report,
+        "continuity_report": continuity_report,
+    }
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_writing_run(run_id: str):
+    try:
+        return _get_run_service().cancel(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/retry")
+async def retry_writing_run(run_id: str):
+    try:
+        return _get_run_service().retry(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_number}/versions")
+async def list_chapter_versions(project_id: str, chapter_number: int):
+    mgr = _get_manager()
+    if not mgr.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return _get_run_service().list_versions(project_id, chapter_number)
+
+
+@router.post("/versions/{version_id}/restore")
+async def restore_chapter_version(version_id: str):
+    try:
+        return _get_run_service().restore_version(version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/canon")
+async def get_project_canon(project_id: str):
+    mgr = _get_manager()
+    if not mgr.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {
+        "entities": mgr.get_all_world_entities(project_id),
+        "relations": mgr.get_all_world_relations(project_id),
+        "foreshadowings": mgr.get_foreshadowings(project_id),
+    }
+
+
+@router.get("/projects/{project_id}/outbox")
+async def list_outbox_events(project_id: str, status: str | None = None):
+    return _get_manager().list_outbox_events(project_id, status=status)
+
+
+@router.get("/projects/{project_id}/events")
+async def list_story_events(
+    project_id: str,
+    chapter_number: int | None = Query(None),
+):
+    return _get_manager().get_story_events(project_id, chapter_number)
+
+
+@router.post("/outbox/{event_id}/process")
+async def process_outbox_event(event_id: str):
+    try:
+        return _get_manager().process_outbox_event(event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/outbox/{event_id}/retry")
+async def retry_outbox_event(event_id: str):
+    try:
+        return _get_manager().retry_outbox_event(event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/proposals/{proposal_id}/accept")
+async def accept_canon_proposal(
+    proposal_id: str,
+    req: ProposalReviewRequest,
+):
+    try:
+        return _get_manager().review_canon_proposal(
+            proposal_id,
+            "accepted",
+            req.reviewer_note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/proposals/{proposal_id}/reject")
+async def reject_canon_proposal(
+    proposal_id: str,
+    req: ProposalReviewRequest,
+):
+    try:
+        return _get_manager().review_canon_proposal(
+            proposal_id,
+            "rejected",
+            req.reviewer_note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete("/projects/{project_id}/chapters/{chapter_number}")
@@ -282,7 +586,7 @@ async def write_chapter(project_id: str, chapter_number: int):
     mgr.update_outline_item(project_id, chapter_number, status=OutlineStatus.WRITING.value)
 
     # Build context
-    ctx = mgr.build_context(project_id, chapter_number)
+    ctx = ContextCompiler(mgr).compile(project_id, chapter_number).to_state()
 
     # Build initial state
     persist_dir = str(_get_persist_dir())
@@ -301,15 +605,33 @@ async def write_chapter(project_id: str, chapter_number: int):
     # An interrupted checkpoint is the durable source of truth across restarts.
     existing = await graph.aget_state(config)
     if existing and existing.next:
+        runs = mgr.list_writing_runs(project_id, chapter_number)
+        run = next(
+            (item for item in runs if item["status"] in {
+                "queued", "running", "waiting_review", "waiting_user", "retrying"
+            }),
+            None,
+        )
+        if run is None:
+            try:
+                run = mgr.create_writing_run(project_id, chapter_number)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         session_store.set_config(session_id, config)
-        session_store.set_context(session_id, project_id, chapter_number)
+        session_store.set_context(session_id, project_id, chapter_number, run["id"])
         return StreamingResponse(
             replay_review(existing.values or {}, chapter_number),
             media_type="text/event-stream",
         )
 
+    try:
+        run = mgr.create_writing_run(project_id, chapter_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     initial_state = {
         "project_id": project_id,
+        "writing_run_id": run["id"],
         "chapter_number": chapter_number,
         "chapter_outline": chapter_outline,
         "story_length": project.get("story_length", "long"),
@@ -319,6 +641,10 @@ async def write_chapter(project_id: str, chapter_number: int):
         "character_context": ctx.get("character_context", ""),
         "world_context": ctx.get("world_context", ""),
         "recent_summary": ctx.get("recent_summary", ""),
+        "unresolved_foreshadowings": ctx.get("unresolved_foreshadowings", []),
+        "context_packet_hash": ctx.get("context_packet_hash", ""),
+        "context_packet": ctx.get("context_packet", {}),
+        "scene_first": True,
         "existing_world_entities": mgr.get_all_world_entities(project_id),
         "persist_dir": persist_dir,
         "retry_count": 0,

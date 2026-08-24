@@ -41,10 +41,39 @@ def _migrate(conn: sqlite3.Connection):
         ("worldbuilding_report", "TEXT NOT NULL DEFAULT '{}'"),
         ("version", "INTEGER NOT NULL DEFAULT 0"),
         ("evolution_summary", "TEXT NOT NULL DEFAULT '{}'"),
+        ("current_version_id", "TEXT"),
+        ("approved_version_id", "TEXT"),
     ]
     for col_name, col_def in chapter_migrations:
         if col_name not in existing_chapters:
             conn.execute(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_def}")
+
+    existing_versions = {
+        row["name"] for row in conn.execute("PRAGMA table_info(chapter_versions)")
+    }
+    if "scene_manifest" not in existing_versions:
+        conn.execute(
+            "ALTER TABLE chapter_versions ADD COLUMN scene_manifest "
+            "TEXT NOT NULL DEFAULT '[]'"
+        )
+
+    existing_runs = {
+        row["name"] for row in conn.execute("PRAGMA table_info(writing_runs)")
+    }
+    if "input_snapshot_id" not in existing_runs:
+        conn.execute(
+            "ALTER TABLE writing_runs ADD COLUMN input_snapshot_id TEXT"
+        )
+
+    existing_outbox = {
+        row["name"] for row in conn.execute("PRAGMA table_info(outbox_events)")
+    }
+    for col_name, col_def in (
+        ("lease_owner", "TEXT"),
+        ("lease_expires_at", "TEXT"),
+    ):
+        if col_name not in existing_outbox:
+            conn.execute(f"ALTER TABLE outbox_events ADD COLUMN {col_name} {col_def}")
 
     existing_fs = {row["name"] for row in conn.execute("PRAGMA table_info(foreshadowings)")}
     foreshadowing_migrations = [
@@ -95,6 +124,99 @@ CREATE TABLE IF NOT EXISTS chapters (
     UNIQUE(project_id, chapter_number)
 );
 
+CREATE TABLE IF NOT EXISTS writing_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    chapter_number INTEGER NOT NULL,
+    run_type TEXT NOT NULL DEFAULT 'draft',
+    workflow_version TEXT NOT NULL DEFAULT 'v2',
+    status TEXT NOT NULL DEFAULT 'queued',
+    current_node TEXT NOT NULL DEFAULT '',
+    current_version_id TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    input_snapshot_id TEXT REFERENCES canon_snapshots(id),
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS canon_snapshots (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL DEFAULT '{}',
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS chapter_versions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    chapter_number INTEGER NOT NULL,
+    run_id TEXT REFERENCES writing_runs(id) ON DELETE SET NULL,
+    version_number INTEGER NOT NULL,
+    parent_version_id TEXT REFERENCES chapter_versions(id) ON DELETE SET NULL,
+    content TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL,
+    word_count INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT 'initial_generation',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    scene_manifest TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, chapter_number, version_number)
+);
+
+CREATE TABLE IF NOT EXISTS canon_proposals (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    chapter_number INTEGER NOT NULL,
+    run_id TEXT REFERENCES writing_runs(id) ON DELETE SET NULL,
+    version_id TEXT REFERENCES chapter_versions(id) ON DELETE SET NULL,
+    proposal_type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'proposed',
+    reviewer_note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reviewed_at TEXT,
+    committed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    processed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS story_events (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    chapter_number INTEGER NOT NULL,
+    event_type TEXT NOT NULL DEFAULT 'chapter_event',
+    subject TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    object_value TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    story_time TEXT NOT NULL DEFAULT '',
+    causality TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    source_version_id TEXT REFERENCES chapter_versions(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(project_id, chapter_number, event_type, subject, action, object_value)
+);
+
 CREATE TABLE IF NOT EXISTS world_entities (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -143,6 +265,26 @@ CREATE TABLE IF NOT EXISTS outlines (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
+CREATE INDEX IF NOT EXISTS idx_writing_runs_project ON writing_runs(project_id);
+CREATE INDEX IF NOT EXISTS idx_writing_runs_chapter ON writing_runs(project_id, chapter_number);
+CREATE INDEX IF NOT EXISTS idx_canon_snapshots_project
+    ON canon_snapshots(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chapter_versions_project ON chapter_versions(project_id);
+CREATE INDEX IF NOT EXISTS idx_chapter_versions_chapter
+    ON chapter_versions(project_id, chapter_number);
+CREATE INDEX IF NOT EXISTS idx_canon_proposals_project
+    ON canon_proposals(project_id);
+CREATE INDEX IF NOT EXISTS idx_canon_proposals_run
+    ON canon_proposals(run_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_events_status
+    ON outbox_events(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_story_events_project_chapter
+    ON story_events(project_id, chapter_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_events_idempotency
+    ON outbox_events(event_type, aggregate_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_active_writing_run
+    ON writing_runs(project_id, chapter_number)
+    WHERE status IN ('queued', 'running', 'waiting_review', 'waiting_user', 'retrying');
 CREATE INDEX IF NOT EXISTS idx_world_entities_project ON world_entities(project_id);
 CREATE INDEX IF NOT EXISTS idx_world_relations_project ON world_relations(project_id);
 CREATE INDEX IF NOT EXISTS idx_foreshadowings_project ON foreshadowings(project_id);

@@ -1,7 +1,7 @@
-"""Tests for chapter graph nodes — best_scores 维度补零。
+"""Tests for chapter graph nodes — candidate scores 维度补零。
 
 锁住修复：``evolution_orchestrator_node`` 计算 best_scores 时，若
-``evolution_best_editor_report.dimensions`` 缺失某维度，需补 0 到 5 维，否则
+candidate editor dimensions 缺失某维度，需补 0 到 5 维，否则
 ``composite_score(best_scores)`` 的 ``dims_avg`` 分母 = 存在的维度数，
 与 ``current_scores``（恒 5 维，来自 ``extract_scores``）不一致，
 导致 ``is_new_best`` 判断错误。
@@ -39,12 +39,17 @@ def _state(**overrides) -> dict:
             },
         },
         "continuity_report": {"overall_score": 80},
-        "evolution_best_editor_report": {
-            "overall_score": 80, "dimensions": {"rhythm": 100},
-        },
-        "evolution_best_continuity_report": {"overall_score": 80},
+        "evolution_candidates": [{
+            "version": 1,
+            "draft_content": "旧正文",
+            "editor_report": {
+                "overall_score": 80, "dimensions": {"rhythm": 100},
+            },
+            "continuity_report": {"overall_score": 80},
+        }],
+        "evolution_best_candidate_version": 1,
         "evolution_max_rounds": 5,
-        "draft_content": "正文",
+        "draft_content": "新正文",
     }
     state.update(overrides)
     return state
@@ -67,20 +72,26 @@ class TestBestScoresZeroFill:
         修复前 best composite = 80*0.5 + 80*0.3 + (100/1)*0.2 = 84 > 80 → 误判为不更新。
         """
         result = _run(_state())
-        assert result["evolution_best_version"] == 2
+        assert result["evolution_best_candidate_version"] == 2
         assert result["evolution_termination"] == ""
 
     def test_full_best_dimensions_unchanged(self):
         """best dims 完整 5 维时，补零不改变结果（对照）。"""
         state = _state(
-            evolution_best_editor_report={
-                "overall_score": 60,
-                "dimensions": {
-                    "rhythm": 60, "ai_flavor": 60, "dialogue": 60,
-                    "logic": 60, "writing": 60,
+            evolution_candidates=[{
+                "version": 1,
+                "draft_content": "旧正文",
+                "editor_report": {
+                    "overall_score": 60,
+                    "dimensions": {
+                        "rhythm": 60, "ai_flavor": 60, "dialogue": 60,
+                        "logic": 60, "writing": 60,
+                    },
                 },
-            },
+                "continuity_report": {"overall_score": 60},
+            }],
+            evolution_best_candidate_version=1,
         )
         result = _run(state)
         # best composite = 60 < 80 → 仍更新 best
-        assert result["evolution_best_version"] == 2
+        assert result["evolution_best_candidate_version"] == 2

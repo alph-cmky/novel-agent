@@ -35,6 +35,7 @@ from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.config import DEFAULT_MAX_TOKENS
+from novel_agent.graph.candidates import candidate_from_state, candidate_to_state
 from novel_agent.graph.evolution import (
     EvolutionConfig,
     build_improvement_plan_rule,
@@ -48,6 +49,11 @@ from novel_agent.graph.evolution import (
     extract_scores,
     is_better_candidate,
 )
+from novel_agent.graph.quality_gates import (
+    check_draft_hard_gates,
+    check_story_integrity,
+)
+from novel_agent.graph.scenes import assemble_scenes, build_scene_plan
 from novel_agent.graph.state import NovelState
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.routing import ModelRouter, TaskClass
@@ -255,6 +261,9 @@ async def orchestrator_node(state: NovelState) -> dict:
         narrative_perspective=narrative_perspective,
         arc_summary=arc_summary,
         unresolved_foreshadowings=unresolved,
+        context_packet=state.get("context_packet"),
+        timeline_events=state.get("timeline_events", []),
+        timeline_findings=state.get("timeline_findings", []),
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -298,12 +307,20 @@ async def orchestrator_node(state: NovelState) -> dict:
             f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
         )
 
+    scene_plan = state.get("scene_plan", [])
+    if state.get("scene_first"):
+        scene_plan = build_scene_plan(
+            state.get("chapter_outline", ""),
+            state.get("target_chapter_words", 3000),
+            strategy,
+        )
     return {
         "orchestrator_strategy": strategy,
         "character_context": char_ctx,
         "world_context": world_ctx,
         "recent_summary": recent_summary,
         "unresolved_foreshadowings": unresolved,
+        "scene_plan": scene_plan,
     }
 
 
@@ -372,12 +389,46 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         world_context=state.get("world_context", ""),
         recent_summary=state.get("recent_summary", ""),
         unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
+        context_packet=state.get("context_packet"),
+        timeline_events=state.get("timeline_events", []),
+        timeline_findings=state.get("timeline_findings", []),
         target_chapter_words=target_words,
         rewrite_instructions=rewrite_text,
         orchestrator_strategy=strategy,
     )
 
-    if stream_queue is not None:
+    scene_drafts: list[str] = []
+    scene_trace = None
+    if state.get("scene_first") and state.get("scene_plan"):
+        scene_context = write_args["recent_summary"]
+        for scene in state["scene_plan"]:
+            scene_args = dict(write_args)
+            scene_args["outline"] = (
+                f"## Scene {scene['scene_index']}\n{scene['outline']}\n"
+                f"本场目标约 {scene['target_words']} 字，必须形成独立的动作和情绪推进。"
+            )
+            scene_args["target_chapter_words"] = scene["target_words"]
+            if scene_context:
+                scene_args["recent_summary"] = scene_context
+            if stream_queue is not None:
+                chunks: list[str] = []
+                async for chunk in writer.write_stream(**scene_args):
+                    chunks.append(chunk)
+                    await stream_queue.put(("chunk", chunk))
+                scene_content = "".join(chunks)
+                if not scene_content.strip():
+                    scene_content, scene_trace = await writer.write(**scene_args)
+            else:
+                scene_content, scene_trace = await writer.write(**scene_args)
+            scene_drafts.append(scene_content)
+            scene_context = (
+                f"{scene_context}\n\n[前一场 Scene {scene['scene_index']}]\n"
+                f"{scene_content[-1200:]}"
+            )
+        content = assemble_scenes(scene_drafts)
+        trace = scene_trace or writer.latest_trace
+        tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
+    elif stream_queue is not None:
         collected: list[str] = []
         async for chunk in writer.write_stream(**write_args):
             collected.append(chunk)
@@ -419,12 +470,35 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
     label = f"(v{evolution_version})"
+    quality_gate_report = check_draft_hard_gates(
+        content,
+        target_words=target_words,
+        chapter_outline=state.get("chapter_outline", ""),
+    )
+    story_checker = check_story_integrity(
+        content,
+        scene_plan=state.get("scene_plan", []),
+        scene_drafts=scene_drafts,
+        required_facts=state.get("required_facts", []),
+        canon_conflicts=state.get("canon_conflicts", []),
+    )
+    quality_gate_report["story_checker"] = story_checker
+    if not story_checker["passed"]:
+        quality_gate_report["violations"].extend(story_checker["violations"])
+        quality_gate_report["passed"] = False
+    if not quality_gate_report["passed"]:
+        print(
+            "  [QualityGate] blocked: "
+            + ", ".join(quality_gate_report["violations"])
+        )
     wmsg = f"  [Writer] {len(content)} chars/{_text_units(content)} units {label} "
     wmsg += f"(target: {target_words}w, tokens: {tok_info})"
     print(wmsg)
     return {
         "draft_content": content,
         "evolution_round": state.get("evolution_round", 0),
+        "quality_gate_report": quality_gate_report,
+        "scene_drafts": scene_drafts,
     }
 
 
@@ -494,6 +568,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "focus": None,
             "quality_guard": initial_guard,
         }
+        initial_candidate = candidate_from_state(
+            state,
+            version,
+            {**current_scores, "composite": composite_score(current_scores)},
+            initial_guard,
+        )
 
         # Rule-based improvement plan for v0
         rule_plan = build_improvement_plan_rule(current_scores, delta=None, config=evo_config)
@@ -527,11 +607,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_round": 1,
             "evolution_version": 1,
             "evolution_history": [entry],
-            "evolution_best_version": version,
-            "evolution_best_draft": state.get("draft_content", ""),
-            "evolution_best_editor_report": state.get("editor_report", {}),
-            "evolution_best_continuity_report": state.get("continuity_report", {}),
-            "evolution_best_quality_guard": initial_guard,
+            "evolution_candidates": [initial_candidate],
+            "evolution_best_candidate_version": version,
             "quality_guard_report": initial_guard,
             "evolution_improvement_plan": plan,
             "evolution_termination": "",
@@ -546,8 +623,20 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     }
     delta = compute_delta(current_scores, previous_scores)
 
-    best_ed_rpt = state.get("evolution_best_editor_report", {}) or {}
-    best_ct_rpt = state.get("evolution_best_continuity_report", {}) or {}
+    candidates = list(state.get("evolution_candidates", []))
+    current_candidate = candidate_from_state(
+        state,
+        version,
+        {**current_scores, "composite": composite_score(current_scores)},
+    )
+    best_candidate = next(
+        (item for item in candidates
+         if item.get("version") == state.get("evolution_best_candidate_version")),
+        None,
+    )
+    best_snapshot = candidate_to_state(best_candidate) if best_candidate else {}
+    best_ed_rpt = best_snapshot.get("editor_report", {}) or {}
+    best_ct_rpt = best_snapshot.get("continuity_report", {}) or {}
     # 与 current_scores 同口径走 extract_scores：维度缺失补 0、editor/continuity
     # 假 0 一律中和，否则 dims_avg 分母不一致 / best 假 0 拖低对比基准。
     best_scores = extract_scores({
@@ -555,14 +644,16 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "continuity_report": best_ct_rpt,
     })
     best_state = {
-        "draft_content": state.get("evolution_best_draft", ""),
+        "draft_content": best_snapshot.get("draft_content", ""),
         "editor_report": best_ed_rpt,
         "continuity_report": best_ct_rpt,
-        "worldbuilding_report": state.get("evolution_best_worldbuilding_report", {}),
-        "outline_coverage": state.get("evolution_best_outline_coverage"),
-        "required_facts_missing": state.get("evolution_best_required_facts_missing", 0),
+        "worldbuilding_report": best_snapshot.get("worldbuilding_report", {}),
+        "outline_coverage": best_snapshot.get("outline_coverage"),
+        "required_facts_missing": best_snapshot.get("required_facts_missing", 0),
+        "quality_gate_report": best_snapshot.get("quality_gate_report", {}),
     }
     guard_report = check_quality_guards(state, best_state, evo_config)
+    current_candidate["quality_guard_report"] = guard_report
 
     # 1. Rule layer: termination decision
     termination, reason = decide_termination(
@@ -610,6 +701,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     result: dict = {
         "evolution_history": state["evolution_history"] + [new_entry],
+        "evolution_candidates": candidates + [current_candidate],
         "evolution_termination": termination,
         "quality_guard_report": guard_report,
     }
@@ -618,14 +710,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     is_new_best, selection_report = is_better_candidate(state, best_state, evo_config)
     if is_new_best:
         result.update({
-            "evolution_best_version": version,
-            "evolution_best_draft": state.get("draft_content", ""),
-            "evolution_best_editor_report": state.get("editor_report", {}),
-            "evolution_best_continuity_report": state.get("continuity_report", {}),
-            "evolution_best_quality_guard": selection_report,
-            "evolution_best_worldbuilding_report": state.get("worldbuilding_report", {}),
-            "evolution_best_outline_coverage": state.get("outline_coverage"),
-            "evolution_best_required_facts_missing": state.get("required_facts_missing", 0),
+            "evolution_best_candidate_version": version,
         })
 
     # 6. If continuing, increment counters + issue plan
@@ -638,7 +723,10 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     editor_score = current_scores["editor_overall"]
     continuity_score = current_scores["continuity_overall"]
-    best_v = result.get("evolution_best_version", state.get("evolution_best_version", 0))
+    best_v = result.get(
+        "evolution_best_candidate_version",
+        state.get("evolution_best_candidate_version", 0),
+    )
     status = f"终止:{termination}" if termination else "继续"
     print(f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
           f"Δ={delta['trend']} best=v{best_v} {status}")
@@ -652,7 +740,7 @@ def select_best_version_node(state: NovelState) -> dict:
     The actual DB write happens in the SSE layer (create_sse_stream / resume_graph),
     not here — this node just sets the final draft_content to the best version.
     """
-    best_version = state.get("evolution_best_version", 0)
+    best_version = state.get("evolution_best_candidate_version", 0)
     current_version = state.get("evolution_version", 0)
     termination = state.get("evolution_termination", "")
 
@@ -662,14 +750,14 @@ def select_best_version_node(state: NovelState) -> dict:
             f"  [SelectBest] Rolling back: "
             f"v{current_version} → v{best_version} (best)"
         )
-        best_draft = state.get("evolution_best_draft", "")
-        best_ed = state.get("evolution_best_editor_report", {})
-        best_ct = state.get("evolution_best_continuity_report", {})
-        return {
-            "draft_content": best_draft or state.get("draft_content", ""),
-            "editor_report": best_ed or state.get("editor_report", {}),
-            "continuity_report": best_ct or state.get("continuity_report", {}),
-        }
+        best_candidate = next(
+            (item for item in state.get("evolution_candidates", [])
+             if item.get("version") == best_version),
+            None,
+        )
+        if best_candidate:
+            return candidate_to_state(best_candidate)
+        return {}
 
     print(f"  [SelectBest] v{best_version} is best, termination={termination}")
     return {}

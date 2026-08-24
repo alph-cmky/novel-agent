@@ -84,6 +84,9 @@ class WriterAgent(BaseAgent):
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
         unresolved_foreshadowings: list[str] | None = None,
+        context_packet: dict | None = None,
+        timeline_events: list[dict] | None = None,
+        timeline_findings: list[dict] | None = None,
     ) -> tuple[str, TraceStep]:
         """Generate a chapter.
 
@@ -97,6 +100,15 @@ class WriterAgent(BaseAgent):
             rewrite_instructions: Specific guidance from Orchestrator for rewriting.
             orchestrator_strategy: Narrative strategy from Orchestrator (stage, pacing, etc.).
         """
+        if context_packet:
+            character_context = context_packet.get("character_context", character_context)
+            world_context = context_packet.get("world_context", world_context)
+            recent_summary = context_packet.get("recent_summary", recent_summary)
+            unresolved_foreshadowings = context_packet.get(
+                "unresolved_foreshadowings", unresolved_foreshadowings
+            )
+            timeline_events = context_packet.get("timeline_events", timeline_events)
+            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
         messages = [{"role": "system", "content": self.system_prompt}]
 
         # Assemble context
@@ -118,6 +130,10 @@ class WriterAgent(BaseAgent):
                 "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
+        if timeline_events:
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+        if timeline_findings:
+            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
 
         # 仅当 search_context 工具已注册（project_id 非空）才提示使用工具；
         # 否则（评测/无项目库场景）模型无法调用工具，会输出 <search_context> 文本
@@ -152,11 +168,23 @@ class WriterAgent(BaseAgent):
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
         unresolved_foreshadowings: list[str] | None = None,
+        context_packet: dict | None = None,
+        timeline_events: list[dict] | None = None,
+        timeline_findings: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Generate a chapter with streaming output. Yields text chunks.
 
         Unlike write(), this skips tool calling and streams the LLM response directly.
         """
+        if context_packet:
+            character_context = context_packet.get("character_context", character_context)
+            world_context = context_packet.get("world_context", world_context)
+            recent_summary = context_packet.get("recent_summary", recent_summary)
+            unresolved_foreshadowings = context_packet.get(
+                "unresolved_foreshadowings", unresolved_foreshadowings
+            )
+            timeline_events = context_packet.get("timeline_events", timeline_events)
+            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
         if rewrite_instructions:
             context_parts.insert(0, f"## 重写指导（务必遵守）\n{rewrite_instructions}")
@@ -175,6 +203,10 @@ class WriterAgent(BaseAgent):
                 "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
+        if timeline_events:
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+        if timeline_findings:
+            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
 
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"

@@ -4,10 +4,14 @@
 用 tmp_path 隔离 SQLite，mock ChapterStore 避免真实 ChromaDB 落盘。
 """
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
-from novel_agent.schema.enums import ChapterStatus
+import pytest
+
+from novel_agent.schema.enums import ChapterStatus, RunStatus
 from novel_agent.storage.manager import ProjectManager
+from novel_agent.storage.models import init_db
 
 
 def _make_manager(tmp_path, chapter_store=None) -> ProjectManager:
@@ -17,6 +21,114 @@ def _make_manager(tmp_path, chapter_store=None) -> ProjectManager:
 
 
 class TestProjectCRUD:
+    def test_old_database_migrates_scene_manifest_column(self, tmp_path):
+        db_path = tmp_path / "novel.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE chapters (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                chapter_number INTEGER,
+                status TEXT
+            );
+            CREATE TABLE chapter_versions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                chapter_number INTEGER,
+                content TEXT,
+                content_hash TEXT,
+                version_number INTEGER,
+                status TEXT
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        migrated = init_db(db_path)
+        columns = {
+            row["name"] for row in migrated.execute("PRAGMA table_info(chapter_versions)")
+        }
+        assert "scene_manifest" in columns
+        migrated.close()
+
+    def test_commit_is_idempotent_and_emits_outbox_event(self, tmp_path):
+        store = MagicMock()
+        mgr = _make_manager(tmp_path, chapter_store=store)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        version = mgr.create_chapter_version(pid, 1, "正文", run_id=run["id"])
+
+        mgr.commit_chapter_version(version["id"])
+        mgr.commit_chapter_version(version["id"])
+
+        events = mgr.list_outbox_events(pid)
+        assert len(events) == 1
+        assert events[0]["status"] == "pending"
+        processed = mgr.process_outbox_event(events[0]["id"])
+        assert processed["status"] == "done"
+        store.index_chapter.assert_called_once_with(pid, 1, "正文")
+
+    def test_writing_run_binds_immutable_canon_snapshot(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_world_entities(
+            pid,
+            {"new_entities": [{"entity_type": "character", "name": "甲"}]},
+            1,
+        )
+        run = mgr.create_writing_run(pid, 2)
+        snapshot = mgr.get_canon_snapshot(run["input_snapshot_id"])
+        assert snapshot["payload"]["entities"][0]["name"] == "甲"
+        mgr.save_world_entities(
+            pid,
+            {"new_entities": [{"entity_type": "character", "name": "乙"}]},
+            2,
+        )
+        assert [entity["name"] for entity in mgr.get_canon_snapshot(
+            run["input_snapshot_id"]
+        )["payload"]["entities"]] == ["甲"]
+
+    def test_outbox_failure_is_retryable(self, tmp_path):
+        store = MagicMock()
+        store.index_chapter.side_effect = RuntimeError("index unavailable")
+        mgr = _make_manager(tmp_path, chapter_store=store)
+        pid = mgr.init_project(name="p")
+        version = mgr.create_chapter_version(pid, 1, "正文")
+        mgr.commit_chapter_version(version["id"])
+        event = mgr.list_outbox_events(pid)[0]
+
+        failed = mgr.process_outbox_event(event["id"])
+        assert failed["status"] == "stale"
+        assert failed["retry_count"] == 1
+        retried = mgr.retry_outbox_event(event["id"])
+        assert retried["status"] == "pending"
+
+    def test_outbox_claim_is_exclusive_and_expired_lease_is_reclaimable(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        version = mgr.create_chapter_version(pid, 1, "正文")
+        mgr.commit_chapter_version(version["id"])
+        event_id = mgr.list_outbox_events(pid)[0]["id"]
+
+        first = mgr.claim_outbox_events("worker-a", lease_seconds=60)
+        second = mgr.claim_outbox_events("worker-b", lease_seconds=60)
+        assert [event["id"] for event in first] == [event_id]
+        assert second == []
+        with pytest.raises(ValueError, match="another worker"):
+            mgr.process_outbox_event(event_id, owner="worker-b")
+
+        with mgr._conn() as conn:
+            conn.execute(
+                "UPDATE outbox_events SET lease_expires_at = '2000-01-01 00:00:00' "
+                "WHERE id = ?",
+                (event_id,),
+            )
+        reclaimed = mgr.claim_outbox_events("worker-b", lease_seconds=60)
+        assert [event["id"] for event in reclaimed] == [event_id]
+
     def test_init_and_get_project(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="测试", title="", genre="玄幻")
@@ -61,6 +173,186 @@ class TestChapterCRUD:
         chapters = mgr.get_all_chapters(pid)
         assert len(chapters) == 1
         assert chapters[0]["draft_content"] == "v2"
+
+    def test_v2_run_lock_and_immutable_versions(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        assert run["status"] == RunStatus.QUEUED.value
+
+        try:
+            mgr.create_writing_run(pid, 1)
+        except ValueError as exc:
+            assert "active run" in str(exc)
+        else:
+            raise AssertionError("concurrent chapter run was not rejected")
+
+        version = mgr.create_chapter_version(
+            pid, 1, "第一版正文", run_id=run["id"]
+        )
+        assert version["version_number"] == 1
+        assert version["content_hash"]
+        mgr.update_writing_run(
+            run["id"],
+            status=RunStatus.WAITING_REVIEW.value,
+            current_version_id=version["id"],
+        )
+        committed = mgr.commit_chapter_version(version["id"])
+        assert committed["status"] == "approved"
+        assert mgr.get_chapter(pid, 1)["approved_version_id"] == version["id"]
+        assert mgr.get_writing_run(run["id"])["status"] == RunStatus.SUCCEEDED.value
+
+        second = mgr.create_chapter_version(pid, 1, "第二版正文")
+        assert second["version_number"] == 2
+        assert second["parent_version_id"] == version["id"]
+        assert mgr.get_chapter_version(version["id"])["content"] == "第一版正文"
+
+    def test_canon_proposal_isolated_until_commit(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        proposal = mgr.create_canon_proposal(
+            pid,
+            1,
+            "worldbuilding",
+            {
+                "new_entities": [
+                    {"entity_type": "character", "name": "洛千秋"}
+                ]
+            },
+            run_id=run["id"],
+        )
+        assert mgr.get_all_world_entities(pid) == []
+        accepted = mgr.review_canon_proposal(proposal["id"], "accepted", "确认")
+        assert accepted["status"] == "accepted"
+
+        committed = mgr.commit_canon_proposals(run["id"])
+        assert committed[0]["status"] == "committed"
+        assert mgr.get_all_world_entities(pid)[0]["name"] == "洛千秋"
+
+    def test_rejected_canon_proposal_is_never_committed(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        proposal = mgr.create_canon_proposal(
+            pid,
+            1,
+            "worldbuilding",
+            {"new_entities": [{"entity_type": "item", "name": "禁物"}]},
+            run_id=run["id"],
+        )
+
+        mgr.review_canon_proposal(proposal["id"], "rejected", "不符合设定")
+
+        assert mgr.commit_canon_proposals(run["id"]) == []
+        assert mgr.get_all_world_entities(pid) == []
+        assert mgr.get_canon_proposal(proposal["id"])["status"] == "rejected"
+
+    def test_canon_proposal_commit_rolls_back_as_one_transaction(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        for name in ("甲", "乙"):
+            proposal = mgr.create_canon_proposal(
+                pid,
+                1,
+                "worldbuilding",
+                {"new_entities": [{"entity_type": "character", "name": name}]},
+                run_id=run["id"],
+            )
+            mgr.review_canon_proposal(proposal["id"], "accepted")
+
+        original = mgr._apply_worldbuilding_proposal_in_conn
+        calls = 0
+
+        def fail_after_first(conn, *args):
+            nonlocal calls
+            calls += 1
+            original(conn, *args)
+            if calls == 2:
+                raise RuntimeError("canon failure")
+
+        with patch.object(
+            mgr, "_apply_worldbuilding_proposal_in_conn", side_effect=fail_after_first
+        ):
+            with pytest.raises(RuntimeError, match="canon failure"):
+                mgr.commit_canon_proposals(run["id"])
+
+        assert mgr.get_all_world_entities(pid) == []
+        assert all(
+            item["status"] == "accepted"
+            for item in mgr.list_canon_proposals(pid, run_id=run["id"])
+        )
+
+    def test_story_events_are_normalized_and_idempotent(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        events = mgr.save_story_events(
+            pid,
+            3,
+            [
+                "主角进入城门",
+                {"subject": "主角", "action": "发现", "object": "密道"},
+            ],
+        )
+        again = mgr.save_story_events(
+            pid,
+            3,
+            ["主角进入城门", {"subject": "主角", "action": "发现", "object": "密道"}],
+        )
+
+        assert len(events) == 2
+        assert len(again) == 2
+        assert mgr.get_story_events(pid, 3)[0]["chapter_number"] == 3
+
+    def test_unapproved_v2_version_stays_candidate(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        version = mgr.create_chapter_version(pid, 1, "候选", run_id=run["id"])
+
+        assert version["status"] == "candidate"
+        assert mgr.get_chapter(pid, 1) is None
+        assert mgr.get_writing_run(run["id"])["status"] == "queued"
+
+    def test_scene_revision_rejects_missing_scene(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        version = mgr.create_chapter_version(
+            pid,
+            1,
+            "正文",
+            scene_plan=[{"scene_index": 1}],
+            scene_drafts=["正文"],
+        )
+
+        with pytest.raises(ValueError, match="scene not found"):
+            mgr.create_scene_revision(version["id"], 2, "不存在")
+
+    def test_scene_revision_creates_child_version(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        run = mgr.create_writing_run(pid, 1)
+        version = mgr.create_chapter_version(
+            pid,
+            1,
+            "第一场\n\n第二场",
+            run_id=run["id"],
+            scene_plan=[
+                {"scene_index": 1, "outline": "冲突", "target_words": 100},
+                {"scene_index": 2, "outline": "转折", "target_words": 100},
+            ],
+            scene_drafts=["第一场", "第二场"],
+        )
+
+        revision = mgr.create_scene_revision(
+            version["id"], 2, "改写后的第二场", run_id=run["id"]
+        )
+
+        assert revision["parent_version_id"] == version["id"]
+        assert revision["origin"] == "scene_rewrite"
+        assert revision["content"] == "第一场\n\n改写后的第二场"
+        assert mgr.get_scene_manifest(revision["id"])[1]["content"] == "改写后的第二场"
 
     def test_get_chapter_count_excludes_draft(self, tmp_path):
         mgr = _make_manager(tmp_path)

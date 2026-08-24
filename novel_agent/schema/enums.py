@@ -31,3 +31,36 @@ class OutlineStatus(StrEnum):
     FAILED = "failed"
     DRAFTED = "drafted"
     APPROVED = "approved"
+
+
+class RunStatus(StrEnum):
+    """Durable lifecycle of a generation/review run."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_REVIEW = "waiting_review"
+    WAITING_USER = "waiting_user"
+    RETRYING = "retrying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class ProposalStatus(StrEnum):
+    """Review lifecycle of an Agent-proposed Canon change."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    COMMITTED = "committed"
+
+
+class OutboxStatus(StrEnum):
+    """Delivery lifecycle for derived-state events."""
+
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DONE = "done"
+    FAILED = "failed"
+    STALE = "stale"

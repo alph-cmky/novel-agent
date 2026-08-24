@@ -5,8 +5,16 @@ SessionStore 必须提供幂等的 remove 能力，供会话完成 / 异常后�
 """
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-from novel_agent.api.sse import SessionStore, replay_review
+from novel_agent.api.sse import (
+    SessionStore,
+    _save_chapter_result,
+    create_sse_stream,
+    replay_review,
+)
+from novel_agent.storage.manager import ProjectManager
 
 
 class TestSessionStore:
@@ -73,3 +81,150 @@ async def test_replay_review_emits_persisted_checkpoint():
 
     assert 'event: review_required' in events[-1]
     assert '恢复正文' in events[-1]
+
+
+class _LifecycleGraph:
+    def __init__(self, state, error=None):
+        self.state = state
+        self.error = error
+
+    async def astream_events(self, _input, _config, version):
+        if self.error:
+            raise self.error
+        yield {
+            "event": "on_chain_start",
+            "name": "evolution_writer",
+            "data": {},
+        }
+
+    async def aget_state(self, _config):
+        return self.state
+
+
+def _run_stream(stream):
+    async def collect():
+        return [event async for event in stream]
+
+    return asyncio.run(collect())
+
+
+def test_create_sse_stream_persists_waiting_review_run(tmp_path):
+    with patch("novel_agent.storage.manager.ChapterStore") as mock_store:
+        mock_store.return_value = MagicMock()
+        mgr = ProjectManager(tmp_path)
+    project_id = mgr.init_project(name="p")
+    run = mgr.create_writing_run(project_id, 1)
+    state = SimpleNamespace(
+        next=("human_review",),
+        values={"writing_run_id": run["id"], "draft_content": "候选"},
+    )
+    store = SessionStore()
+    session_id = store.create(_LifecycleGraph(state), asyncio.Queue())
+
+    with patch("novel_agent.api.sse.create_trace"):
+        events = _run_stream(
+            create_sse_stream(
+                store,
+                session_id,
+                store.get(session_id)["graph"],
+                {"writing_run_id": run["id"]},
+                {"configurable": {}},
+                mgr,
+                project_id,
+                1,
+            )
+        )
+
+    assert any("review_required" in event for event in events)
+    assert mgr.get_writing_run(run["id"])["status"] == "waiting_review"
+
+
+def test_create_sse_stream_marks_run_failed(tmp_path):
+    mgr = ProjectManager(tmp_path)
+    project_id = mgr.init_project(name="p")
+    run = mgr.create_writing_run(project_id, 1)
+    store = SessionStore()
+    session_id = store.create(
+        _LifecycleGraph(None, RuntimeError("generation failed")), asyncio.Queue()
+    )
+
+    with patch("novel_agent.api.sse.create_trace"):
+        events = _run_stream(
+            create_sse_stream(
+                store,
+                session_id,
+                store.get(session_id)["graph"],
+                {"writing_run_id": run["id"]},
+                {"configurable": {}},
+                mgr,
+                project_id,
+                1,
+            )
+        )
+
+    assert any("error" in event for event in events)
+    assert mgr.get_writing_run(run["id"])["status"] == "failed"
+
+
+def test_save_chapter_result_creates_and_commits_v2_version(tmp_path):
+    with patch("novel_agent.storage.manager.ChapterStore") as mock_store:
+        mock_store.return_value = MagicMock()
+        mgr = ProjectManager(tmp_path)
+    project_id = mgr.init_project(name="p")
+    run = mgr.create_writing_run(project_id, 1)
+
+    _save_chapter_result(
+        mgr,
+        project_id,
+        1,
+        {
+            "writing_run_id": run["id"],
+            "draft_content": "正文",
+            "human_approved": True,
+            "editor_report": {"overall_score": 80},
+            "continuity_report": {"overall_score": 90},
+            "worldbuilding_report": {
+                "new_entities": [
+                    {"entity_type": "character", "name": "洛千秋"}
+                ],
+                "chapter_events": ["秦照夜托付火种"],
+            },
+        },
+    )
+
+    versions = mgr.list_chapter_versions(project_id, 1)
+    assert len(versions) == 1
+    assert versions[0]["status"] == "approved"
+    assert mgr.get_writing_run(run["id"])["status"] == "succeeded"
+    proposals = mgr.list_canon_proposals(project_id, run_id=run["id"])
+    assert proposals[0]["status"] == "committed"
+    assert mgr.get_all_world_entities(project_id)[0]["name"] == "洛千秋"
+    assert mgr.get_story_events(project_id, 1)[0]["action"] == "秦照夜托付火种"
+
+
+def test_save_unapproved_v2_result_keeps_proposal_pending(tmp_path):
+    with patch("novel_agent.storage.manager.ChapterStore") as mock_store:
+        mock_store.return_value = MagicMock()
+        mgr = ProjectManager(tmp_path)
+    project_id = mgr.init_project(name="p")
+    run = mgr.create_writing_run(project_id, 1)
+
+    _save_chapter_result(
+        mgr,
+        project_id,
+        1,
+        {
+            "writing_run_id": run["id"],
+            "draft_content": "候选正文",
+            "human_approved": False,
+            "worldbuilding_report": {
+                "new_entities": [{"entity_type": "item", "name": "候选物"}]
+            },
+        },
+    )
+
+    versions = mgr.list_chapter_versions(project_id, 1)
+    proposals = mgr.list_canon_proposals(project_id, run_id=run["id"])
+    assert versions[0]["status"] == "candidate"
+    assert proposals[0]["status"] == "proposed"
+    assert mgr.get_all_world_entities(project_id) == []

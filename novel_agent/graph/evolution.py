@@ -172,6 +172,8 @@ def build_quality_guard_report(state: dict, best_state: dict | None = None) -> d
         "best_outline_coverage": best_outline_coverage,
         "required_facts_missing": state.get("required_facts_missing", 0),
         "best_required_facts_missing": (best_state or {}).get("required_facts_missing", 0),
+        "quality_gate": state.get("quality_gate_report") or {},
+        "best_quality_gate": (best_state or {}).get("quality_gate_report") or {},
     }
 
 
@@ -184,6 +186,11 @@ def check_quality_guards(
     cfg = config or DEFAULT_EVO_CONFIG
     report = build_quality_guard_report(state, best_state)
     violations: list[str] = []
+    quality_gate = report["quality_gate"]
+    if quality_gate and not quality_gate.get("passed", True):
+        violations.extend(
+            f"hard_gate:{item}" for item in quality_gate.get("violations", [])
+        )
     if report["length_ratio"] < cfg.min_length_ratio:
         violations.append("length_regression")
     for severity, limit in (

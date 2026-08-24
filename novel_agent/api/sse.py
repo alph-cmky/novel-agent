@@ -4,13 +4,15 @@ import asyncio
 import json
 import traceback
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
+from novel_agent.api.run_service import ChapterRunService
 from novel_agent.observability.langfuse import create_trace, score_trace
-from novel_agent.schema.enums import ChapterStatus
+from novel_agent.schema.enums import ChapterStatus, RunStatus
 from novel_agent.storage.manager import ProjectManager
 
 
@@ -32,6 +34,7 @@ class SessionStore:
             "queue": queue,
             "project_id": None,
             "chapter_number": None,
+            "run_id": None,
         }
         return session_id
 
@@ -46,10 +49,17 @@ class SessionStore:
         if session_id in self._sessions:
             self._sessions[session_id]["config"] = config
 
-    def set_context(self, session_id: str, project_id: str, chapter_number: int) -> None:
+    def set_context(
+        self,
+        session_id: str,
+        project_id: str,
+        chapter_number: int,
+        run_id: str | None = None,
+    ) -> None:
         if session_id in self._sessions:
             self._sessions[session_id]["project_id"] = project_id
             self._sessions[session_id]["chapter_number"] = chapter_number
+            self._sessions[session_id]["run_id"] = run_id
 
     def find_session(self, project_id: str, chapter_number: int) -> str | None:
         for sid, s in self._sessions.items():
@@ -221,6 +231,14 @@ async def create_sse_stream(
     current_node: str | None = None
 
     try:
+        run_id = initial_state.get("writing_run_id")
+        if run_id:
+            mgr.update_writing_run(
+                run_id,
+                status=RunStatus.RUNNING.value,
+                started_at=datetime.now(UTC).isoformat(),
+            )
+            store.set_context(session_id, project_id, chapter_number, run_id)
         yield _sse_event("start", {"message": "开始写作..."})
 
         async for event in graph.astream_events(initial_state, config, version="v2"):
@@ -233,6 +251,12 @@ async def create_sse_stream(
 
             if kind == "on_chain_start" and name in _NODE_LABELS:
                 current_node = name
+                if run_id:
+                    mgr.update_writing_run(
+                        run_id,
+                        status=RunStatus.RUNNING.value,
+                        current_node=name,
+                    )
                 yield await _make_progress_event(name, "running")
             elif kind == "on_chain_end" and name in _NODE_LABELS:
                 yield await _make_progress_event(name, "done", event)
@@ -252,6 +276,12 @@ async def create_sse_stream(
         if final_state and final_state.next:
             # Graph is paused at human_review — build payload from state
             vals = final_state.values or {}
+            if run_id:
+                mgr.update_writing_run(
+                    run_id,
+                    status=RunStatus.WAITING_REVIEW.value,
+                    current_node="human_review",
+                )
             yield _sse_event("progress", {
                 "node": "human_review", "label": "人工审批", "status": "running",
                 "score": None, "detail": None,
@@ -272,6 +302,13 @@ async def create_sse_stream(
     except GraphInterrupt as gi:
         running.clear()
         await drain_task
+        run_id = initial_state.get("writing_run_id")
+        if run_id:
+            mgr.update_writing_run(
+                run_id,
+                status=RunStatus.WAITING_REVIEW.value,
+                current_node="human_review",
+            )
         async for s in _flush_output(output):
             yield s
         async for s in _drain_queue(queue):
@@ -289,6 +326,15 @@ async def create_sse_stream(
         await drain_task
         traceback.print_exc()
         mgr.mark_chapter_failed(project_id, chapter_number)
+        run_id = initial_state.get("writing_run_id")
+        if run_id:
+            mgr.update_writing_run(
+                run_id,
+                status=RunStatus.FAILED.value,
+                error_code=type(e).__name__,
+                error_message=str(e),
+                finished_at=datetime.now(UTC).isoformat(),
+            )
         yield _sse_event("error", {"message": str(e), "node": current_node})
         store.remove(session_id)
     finally:
@@ -320,6 +366,7 @@ async def resume_graph(
 
     graph = session["graph"]
     config = session.get("config", {})
+    run_id = session.get("run_id")
     queue = session.get("queue")
     output: asyncio.Queue = asyncio.Queue()
     running = asyncio.Event()
@@ -331,6 +378,12 @@ async def resume_graph(
     current_node: str | None = None
 
     try:
+        if run_id and mgr:
+            mgr.update_writing_run(
+                run_id,
+                status=RunStatus.RUNNING.value,
+                current_node="human_review",
+            )
         yield _sse_event("start", {"message": "继续写作..."})
         yield await _make_progress_event("human_review", "done")
 
@@ -345,6 +398,12 @@ async def resume_graph(
 
             if kind == "on_chain_start" and name in _NODE_LABELS:
                 current_node = name
+                if run_id and mgr:
+                    mgr.update_writing_run(
+                        run_id,
+                        status=RunStatus.RUNNING.value,
+                        current_node=name,
+                    )
                 yield await _make_progress_event(name, "running")
             elif kind == "on_chain_end" and name in _NODE_LABELS:
                 yield await _make_progress_event(name, "done", event)
@@ -364,6 +423,12 @@ async def resume_graph(
         final_state = await graph.aget_state(config)
         if final_state and final_state.next:
             vals = final_state.values or {}
+            if run_id and mgr:
+                mgr.update_writing_run(
+                    run_id,
+                    status=RunStatus.WAITING_REVIEW.value,
+                    current_node="human_review",
+                )
             yield _sse_event("progress", {
                 "node": "human_review", "label": "人工审批", "status": "running",
                 "score": None, "detail": None,
@@ -385,6 +450,12 @@ async def resume_graph(
         running.clear()
         if drain_task:
             await drain_task
+        if run_id and mgr:
+            mgr.update_writing_run(
+                run_id,
+                status=RunStatus.WAITING_REVIEW.value,
+                current_node="human_review",
+            )
         async for s in _flush_output(output):
             yield s
         if queue:
@@ -407,6 +478,14 @@ async def resume_graph(
         traceback.print_exc()
         if mgr:
             mgr.mark_chapter_failed(project_id, chapter_number)
+            if run_id:
+                mgr.update_writing_run(
+                    run_id,
+                    status=RunStatus.FAILED.value,
+                    error_code=type(e).__name__,
+                    error_message=str(e),
+                    finished_at=datetime.now(UTC).isoformat(),
+                )
         yield _sse_event("error", {"message": str(e), "node": current_node})
         store.remove(session_id)
     finally:
@@ -501,6 +580,23 @@ def _save_chapter_result(
     outline = result.get("chapter_outline", "")
 
     approved = bool(result.get("human_approved"))
+    run_id = result.get("writing_run_id")
+    version_record = None
+    if run_id:
+        version_record = mgr.create_chapter_version(
+            project_id,
+            chapter_number,
+            draft,
+            run_id=run_id,
+            origin="evolution" if result.get("evolution_history") else "initial_generation",
+            scene_plan=result.get("scene_plan", []),
+            scene_drafts=result.get("scene_drafts", []),
+        )
+        mgr.update_writing_run(
+            run_id,
+            current_version_id=version_record["id"],
+            status=RunStatus.WAITING_REVIEW.value,
+        )
     # Commit the durable record as a draft first. Approval is published only
     # after world state and vector indexing have succeeded.
     status = ChapterStatus.DRAFT.value
@@ -513,7 +609,7 @@ def _save_chapter_result(
         version = len(evolution_history)
         evolution_summary = json.dumps({
             "total_rounds": len(evolution_history),
-            "best_version": result.get("evolution_best_version", 0),
+            "best_version": result.get("evolution_best_candidate_version", 0),
             "termination": result.get("evolution_termination", ""),
             "score_history": evolution_history,
         }, ensure_ascii=False)
@@ -534,13 +630,31 @@ def _save_chapter_result(
     # Save worldbuilding report to chapter record
     mgr.update_chapter_worldbuilding(project_id, chapter_number, wb_report)
 
-    # Save world entities
     if wb_report:
-        mgr.save_world_entities(project_id, wb_report, chapter_number)
-        mgr.save_world_relations(project_id, chapter_number, wb_report)
+        if run_id:
+            # V2 runs produce a proposal; only Canon Commit may mutate the
+            # formal entity/relation/foreshadowing tables.
+            mgr.create_canon_proposal(
+                project_id,
+                chapter_number,
+                "worldbuilding",
+                wb_report,
+                run_id=run_id,
+                version_id=version_record["id"] if version_record else None,
+            )
+        else:
+            # Legacy runs retain the old direct-write path during migration.
+            mgr.save_world_entities(project_id, wb_report, chapter_number)
+            mgr.save_world_relations(project_id, chapter_number, wb_report)
+            _save_foreshadowings(mgr, project_id, chapter_number, wb_report)
 
-    # Save foreshadowing lifecycle
-    _save_foreshadowings(mgr, project_id, chapter_number, wb_report)
+    if run_id and approved:
+        for proposal in mgr.list_canon_proposals(
+            project_id, run_id=run_id, status="proposed"
+        ):
+            mgr.review_canon_proposal(proposal["id"], "accepted", "章节已批准")
+        ChapterRunService(mgr).commit(run_id)
+        return
 
     if approved:
         # Index before publishing the approved status. A vector-store failure
@@ -569,3 +683,5 @@ def _save_chapter_result(
             evolution_summary=evolution_summary,
             index=False,
         )
+        if version_record:
+            mgr.commit_chapter_version(version_record["id"])

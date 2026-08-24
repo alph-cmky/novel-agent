@@ -91,6 +91,20 @@ class TestWriteToolHint:
         assert "待回收伏笔" in user
         assert "神秘信物" in user
 
+    def test_context_packet_is_preferred_over_legacy_context_args(self):
+        user = self._capture_user_prompt(
+            WriterAgent(),
+            character_context="旧角色",
+            context_packet={
+                "character_context": "Packet 角色",
+                "world_context": "Packet 设定",
+                "recent_summary": "Packet 摘要",
+                "unresolved_foreshadowings": [],
+            },
+        )
+        assert "Packet 角色" in user
+        assert "旧角色" not in user
+
 
 class TestImprovementPlanFormatting:
     """测试演化迭代改进计划格式化，确保篇幅保护和结构硬约束不被丢弃。"""
