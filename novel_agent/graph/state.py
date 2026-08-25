@@ -53,20 +53,20 @@ class NovelState(TypedDict, total=False):
     # ── 人类审阅 ──
     human_approved: bool
     human_feedback: dict
-    evolution_human_rejects: int          # 人类拒绝次数（最多3次）
+    evolution_human_rejects: int  # 人类拒绝次数（最多3次）
     human_review_exhausted: bool
 
     # ── 进化控制 ──
-    evolution_max_rounds: int             # 最大轮次，默认 5
+    evolution_max_rounds: int  # 最大轮次，默认 5
     evolution_convergence_threshold: float  # 收敛阈值，默认 3.0
-    evolution_round: int                  # 当前轮次 (0-based)
-    evolution_version: int                # 当前版本号
+    evolution_round: int  # 当前轮次 (0-based)
+    evolution_version: int  # 当前版本号
 
     # ── 进化状态 ──
     # 每轮 {v, editor, ct, composite, dimensions, delta, focus}
     evolution_history: list[dict]
     evolution_candidates: list[dict]
-    evolution_improvement_plan: dict      # 当前轮改进计划，Writer 消费
+    evolution_improvement_plan: dict  # 当前轮改进计划，Writer 消费
     # "" | "converged" | "regressed" | "plateau" | "max_rounds" | "ceiling"
     evolution_termination: str
     evolution_best_candidate_version: int

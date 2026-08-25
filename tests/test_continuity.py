@@ -43,12 +43,8 @@ class TestContinuityToolHint:
     def test_empty_output_returns_unavailable(self):
         """空输出（reasoning 模型偶发）→ unavailable 标记，而非假 0 分。"""
         auditor = ContinuityAgent()
-        with patch.object(
-            auditor, "run_with_tools", new=AsyncMock(return_value=("", None))
-        ):
-            report, _ = asyncio.run(
-                auditor.audit(chapter_number=1, draft_content="正文")
-            )
+        with patch.object(auditor, "run_with_tools", new=AsyncMock(return_value=("", None))):
+            report, _ = asyncio.run(auditor.audit(chapter_number=1, draft_content="正文"))
         assert report.get("unavailable") is True
         assert report.get("overall_score") == 0
         assert report.get("inconsistencies") == []
@@ -57,12 +53,11 @@ class TestContinuityToolHint:
         """非空但解析失败（JSON 语法错误/截断）→ unavailable，而非假 0 分。"""
         auditor = ContinuityAgent()
         with patch.object(
-            auditor, "run_with_tools",
+            auditor,
+            "run_with_tools",
             new=AsyncMock(return_value=("这不是JSON", None)),
         ):
-            report, _ = asyncio.run(
-                auditor.audit(chapter_number=1, draft_content="正文")
-            )
+            report, _ = asyncio.run(auditor.audit(chapter_number=1, draft_content="正文"))
         assert report.get("unavailable") is True
         assert report.get("overall_score") == 0
 
@@ -71,12 +66,11 @@ class TestContinuityToolHint:
         auditor = ContinuityAgent()
         valid = '{"overall_score": 85, "inconsistencies": [], "verdict": "pass"}'
         with patch.object(
-            auditor, "run_with_tools",
+            auditor,
+            "run_with_tools",
             new=AsyncMock(return_value=(valid, None)),
         ):
-            report, _ = asyncio.run(
-                auditor.audit(chapter_number=1, draft_content="正文")
-            )
+            report, _ = asyncio.run(auditor.audit(chapter_number=1, draft_content="正文"))
         assert report.get("unavailable") is None
         assert report.get("overall_score") == 85
 

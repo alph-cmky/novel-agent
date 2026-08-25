@@ -32,8 +32,10 @@ def test_restore_session_rebuilds_handle_from_pending_checkpoint(tmp_path):
     )
     session_store._sessions.clear()
 
-    with patch("novel_agent.api.routes._get_persist_dir", return_value=tmp_path), \
-         patch("novel_agent.api.routes.build_chapter_graph_async", AsyncMock(return_value=graph)):
+    with (
+        patch("novel_agent.api.routes._get_persist_dir", return_value=tmp_path),
+        patch("novel_agent.api.routes.build_chapter_graph_async", AsyncMock(return_value=graph)),
+    ):
         session_id = asyncio.run(_restore_session("project", 3))
 
     session = session_store.get(session_id)
@@ -47,13 +49,9 @@ def test_v2_run_routes_create_version_commit(tmp_path):
     mgr = ProjectManager(tmp_path)
     project_id = mgr.init_project(name="p")
     with patch("novel_agent.api.routes._get_manager", return_value=mgr):
-        run = asyncio.run(
-            create_writing_run(project_id, 1, CreateRunRequest())
-        )
+        run = asyncio.run(create_writing_run(project_id, 1, CreateRunRequest()))
         version = asyncio.run(
-            create_chapter_version(
-                run["id"], CreateVersionRequest(content="正文")
-            )
+            create_chapter_version(run["id"], CreateVersionRequest(content="正文"))
         )
         assert version["version_number"] == 1
         assert asyncio.run(get_writing_run(run["id"]))["status"] == "waiting_review"
@@ -89,9 +87,7 @@ def test_scene_rewrite_and_diff_routes(tmp_path):
     mgr.update_writing_run(run["id"], current_version_id=version["id"])
 
     with patch("novel_agent.api.routes._get_manager", return_value=mgr):
-        rewritten = asyncio.run(
-            rewrite_scene(run["id"], 2, SceneRewriteRequest(content="二改"))
-        )
+        rewritten = asyncio.run(rewrite_scene(run["id"], 2, SceneRewriteRequest(content="二改")))
         scenes_before_commit = asyncio.run(list_chapter_scenes(project_id, 1))
         diff = asyncio.run(diff_chapter_version(rewritten["id"]))
         asyncio.run(commit_writing_run(run["id"]))
@@ -130,11 +126,13 @@ def test_scene_review_runs_editor_and_continuity_on_scene_only(tmp_path):
             assert kwargs["draft_content"] == "Scene 正文"
             return {"overall_score": 90}, None
 
-    with patch("novel_agent.api.routes._get_manager", return_value=mgr), \
-         patch("novel_agent.api.routes.EditorAgent", FakeEditor), \
-         patch("novel_agent.api.routes.ContinuityAgent", FakeContinuity), \
-         patch("novel_agent.api.routes._config_for", return_value=object()), \
-         patch("novel_agent.api.routes._get_chapter_store", return_value=object()):
+    with (
+        patch("novel_agent.api.routes._get_manager", return_value=mgr),
+        patch("novel_agent.api.routes.EditorAgent", FakeEditor),
+        patch("novel_agent.api.routes.ContinuityAgent", FakeContinuity),
+        patch("novel_agent.api.routes._config_for", return_value=object()),
+        patch("novel_agent.api.routes._get_chapter_store", return_value=object()),
+    ):
         result = asyncio.run(review_scene_version(version["id"], 1))
 
     assert result["valid"] is True

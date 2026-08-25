@@ -16,7 +16,8 @@ class TestEditorReview:
     @staticmethod
     def _capture_user_prompt(agent, **kwargs):
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=('{"overall_score": 85}', None)),
         ) as mocked:
             asyncio.run(agent.review(chapter_number=1, draft_content="正文", **kwargs))
@@ -25,7 +26,8 @@ class TestEditorReview:
     def test_review_parses_report(self):
         agent = EditorAgent()
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=('{"overall_score": 85, "verdict": "pass"}', None)),
         ):
             report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
@@ -43,9 +45,7 @@ class TestEditorReview:
     def test_empty_output_returns_unavailable(self):
         """空输出（reasoning 模型偶发）→ unavailable 标记，而非假 0 分。"""
         agent = EditorAgent()
-        with patch.object(
-            agent, "run_with_tools", new=AsyncMock(return_value=("", None))
-        ):
+        with patch.object(agent, "run_with_tools", new=AsyncMock(return_value=("", None))):
             report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
         assert report.get("unavailable") is True
         assert report.get("overall_score") == 0
@@ -55,7 +55,8 @@ class TestEditorReview:
         """非空但解析失败（JSON 语法错误/截断）→ unavailable，而非假 0 分。"""
         agent = EditorAgent()
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=("这不是JSON", None)),
         ):
             report, _ = asyncio.run(agent.review(chapter_number=1, draft_content="正文"))
@@ -125,7 +126,8 @@ class TestWorldbuildingExtract:
     @staticmethod
     def _capture_user_prompt(agent):
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=('{"new_entities": []}', None)),
         ) as mocked:
             asyncio.run(agent.extract(chapter_number=1, draft_content="正文"))
@@ -134,8 +136,12 @@ class TestWorldbuildingExtract:
     def test_open_foreshadowings_in_context(self):
         agent = WorldbuildingAgent(
             existing_foreshadowings=[
-                {"description": "神秘信物", "planted_chapter": 1,
-                 "status": "open", "risk_level": "high"},
+                {
+                    "description": "神秘信物",
+                    "planted_chapter": 1,
+                    "status": "open",
+                    "risk_level": "high",
+                },
                 {"description": "已解决", "planted_chapter": 1, "status": "resolved"},
             ],
         )
@@ -151,7 +157,8 @@ class TestWorldbuildingExtract:
     def test_extract_parses_report(self):
         agent = WorldbuildingAgent()
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=('{"new_entities": [{"name": "林风"}]}', None)),
         ):
             report, _ = asyncio.run(agent.extract(chapter_number=1, draft_content="正文"))
@@ -162,7 +169,8 @@ class TestWorldbuildingExtract:
         content = "前文" + ("铺垫" * 2500) + "尾部关键设定"
         agent = WorldbuildingAgent()
         with patch.object(
-            agent, "run_with_tools",
+            agent,
+            "run_with_tools",
             new=AsyncMock(return_value=('{"new_entities": []}', None)),
         ) as mocked:
             asyncio.run(agent.extract(chapter_number=1, draft_content=content))

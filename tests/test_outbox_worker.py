@@ -36,11 +36,13 @@ class _FakeManager:
 
 
 def test_worker_processes_pending_and_retryable_failed_events():
-    manager = _FakeManager([
-        {"id": "pending", "status": "pending", "retry_count": 0},
-        {"id": "failed", "status": "failed", "retry_count": 1},
-        {"id": "exhausted", "status": "failed", "retry_count": 3},
-    ])
+    manager = _FakeManager(
+        [
+            {"id": "pending", "status": "pending", "retry_count": 0},
+            {"id": "failed", "status": "failed", "retry_count": 1},
+            {"id": "exhausted", "status": "failed", "retry_count": 3},
+        ]
+    )
     worker = OutboxWorker(manager, max_retries=3)
 
     processed = asyncio.run(worker.process_once())

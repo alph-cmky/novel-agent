@@ -26,17 +26,17 @@ def test_foreign_keys_enabled(tmp_path):
 def test_schema_creates_all_tables(tmp_path):
     conn = init_db(tmp_path / "novel.db")
     try:
-        tables = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     finally:
         conn.close()
 
     assert {
-        "projects", "chapters", "world_entities",
-        "world_relations", "foreshadowings", "outlines",
+        "projects",
+        "chapters",
+        "world_entities",
+        "world_relations",
+        "foreshadowings",
+        "outlines",
     } <= tables
 
 

@@ -13,6 +13,7 @@ from novel_agent.style.analyzer import detect_ai_flavor
 
 def load_samples(path: str) -> tuple[list[str], list[str]]:
     import json
+
     data = json.load(open(path))
     return data["ai"], data["human"]
 

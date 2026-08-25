@@ -30,13 +30,18 @@ def _entity(name: str, relationships: list[dict]) -> dict:
 
 
 def test_save_world_relations_persists_edges(manager, project_id):
-    report = _report([
-        _entity("Alice", [
-            {"target": "Bob", "relation": "friend"},
-            {"target": "Hogwarts", "relation": "attends"},
-        ]),
-        _entity("Bob", [{"target": "Alice", "relation": "rival"}]),
-    ])
+    report = _report(
+        [
+            _entity(
+                "Alice",
+                [
+                    {"target": "Bob", "relation": "friend"},
+                    {"target": "Hogwarts", "relation": "attends"},
+                ],
+            ),
+            _entity("Bob", [{"target": "Alice", "relation": "rival"}]),
+        ]
+    )
 
     manager.save_world_relations(project_id, 1, report)
 
@@ -49,9 +54,11 @@ def test_save_world_relations_persists_edges(manager, project_id):
 
 
 def test_save_world_relations_dedups_and_keeps_first_appearance(manager, project_id):
-    report = _report([
-        _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-    ])
+    report = _report(
+        [
+            _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
+        ]
+    )
 
     manager.save_world_relations(project_id, 1, report)
     manager.save_world_relations(project_id, 5, report)  # same edge appears again later
@@ -65,30 +72,46 @@ def test_save_world_relations_skips_empty_and_malformed(manager, project_id):
     # No entities → no edges
     assert manager.save_world_relations(project_id, 1, _report([])) == 0
     # Missing target / non-dict relationship → skipped
-    report = _report([
-        _entity("Alice", [{"target": ""}]),
-        _entity("Bob", "not-a-list"),
-    ])
+    report = _report(
+        [
+            _entity("Alice", [{"target": ""}]),
+            _entity("Bob", "not-a-list"),
+        ]
+    )
     manager.save_world_relations(project_id, 1, report)
     assert manager.get_all_world_relations(project_id) == []
 
 
 def test_get_all_world_relations_orders_by_first_appearance(manager, project_id):
-    manager.save_world_relations(project_id, 3, _report([
-        _entity("Carol", [{"target": "Dave", "relation": "knows"}]),
-    ]))
-    manager.save_world_relations(project_id, 1, _report([
-        _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-    ]))
+    manager.save_world_relations(
+        project_id,
+        3,
+        _report(
+            [
+                _entity("Carol", [{"target": "Dave", "relation": "knows"}]),
+            ]
+        ),
+    )
+    manager.save_world_relations(
+        project_id,
+        1,
+        _report(
+            [
+                _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
+            ]
+        ),
+    )
 
     rows = manager.get_all_world_relations(project_id)
     assert [r["first_appearance_chapter"] for r in rows] == [1, 3]
 
 
 def test_backfill_world_relations_from_existing_reports(manager, project_id):
-    report = _report([
-        _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-    ])
+    report = _report(
+        [
+            _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
+        ]
+    )
     # Simulate a legacy chapter whose report was already persisted to chapters table
     manager.save_chapter(project_id=project_id, chapter_number=1, draft_content="")
     manager.update_chapter_worldbuilding(project_id, 1, report)
@@ -105,9 +128,11 @@ def test_backfill_world_relations_from_existing_reports(manager, project_id):
 
 
 def test_backfill_world_relations_is_idempotent(manager, project_id):
-    report = _report([
-        _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-    ])
+    report = _report(
+        [
+            _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
+        ]
+    )
     manager.save_chapter(project_id=project_id, chapter_number=1, draft_content="")
     manager.update_chapter_worldbuilding(project_id, 1, report)
 

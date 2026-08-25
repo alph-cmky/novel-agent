@@ -83,7 +83,9 @@ class ContinuityAgent(BaseAgent):
         return CONTINUITY_SYSTEM_PROMPT.replace("{TOOL_SECTION}", tool)
 
     async def audit(
-        self, chapter_number: int, draft_content: str,
+        self,
+        chapter_number: int,
+        draft_content: str,
         narrative_mode: str | None = None,
     ) -> tuple[dict, TraceStep]:
         """Audit chapter for continuity issues.
@@ -128,7 +130,12 @@ class ContinuityAgent(BaseAgent):
         # 若首轮返回空或解析失败，针对 reasoning 模型执行一次简化重试（直接 prompt 约束）
         for attempt in range(2):
             if attempt > 0:
-                messages.append({"role": "user", "content": "请务必只输出合法的 JSON 格式审计结果，包含 overall_score, inconsistencies, verdict。"})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "请务必只输出合法的 JSON 格式审计结果，包含 overall_score, inconsistencies, verdict。",
+                    }
+                )
                 content, trace = await self.run_with_tools(
                     messages, max_rounds=1, action=f"audit_chapter_{chapter_number}_retry"
                 )

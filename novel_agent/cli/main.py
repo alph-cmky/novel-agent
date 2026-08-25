@@ -51,7 +51,9 @@ def serve(host: str, port: int, reload: bool):
 @cli.command("export")
 @click.option("--project", "-p", default=None, help="Project ID (default: first project)")
 @click.option(
-    "--format", "-f", "fmt",
+    "--format",
+    "-f",
+    "fmt",
     default="md",
     type=click.Choice(["md", "txt"]),
     help="Export format",

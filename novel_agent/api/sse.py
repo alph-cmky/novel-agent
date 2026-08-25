@@ -100,10 +100,16 @@ def _review_payload(values: dict, chapter_number: int) -> dict:
 async def replay_review(values: dict, chapter_number: int):
     """Re-send a persisted human-review checkpoint after a process restart."""
     yield _sse_event("start", {"message": "恢复人工审批..."})
-    yield _sse_event("progress", {
-        "node": "human_review", "label": "人工审批", "status": "running",
-        "score": None, "detail": None,
-    })
+    yield _sse_event(
+        "progress",
+        {
+            "node": "human_review",
+            "label": "人工审批",
+            "status": "running",
+            "score": None,
+            "detail": None,
+        },
+    )
     yield _sse_event("review_required", _review_payload(values, chapter_number))
 
 
@@ -149,9 +155,7 @@ async def _flush_output(output: asyncio.Queue):
         yield output.get_nowait()
 
 
-async def _make_progress_event(
-    name: str, status: str, event: dict | None = None
-) -> str:
+async def _make_progress_event(name: str, status: str, event: dict | None = None) -> str:
     """Build a progress SSE event from a node name and status."""
     label = _NODE_LABELS.get(name, name)
     score = None
@@ -169,8 +173,8 @@ async def _make_progress_event(
             score = report.get("overall_score")
         elif name == "worldbuilding":
             report = output.get("worldbuilding_report", {})
-            n_ent = len(report.get('new_entities', []))
-            n_conf = len(report.get('conflicts', []))
+            n_ent = len(report.get("new_entities", []))
+            n_conf = len(report.get("conflicts", []))
             detail = f"实体:{n_ent} 冲突:{n_conf}"
         elif name == "evolution_orchestrator":
             # Include evolution-specific metadata
@@ -191,10 +195,17 @@ async def _make_progress_event(
                 if term:
                     detail += f" 终止:{term}"
 
-    return _sse_event("progress", {
-        "node": name, "label": label, "status": status,
-        "score": score, "detail": detail, "meta": meta,
-    })
+    return _sse_event(
+        "progress",
+        {
+            "node": name,
+            "label": label,
+            "status": status,
+            "score": score,
+            "detail": detail,
+            "meta": meta,
+        },
+    )
 
 
 async def create_sse_stream(
@@ -282,10 +293,16 @@ async def create_sse_stream(
                     status=RunStatus.WAITING_REVIEW.value,
                     current_node="human_review",
                 )
-            yield _sse_event("progress", {
-                "node": "human_review", "label": "人工审批", "status": "running",
-                "score": None, "detail": None,
-            })
+            yield _sse_event(
+                "progress",
+                {
+                    "node": "human_review",
+                    "label": "人工审批",
+                    "status": "running",
+                    "score": None,
+                    "detail": None,
+                },
+            )
             yield _sse_event("review_required", _review_payload(vals, chapter_number))
         else:
             # Graph completed normally
@@ -293,7 +310,8 @@ async def create_sse_stream(
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
             status = (
-                "approved" if (final_state and final_state.values or {}).get("human_approved")
+                "approved"
+                if (final_state and final_state.values or {}).get("human_approved")
                 else "draft"
             )
             yield _sse_event("done", {"chapter_content": "", "status": status})
@@ -315,10 +333,16 @@ async def create_sse_stream(
             yield s
 
         interrupt_data = gi.args[0] if gi.args else {}
-        yield _sse_event("progress", {
-            "node": "human_review", "label": "人工审批", "status": "running",
-            "score": None, "detail": None,
-        })
+        yield _sse_event(
+            "progress",
+            {
+                "node": "human_review",
+                "label": "人工审批",
+                "status": "running",
+                "score": None,
+                "detail": None,
+            },
+        )
         yield _sse_event("review_required", interrupt_data)
 
     except Exception as e:
@@ -372,9 +396,7 @@ async def resume_graph(
     running = asyncio.Event()
     running.set()
 
-    drain_task = asyncio.create_task(
-        _background_drain(queue, output, running)
-    ) if queue else None
+    drain_task = asyncio.create_task(_background_drain(queue, output, running)) if queue else None
     current_node: str | None = None
 
     try:
@@ -387,9 +409,7 @@ async def resume_graph(
         yield _sse_event("start", {"message": "继续写作..."})
         yield await _make_progress_event("human_review", "done")
 
-        async for event in graph.astream_events(
-            Command(resume=feedback), config, version="v2"
-        ):
+        async for event in graph.astream_events(Command(resume=feedback), config, version="v2"):
             async for s in _flush_output(output):
                 yield s
 
@@ -429,10 +449,16 @@ async def resume_graph(
                     status=RunStatus.WAITING_REVIEW.value,
                     current_node="human_review",
                 )
-            yield _sse_event("progress", {
-                "node": "human_review", "label": "人工审批", "status": "running",
-                "score": None, "detail": None,
-            })
+            yield _sse_event(
+                "progress",
+                {
+                    "node": "human_review",
+                    "label": "人工审批",
+                    "status": "running",
+                    "score": None,
+                    "detail": None,
+                },
+            )
             yield _sse_event("review_required", _review_payload(vals, chapter_number))
         else:
             # Graph completed normally
@@ -440,7 +466,8 @@ async def resume_graph(
                 _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
                 _push_quality_scores(final_state.values)
             status = (
-                "approved" if (final_state and final_state.values or {}).get("human_approved")
+                "approved"
+                if (final_state and final_state.values or {}).get("human_approved")
                 else "draft"
             )
             yield _sse_event("done", {"chapter_content": "", "status": status})
@@ -463,10 +490,16 @@ async def resume_graph(
                 yield s
 
         interrupt_data = gi.args[0] if gi.args else {}
-        yield _sse_event("progress", {
-            "node": "human_review", "label": "人工审批", "status": "running",
-            "score": None, "detail": None,
-        })
+        yield _sse_event(
+            "progress",
+            {
+                "node": "human_review",
+                "label": "人工审批",
+                "status": "running",
+                "score": None,
+                "detail": None,
+            },
+        )
         yield _sse_event("review_required", interrupt_data)
     except Exception as e:
         running.clear()
@@ -508,7 +541,9 @@ def _push_quality_scores(state_values: dict) -> None:
 
 
 def _save_foreshadowings(
-    mgr: ProjectManager, project_id: str, chapter_number: int,
+    mgr: ProjectManager,
+    project_id: str,
+    chapter_number: int,
     wb_report: dict,
 ) -> None:
     """Persist new and resolved foreshadowings from worldbuilding report."""
@@ -520,11 +555,14 @@ def _save_foreshadowings(
             description = str(fs["description"])
             planted = int(fs.get("planted_chapter", chapter_number))
             changed = mgr.update_foreshadowing_status(
-                project_id, description, planted,
+                project_id,
+                description,
+                planted,
                 status="open",
                 expected_resolve_chapter=(
                     int(fs["expected_resolve_chapter"])
-                    if fs.get("expected_resolve_chapter") else None
+                    if fs.get("expected_resolve_chapter")
+                    else None
                 ),
                 risk_level=str(fs.get("risk_level", "medium")),
                 action_needed=str(fs.get("action_needed", "maintain")),
@@ -534,11 +572,13 @@ def _save_foreshadowings(
             )
             if not changed:
                 mgr.add_foreshadowing(
-                    project_id=project_id, description=description,
+                    project_id=project_id,
+                    description=description,
                     planted_chapter=planted,
                     expected_resolve_chapter=(
                         int(fs["expected_resolve_chapter"])
-                        if fs.get("expected_resolve_chapter") else None
+                        if fs.get("expected_resolve_chapter")
+                        else None
                     ),
                     risk_level=str(fs.get("risk_level", "medium")),
                     action_needed=str(fs.get("action_needed", "maintain")),
@@ -558,8 +598,7 @@ def _save_foreshadowings(
                 project_id=project_id,
                 description=str(fs["description"]),
                 planted_chapter=(
-                    int(fs["planted_chapter"])
-                    if fs.get("planted_chapter") is not None else None
+                    int(fs["planted_chapter"]) if fs.get("planted_chapter") is not None else None
                 ),
                 status="resolved",
                 resolved_chapter=chapter_number,
@@ -607,12 +646,15 @@ def _save_chapter_result(
     evolution_summary = "{}"
     if evolution_history:
         version = len(evolution_history)
-        evolution_summary = json.dumps({
-            "total_rounds": len(evolution_history),
-            "best_version": result.get("evolution_best_candidate_version", 0),
-            "termination": result.get("evolution_termination", ""),
-            "score_history": evolution_history,
-        }, ensure_ascii=False)
+        evolution_summary = json.dumps(
+            {
+                "total_rounds": len(evolution_history),
+                "best_version": result.get("evolution_best_candidate_version", 0),
+                "termination": result.get("evolution_termination", ""),
+                "score_history": evolution_history,
+            },
+            ensure_ascii=False,
+        )
 
     mgr.save_chapter(
         project_id=project_id,
@@ -649,9 +691,7 @@ def _save_chapter_result(
             _save_foreshadowings(mgr, project_id, chapter_number, wb_report)
 
     if run_id and approved:
-        for proposal in mgr.list_canon_proposals(
-            project_id, run_id=run_id, status="proposed"
-        ):
+        for proposal in mgr.list_canon_proposals(project_id, run_id=run_id, status="proposed"):
             mgr.review_canon_proposal(proposal["id"], "accepted", "章节已批准")
         ChapterRunService(mgr).commit(run_id)
         return

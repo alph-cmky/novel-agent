@@ -91,9 +91,7 @@ async def generate_outline(mgr: ProjectManager, project_id: str) -> list[dict]:
     chapters = result.get("chapters", [])
 
     if not chapters:
-        raise ValueError(
-            "模型未返回有效章节（输出可能超长被截断），请重试"
-        )
+        raise ValueError("模型未返回有效章节（输出可能超长被截断），请重试")
 
     # Ensure required fields
     for i, ch in enumerate(chapters):

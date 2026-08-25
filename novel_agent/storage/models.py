@@ -48,26 +48,17 @@ def _migrate(conn: sqlite3.Connection):
         if col_name not in existing_chapters:
             conn.execute(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_def}")
 
-    existing_versions = {
-        row["name"] for row in conn.execute("PRAGMA table_info(chapter_versions)")
-    }
+    existing_versions = {row["name"] for row in conn.execute("PRAGMA table_info(chapter_versions)")}
     if "scene_manifest" not in existing_versions:
         conn.execute(
-            "ALTER TABLE chapter_versions ADD COLUMN scene_manifest "
-            "TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE chapter_versions ADD COLUMN scene_manifest TEXT NOT NULL DEFAULT '[]'"
         )
 
-    existing_runs = {
-        row["name"] for row in conn.execute("PRAGMA table_info(writing_runs)")
-    }
+    existing_runs = {row["name"] for row in conn.execute("PRAGMA table_info(writing_runs)")}
     if "input_snapshot_id" not in existing_runs:
-        conn.execute(
-            "ALTER TABLE writing_runs ADD COLUMN input_snapshot_id TEXT"
-        )
+        conn.execute("ALTER TABLE writing_runs ADD COLUMN input_snapshot_id TEXT")
 
-    existing_outbox = {
-        row["name"] for row in conn.execute("PRAGMA table_info(outbox_events)")
-    }
+    existing_outbox = {row["name"] for row in conn.execute("PRAGMA table_info(outbox_events)")}
     for col_name, col_def in (
         ("lease_owner", "TEXT"),
         ("lease_expires_at", "TEXT"),

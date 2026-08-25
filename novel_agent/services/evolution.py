@@ -12,15 +12,17 @@ from novel_agent.schema.models import EvolutionCandidate, EvolutionDecision
 
 # ── Config ──────────────────────────────────────────────
 
+
 @dataclass
 class EvolutionConfig:
     """Configuration for the evolution loop."""
+
     max_rounds: int = 5
-    convergence_threshold: float = 3.0     # |delta| < this → converged
-    quality_drop_threshold: float = -10.0   # delta < this → quality regression
-    regression_threshold: float = -5.0       # composite drop relative to best
-    ceiling_score: int = 90                  # all dims above this → ceiling stop
-    plateau_rounds: int = 2                  # consecutive flat rounds → plateau
+    convergence_threshold: float = 3.0  # |delta| < this → converged
+    quality_drop_threshold: float = -10.0  # delta < this → quality regression
+    regression_threshold: float = -5.0  # composite drop relative to best
+    ceiling_score: int = 90  # all dims above this → ceiling stop
+    plateau_rounds: int = 2  # consecutive flat rounds → plateau
     editor_weight: float = 0.5
     continuity_weight: float = 0.3
     dimensions_weight: float = 0.2
@@ -43,6 +45,7 @@ QUALITY_DIMENSIONS = EDITOR_DIMENSIONS + (
 
 
 # ── Score helpers ───────────────────────────────────────
+
 
 def continuity_overall(editor_report: dict, continuity_report: dict) -> int:
     """Continuity overall, neutralized to editor when continuity is unavailable.
@@ -192,9 +195,7 @@ def check_quality_guards(
     violations: list[str] = []
     quality_gate = report["quality_gate"]
     if quality_gate and not quality_gate.get("passed", True):
-        violations.extend(
-            f"hard_gate:{item}" for item in quality_gate.get("violations", [])
-        )
+        violations.extend(f"hard_gate:{item}" for item in quality_gate.get("violations", []))
     if report["length_ratio"] < cfg.min_length_ratio:
         violations.append("length_regression")
     for severity, limit in (
@@ -249,6 +250,7 @@ def is_better_candidate(
 
 # ── Delta computation ───────────────────────────────────
 
+
 def compute_delta(current: dict, previous: dict) -> dict:
     """Compute per-dimension and per-report score deltas.
 
@@ -297,6 +299,7 @@ def compute_delta(current: dict, previous: dict) -> dict:
 
 
 # ── Termination decision ────────────────────────────────
+
 
 def decide_termination(
     delta: dict,
@@ -354,15 +357,16 @@ def decide_termination(
     if curr_composite < best_composite + cfg.regression_threshold:
         return (
             "quality_regression",
-            f"综合分 {curr_composite} < 最佳 {best_composite}"
-            f" + {cfg.regression_threshold}",
+            f"综合分 {curr_composite} < 最佳 {best_composite} + {cfg.regression_threshold}",
         )
 
     # 4. Ceiling — 至少经历 1 轮演化且所有维度达到天花板阈值（防止首轮无迭代直接早退）
-    if (current_round >= 1
-            and all(curr_dims.get(d, 0) > cfg.ceiling_score for d in EDITOR_DIMENSIONS)
-            and current_scores.get("editor_overall", 0) > cfg.ceiling_score
-            and current_scores.get("continuity_overall", 0) > cfg.ceiling_score):
+    if (
+        current_round >= 1
+        and all(curr_dims.get(d, 0) > cfg.ceiling_score for d in EDITOR_DIMENSIONS)
+        and current_scores.get("editor_overall", 0) > cfg.ceiling_score
+        and current_scores.get("continuity_overall", 0) > cfg.ceiling_score
+    ):
         return ("ceiling", f"演化迭代达标且所有维度 > {cfg.ceiling_score}，已达天花板")
 
     # 5. Max rounds
@@ -379,10 +383,12 @@ def decide_termination(
     # r.get("delta", {}) would still return None here, since the key exists.)
     delta_rounds = [r for r in history if r.get("delta") is not None]
     if len(delta_rounds) >= cfg.plateau_rounds:
-        recent = delta_rounds[-cfg.plateau_rounds:]
+        recent = delta_rounds[-cfg.plateau_rounds :]
         plateau = all(
-            all(abs(r.get("delta", {}).get("dimensions", {}).get(d, 0)) < threshold
-                for d in EDITOR_DIMENSIONS)
+            all(
+                abs(r.get("delta", {}).get("dimensions", {}).get(d, 0)) < threshold
+                for d in EDITOR_DIMENSIONS
+            )
             for r in recent
         )
         if plateau:
@@ -421,6 +427,7 @@ class EvolutionService:
 
 
 # ── Improvement plan (rule layer) ───────────────────────
+
 
 def build_improvement_plan_rule(
     current_scores: dict,
@@ -461,20 +468,19 @@ def build_improvement_plan_rule(
 
         # Focus on regressed dimensions (delta < -3) + weak but not improving (< 60, delta < 3)
         regressed = [d for d in EDITOR_DIMENSIONS if dim_deltas.get(d, 0) < -3]
-        weak = [d for d in EDITOR_DIMENSIONS
-                if dims.get(d, 0) < 60 and dim_deltas.get(d, 0) < 3 and d not in regressed]
+        weak = [
+            d
+            for d in EDITOR_DIMENSIONS
+            if dims.get(d, 0) < 60 and dim_deltas.get(d, 0) < 3 and d not in regressed
+        ]
         focus = (regressed + weak)[:3]
 
-        preserve = [d for d in EDITOR_DIMENSIONS
-                    if dim_deltas.get(d, 0) > 3 and d not in focus]
+        preserve = [d for d in EDITOR_DIMENSIONS if dim_deltas.get(d, 0) > 3 and d not in focus]
 
         if focus:
-            primary = (
-                f"第{len(focus)}轮改进。"
-                f"重点改进：{'、'.join(_dim_label(d) for d in focus)}。"
-            )
+            primary = f"第{len(focus)}轮改进。重点改进：{'、'.join(_dim_label(d) for d in focus)}。"
             if regressed:
-                reg_labels = '、'.join(_dim_label(d) for d in regressed)
+                reg_labels = "、".join(_dim_label(d) for d in regressed)
                 primary += f"注意：{reg_labels}出现退步，需要纠正。"
         else:
             # All dimensions stable — fine-tune

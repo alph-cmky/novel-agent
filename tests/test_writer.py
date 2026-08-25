@@ -146,5 +146,6 @@ class TestImprovementPlanFormatting:
 
     def test_empty_plan_returns_empty_string(self):
         from novel_agent.graph.chapter import _format_improvement_plan
+
         assert _format_improvement_plan(None, 0) == ""
         assert _format_improvement_plan({}, 0) == ""

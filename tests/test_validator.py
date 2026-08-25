@@ -199,7 +199,5 @@ class TestParseValidated:
         assert report["resolved_foreshadowings"][0]["description"] == "伏笔X"
 
     def test_garbage_falls_back_to_defaults(self):
-        report = parse_validated(
-            "worldbuilding", "not json", defaults={"new_entities": []}
-        )
+        report = parse_validated("worldbuilding", "not json", defaults={"new_entities": []})
         assert report["new_entities"] == []

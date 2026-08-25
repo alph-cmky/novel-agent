@@ -48,9 +48,7 @@ class TestProjectCRUD:
         conn.close()
 
         migrated = init_db(db_path)
-        columns = {
-            row["name"] for row in migrated.execute("PRAGMA table_info(chapter_versions)")
-        }
+        columns = {row["name"] for row in migrated.execute("PRAGMA table_info(chapter_versions)")}
         assert "scene_manifest" in columns
         migrated.close()
 
@@ -87,9 +85,10 @@ class TestProjectCRUD:
             {"new_entities": [{"entity_type": "character", "name": "乙"}]},
             2,
         )
-        assert [entity["name"] for entity in mgr.get_canon_snapshot(
-            run["input_snapshot_id"]
-        )["payload"]["entities"]] == ["甲"]
+        assert [
+            entity["name"]
+            for entity in mgr.get_canon_snapshot(run["input_snapshot_id"])["payload"]["entities"]
+        ] == ["甲"]
 
     def test_outbox_failure_is_retryable(self, tmp_path):
         store = MagicMock()
@@ -122,8 +121,7 @@ class TestProjectCRUD:
 
         with mgr._conn() as conn:
             conn.execute(
-                "UPDATE outbox_events SET lease_expires_at = '2000-01-01 00:00:00' "
-                "WHERE id = ?",
+                "UPDATE outbox_events SET lease_expires_at = '2000-01-01 00:00:00' WHERE id = ?",
                 (event_id,),
             )
         reclaimed = mgr.claim_outbox_events("worker-b", lease_seconds=60)
@@ -187,9 +185,7 @@ class TestChapterCRUD:
         else:
             raise AssertionError("concurrent chapter run was not rejected")
 
-        version = mgr.create_chapter_version(
-            pid, 1, "第一版正文", run_id=run["id"]
-        )
+        version = mgr.create_chapter_version(pid, 1, "第一版正文", run_id=run["id"])
         assert version["version_number"] == 1
         assert version["content_hash"]
         mgr.update_writing_run(
@@ -215,11 +211,7 @@ class TestChapterCRUD:
             pid,
             1,
             "worldbuilding",
-            {
-                "new_entities": [
-                    {"entity_type": "character", "name": "洛千秋"}
-                ]
-            },
+            {"new_entities": [{"entity_type": "character", "name": "洛千秋"}]},
             run_id=run["id"],
         )
         assert mgr.get_all_world_entities(pid) == []
@@ -280,8 +272,7 @@ class TestChapterCRUD:
 
         assert mgr.get_all_world_entities(pid) == []
         assert all(
-            item["status"] == "accepted"
-            for item in mgr.list_canon_proposals(pid, run_id=run["id"])
+            item["status"] == "accepted" for item in mgr.list_canon_proposals(pid, run_id=run["id"])
         )
 
     def test_story_events_are_normalized_and_idempotent(self, tmp_path):
@@ -345,9 +336,7 @@ class TestChapterCRUD:
             scene_drafts=["第一场", "第二场"],
         )
 
-        revision = mgr.create_scene_revision(
-            version["id"], 2, "改写后的第二场", run_id=run["id"]
-        )
+        revision = mgr.create_scene_revision(version["id"], 2, "改写后的第二场", run_id=run["id"])
 
         assert revision["parent_version_id"] == version["id"]
         assert revision["origin"] == "scene_rewrite"
@@ -379,8 +368,12 @@ class TestForeshadowing:
         pid = mgr.init_project(name="p")
 
         fid = mgr.add_foreshadowing(
-            pid, description="神秘信物", planted_chapter=1,
-            risk_level="high", reader_knows=True, characters_aware=["主角"],
+            pid,
+            description="神秘信物",
+            planted_chapter=1,
+            risk_level="high",
+            reader_knows=True,
+            characters_aware=["主角"],
         )
         assert len(fid) == 8
 
@@ -390,8 +383,11 @@ class TestForeshadowing:
         assert fs[0]["reader_knows"] == 1
 
         ok = mgr.update_foreshadowing_status(
-            pid, description="神秘信物", planted_chapter=1,
-            status="resolved", resolved_chapter=3,
+            pid,
+            description="神秘信物",
+            planted_chapter=1,
+            status="resolved",
+            resolved_chapter=3,
         )
         assert ok is True
         assert mgr.get_foreshadowings(pid)[0]["status"] == "resolved"
@@ -400,9 +396,7 @@ class TestForeshadowing:
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")
         mgr.add_foreshadowing(pid, "暗门", planted_chapter=2)
-        assert mgr.update_foreshadowing_status(
-            pid, "暗门", status="resolved", resolved_chapter=6
-        )
+        assert mgr.update_foreshadowing_status(pid, "暗门", status="resolved", resolved_chapter=6)
         fs = mgr.get_foreshadowings(pid)[0]
         assert fs["status"] == "resolved"
         assert fs["resolved_chapter"] == 6
@@ -413,17 +407,29 @@ class TestWorldEntities:
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")
 
-        report = {"new_entities": [
-            {"entity_type": "character", "name": "林风",
-             "properties": {"age": 20}, "first_appearance_chapter": 1},
-        ]}
+        report = {
+            "new_entities": [
+                {
+                    "entity_type": "character",
+                    "name": "林风",
+                    "properties": {"age": 20},
+                    "first_appearance_chapter": 1,
+                },
+            ]
+        }
         assert mgr.save_world_entities(pid, report) == 1
 
         # 同名实体重复保存 → 更新而非新增
-        report2 = {"new_entities": [
-            {"entity_type": "character", "name": "林风",
-             "properties": {"age": 21}, "first_appearance_chapter": 1},
-        ]}
+        report2 = {
+            "new_entities": [
+                {
+                    "entity_type": "character",
+                    "name": "林风",
+                    "properties": {"age": 21},
+                    "first_appearance_chapter": 1,
+                },
+            ]
+        }
         mgr.save_world_entities(pid, report2)
 
         ents = mgr.get_all_world_entities(pid)
@@ -433,14 +439,24 @@ class TestWorldEntities:
     def test_updates_merge_properties_and_preserve_first_appearance(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")
-        mgr.save_world_entities(pid, {
-            "new_entities": [{"entity_type": "item", "name": "玉佩",
-                              "properties": {"颜色": "青"}}],
-        }, chapter_number=2)
-        mgr.save_world_entities(pid, {
-            "updated_entities": [{"entity_type": "item", "name": "玉佩",
-                                  "properties": {"主人": "林风"}}],
-        }, chapter_number=8)
+        mgr.save_world_entities(
+            pid,
+            {
+                "new_entities": [
+                    {"entity_type": "item", "name": "玉佩", "properties": {"颜色": "青"}}
+                ],
+            },
+            chapter_number=2,
+        )
+        mgr.save_world_entities(
+            pid,
+            {
+                "updated_entities": [
+                    {"entity_type": "item", "name": "玉佩", "properties": {"主人": "林风"}}
+                ],
+            },
+            chapter_number=8,
+        )
         entity = mgr.get_all_world_entities(pid)[0]
         assert entity["first_appearance_chapter"] == 2
         assert '"颜色": "青"' in entity["properties"]
@@ -451,10 +467,13 @@ class TestOutline:
     def test_save_and_get(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")
-        mgr.save_outline(pid, [
-            {"chapter_number": 1, "title": "开篇", "summary": "s"},
-            {"chapter_number": 2, "title": "发展"},
-        ])
+        mgr.save_outline(
+            pid,
+            [
+                {"chapter_number": 1, "title": "开篇", "summary": "s"},
+                {"chapter_number": 2, "title": "发展"},
+            ],
+        )
 
         outline = mgr.get_outline(pid)
         assert len(outline) == 2
@@ -467,8 +486,7 @@ class TestDelete:
         pid = mgr.init_project(name="p")
         mgr.save_chapter(pid, 1, draft_content="正文")
         mgr.add_foreshadowing(pid, "伏笔", planted_chapter=1)
-        mgr.save_world_entities(pid, {"new_entities": [
-            {"entity_type": "character", "name": "A"}]})
+        mgr.save_world_entities(pid, {"new_entities": [{"entity_type": "character", "name": "A"}]})
 
         mgr.delete_project(pid)
 

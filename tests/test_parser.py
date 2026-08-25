@@ -58,8 +58,7 @@ class TestRepair:
 
     def test_repair_inside_markdown_block(self):
         text = (
-            '```json\n{"new_entities": [{"name": "模拟币", "数量": 10枚"}],'
-            ' "conflicts": []}\n```'
+            '```json\n{"new_entities": [{"name": "模拟币", "数量": 10枚"}], "conflicts": []}\n```'
         )
         result = parse_json_response(text)
         assert result["new_entities"][0]["数量"] == "10枚"

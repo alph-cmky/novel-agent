@@ -75,12 +75,15 @@ class TestSessionStore:
 
 
 async def test_replay_review_emits_persisted_checkpoint():
-    events = [event async for event in replay_review(
-        {"draft_content": "恢复正文", "editor_report": {"overall_score": 80}}, 2
-    )]
+    events = [
+        event
+        async for event in replay_review(
+            {"draft_content": "恢复正文", "editor_report": {"overall_score": 80}}, 2
+        )
+    ]
 
-    assert 'event: review_required' in events[-1]
-    assert '恢复正文' in events[-1]
+    assert "event: review_required" in events[-1]
+    assert "恢复正文" in events[-1]
 
 
 class _LifecycleGraph:
@@ -184,9 +187,7 @@ def test_save_chapter_result_creates_and_commits_v2_version(tmp_path):
             "editor_report": {"overall_score": 80},
             "continuity_report": {"overall_score": 90},
             "worldbuilding_report": {
-                "new_entities": [
-                    {"entity_type": "character", "name": "洛千秋"}
-                ],
+                "new_entities": [{"entity_type": "character", "name": "洛千秋"}],
                 "chapter_events": ["秦照夜托付火种"],
             },
         },
@@ -217,9 +218,7 @@ def test_save_unapproved_v2_result_keeps_proposal_pending(tmp_path):
             "writing_run_id": run["id"],
             "draft_content": "候选正文",
             "human_approved": False,
-            "worldbuilding_report": {
-                "new_entities": [{"entity_type": "item", "name": "候选物"}]
-            },
+            "worldbuilding_report": {"new_entities": [{"entity_type": "item", "name": "候选物"}]},
         },
     )
 

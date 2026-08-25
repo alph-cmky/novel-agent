@@ -11,6 +11,7 @@ class ToolInput(BaseModel):
 
 class ToolResult(BaseModel):
     """Standard tool result wrapper."""
+
     success: bool = True
     data: Any = None
     error: str | None = None

@@ -90,6 +90,7 @@ async def global_exception_handler(_request: Request, exc: Exception):
     file paths, API responses, or other internal state) go to server logs only.
     """
     import traceback
+
     traceback.print_exc()
     return JSONResponse(
         status_code=500,

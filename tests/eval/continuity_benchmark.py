@@ -91,15 +91,17 @@ class ContinuityBenchmark:
                 )
                 for b in entry.get("injected_bugs", [])
             ]
-            self.add_case(BenchmarkCase(
-                name=entry.get("name", "unnamed"),
-                description=entry.get("description", ""),
-                chapter_number=entry.get("chapter_number", 1),
-                chapter_outline=entry.get("chapter_outline", ""),
-                draft_content=entry.get("draft_content", ""),
-                injected_bugs=bugs,
-                previous_context=entry.get("previous_context", ""),
-            ))
+            self.add_case(
+                BenchmarkCase(
+                    name=entry.get("name", "unnamed"),
+                    description=entry.get("description", ""),
+                    chapter_number=entry.get("chapter_number", 1),
+                    chapter_outline=entry.get("chapter_outline", ""),
+                    draft_content=entry.get("draft_content", ""),
+                    injected_bugs=bugs,
+                    previous_context=entry.get("previous_context", ""),
+                )
+            )
 
     def score_detection(self, case: BenchmarkCase, audit_report: dict) -> BenchmarkResult:
         """Compare audit results against ground truth injected bugs."""
@@ -128,13 +130,16 @@ class ContinuityBenchmark:
             if is_match and best_match >= 0:
                 matched_bug_indices.add(best_match)
 
-            details.append({
-                "reported": desc[:100],
-                "matched": is_match,
-                "best_ground_truth": case.injected_bugs[best_match].description[:100]
-                if best_match >= 0 else "",
-                "overlap_score": round(best_overlap, 2),
-            })
+            details.append(
+                {
+                    "reported": desc[:100],
+                    "matched": is_match,
+                    "best_ground_truth": case.injected_bugs[best_match].description[:100]
+                    if best_match >= 0
+                    else "",
+                    "overlap_score": round(best_overlap, 2),
+                }
+            )
 
         true_positives = len(matched_bug_indices)
         false_positives = total_detected - true_positives
@@ -223,6 +228,7 @@ class ContinuityBenchmark:
 
 def _keyword_overlap(text_a: str, text_b: str) -> float:
     """Simple Jaccard-like keyword overlap between two strings."""
+
     def tokenize(s: str) -> set[str]:
         keywords = set()
         for phrase in s.replace("，", ",").replace("。", ",").split(","):
@@ -577,7 +583,8 @@ BUILTIN_CASES = [
         "description": "超长章节：bug 全部放在 >4000 字符处，量化截断对 recall 的影响",
         "chapter_number": 15,
         "chapter_outline": "主角在客栈歇脚，听闻坊间诸多传闻",
-        "draft_content": _STRESS_PAD * 50 + (
+        "draft_content": _STRESS_PAD * 50
+        + (
             "第二日，林风在客栈听到掌柜絮叨。\n"
             "掌柜说：昨儿个我去族老那儿对账，发现大师姐的名字被写成了苏雪，可族谱上明明写着苏若雪。\n"
             "掌柜又说：还有人私下传言，说有人用传音符从京城直接传到青云城，全程没有中转，这在过去是绝无可能的。\n"

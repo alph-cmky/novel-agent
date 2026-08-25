@@ -66,7 +66,9 @@ class EditorAgent(BaseAgent):
         return EDITOR_SYSTEM_PROMPT
 
     async def review(
-        self, chapter_number: int, draft_content: str,
+        self,
+        chapter_number: int,
+        draft_content: str,
         narrative_mode: str | None = None,
     ) -> tuple[dict, TraceStep]:
         """Review a chapter draft.

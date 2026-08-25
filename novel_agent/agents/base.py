@@ -63,6 +63,7 @@ class AgentConfig:
         # Warn if API key is empty (but don't crash — user may fix it later)
         if not self.api_key:
             import warnings
+
             warnings.warn(
                 "OPENAI_API_KEY is not set. LLM calls will fail until configured.",
                 RuntimeWarning,
@@ -206,9 +207,11 @@ class BaseAgent:
         trace.model = self.config.model
 
         model = build_chat_model(self.config)
-        bound = model.bind_tools(
-            [t.get_schema()["function"] for t in tool_list]
-        ) if tool_list else model
+        bound = (
+            model.bind_tools([t.get_schema()["function"] for t in tool_list])
+            if tool_list
+            else model
+        )
 
         config: dict[str, Any] = {}
         lf_handler = _get_lf_handler()
@@ -306,11 +309,13 @@ class BaseAgent:
 
             tool = self._tools.get(tool_name)
             if tool is None:
-                results.append({
-                    "tool_call_id": tool_id,
-                    "role": "tool",
-                    "content": json.dumps({"error": f"Unknown tool: {tool_name}"}),
-                })
+                results.append(
+                    {
+                        "tool_call_id": tool_id,
+                        "role": "tool",
+                        "content": json.dumps({"error": f"Unknown tool: {tool_name}"}),
+                    }
+                )
                 continue
 
             if isinstance(tool_args, str):
@@ -324,22 +329,26 @@ class BaseAgent:
             except Exception as exc:
                 result = ToolResult(success=False, error=str(exc))
 
-            results.append({
-                "tool_call_id": tool_id,
-                "role": "tool",
-                "content": (
-                    json.dumps(result.data, ensure_ascii=False)
-                    if result.success
-                    else json.dumps({"error": result.error})
-                ),
-            })
+            results.append(
+                {
+                    "tool_call_id": tool_id,
+                    "role": "tool",
+                    "content": (
+                        json.dumps(result.data, ensure_ascii=False)
+                        if result.success
+                        else json.dumps({"error": result.error})
+                    ),
+                }
+            )
 
             if trace:
-                trace.tool_calls.append({
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "success": result.success,
-                })
+                trace.tool_calls.append(
+                    {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "success": result.success,
+                    }
+                )
 
         return results
 
@@ -363,25 +372,27 @@ class BaseAgent:
             tool_calls = getattr(response, "tool_calls", None)
             if tool_calls:
                 tool_results = await self.execute_tool_calls(tool_calls, trace)
-                messages.append({
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.get("id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": tc.get("name", ""),
-                                "arguments": (
-                                    json.dumps(tc.get("args", {}))
-                                    if isinstance(tc.get("args"), dict)
-                                    else tc.get("args", "")
-                                ),
-                            },
-                        }
-                        for tc in tool_calls
-                    ],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": tc.get("name", ""),
+                                    "arguments": (
+                                        json.dumps(tc.get("args", {}))
+                                        if isinstance(tc.get("args"), dict)
+                                        else tc.get("args", "")
+                                    ),
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                )
                 messages.extend(tool_results)
                 continue
 

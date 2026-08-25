@@ -50,12 +50,14 @@ class TestRouteAfterEvolution:
 
 def test_deterministic_gate_skips_expensive_reviews_when_draft_passes():
     state = _evo_state()
-    state.update({
-        "deterministic_gate_first": True,
-        "quality_gate_report": {"passed": True},
-        "skip_reviews": False,
-        "review_interval": 1,
-    })
+    state.update(
+        {
+            "deterministic_gate_first": True,
+            "quality_gate_report": {"passed": True},
+            "skip_reviews": False,
+            "review_interval": 1,
+        }
+    )
 
     assert route_after_writer(state) == "worldbuilding"
 

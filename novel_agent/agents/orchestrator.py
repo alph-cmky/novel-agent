@@ -220,9 +220,7 @@ class OrchestratorAgent(BaseAgent):
         total_chapters = len(previous_chapters)
 
         recent = previous_chapters[-3:] if len(previous_chapters) > 3 else previous_chapters
-        recent_titles = ", ".join(
-            f"第{c.get('chapter_number', '?')}章" for c in recent
-        )
+        recent_titles = ", ".join(f"第{c.get('chapter_number', '?')}章" for c in recent)
 
         length_label = {
             "short": "短篇",
@@ -276,43 +274,51 @@ class OrchestratorAgent(BaseAgent):
             action=f"orchestrate_ch{chapter_number}",
         )
 
-        result = parse_validated("orchestrator", content, defaults={
-            "narrative_stage": "development",
-            "stage_analysis": "",
-            "chapter_strategy": {
-                "primary_storyline": "",
-                "storylines": [],
-                "pacing": "normal",
-                "key_scenes": [],
-                "ending_type": "cliffhanger",
-                "foreshadowings_to_address": [],
-                "suggested_chapter_words": target_chapter_words,
-                "climax_sequence": None,
-                "stage_boundary": None,
-                "unit_arc": None,
-                "pov_config": None,
-                "time_structure": {"mode": "linear", "current_timeline": "present"},
-                "ending_tone": None,
-                "storyline_intersection": None,
-                "character_arcs": [],
-                "character_emotional_state": {},
-                "tension_profile": None,
-                "foreshadowing_management": [],
-                "scene_composition": None,
+        result = parse_validated(
+            "orchestrator",
+            content,
+            defaults={
+                "narrative_stage": "development",
+                "stage_analysis": "",
+                "chapter_strategy": {
+                    "primary_storyline": "",
+                    "storylines": [],
+                    "pacing": "normal",
+                    "key_scenes": [],
+                    "ending_type": "cliffhanger",
+                    "foreshadowings_to_address": [],
+                    "suggested_chapter_words": target_chapter_words,
+                    "climax_sequence": None,
+                    "stage_boundary": None,
+                    "unit_arc": None,
+                    "pov_config": None,
+                    "time_structure": {"mode": "linear", "current_timeline": "present"},
+                    "ending_tone": None,
+                    "storyline_intersection": None,
+                    "character_arcs": [],
+                    "character_emotional_state": {},
+                    "tension_profile": None,
+                    "foreshadowing_management": [],
+                    "scene_composition": None,
+                },
+                "context_needed": {
+                    "characters": [],
+                    "world_elements": [],
+                    "recent_reference": "",
+                    "cross_timeline_references": [],
+                    "perspective_specific": "",
+                },
             },
-            "context_needed": {
-                "characters": [], "world_elements": [], "recent_reference": "",
-                "cross_timeline_references": [],
-                "perspective_specific": "",
-            },
-        })
+        )
 
         # Track in story arc
-        self._story_arc.append({
-            "chapter": chapter_number,
-            "stage": result.get("narrative_stage", "?"),
-            "strategy": result.get("chapter_strategy", {}),
-        })
+        self._story_arc.append(
+            {
+                "chapter": chapter_number,
+                "stage": result.get("narrative_stage", "?"),
+                "strategy": result.get("chapter_strategy", {}),
+            }
+        )
 
         return result
 

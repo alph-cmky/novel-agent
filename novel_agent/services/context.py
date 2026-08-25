@@ -96,15 +96,9 @@ class ContextCompiler:
             if item.get("status") in {"open", "planted", "hinted", "advanced"}
         ]
         section_budget = max(self.max_context_chars // 3, 1)
-        character_context = self._bound(
-            context.get("character_context", ""), section_budget
-        )
-        world_context = self._bound(
-            context.get("world_context", ""), section_budget
-        )
-        recent_summary = self._bound(
-            context.get("recent_summary", ""), section_budget
-        )
+        character_context = self._bound(context.get("character_context", ""), section_budget)
+        world_context = self._bound(context.get("world_context", ""), section_budget)
+        recent_summary = self._bound(context.get("recent_summary", ""), section_budget)
         unresolved = [item for item in unresolved if item.strip()][:40]
         sources = [
             {

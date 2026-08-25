@@ -54,14 +54,8 @@ def build_graph_data(
 
     # Filter by chapter if specified
     if until_chapter > 0:
-        entities = [
-            e for e in entities
-            if e.get("first_appearance_chapter", 999) <= until_chapter
-        ]
-        relations = [
-            r for r in relations
-            if r.get("first_appearance_chapter", 0) <= until_chapter
-        ]
+        entities = [e for e in entities if e.get("first_appearance_chapter", 999) <= until_chapter]
+        relations = [r for r in relations if r.get("first_appearance_chapter", 0) <= until_chapter]
 
     # Collect conflicts from worldbuilding reports
     conflict_names: set[str] = set()
@@ -106,17 +100,19 @@ def build_graph_data(
             props = {}
 
         importance = 1 + connection_counts.get(name, 0)
-        nodes.append({
-            "id": f"{etype}:{name}",
-            "label": name,
-            "type": etype,
-            "properties": props,
-            "first_chapter": e.get("first_appearance_chapter", 0),
-            "importance": importance,
-            "has_conflict": name in conflict_names,
-            "shape": ENTITY_SHAPES.get(etype, "ellipse"),
-            "color": ENTITY_COLORS.get(etype, "#909399"),
-        })
+        nodes.append(
+            {
+                "id": f"{etype}:{name}",
+                "label": name,
+                "type": etype,
+                "properties": props,
+                "first_chapter": e.get("first_appearance_chapter", 0),
+                "importance": importance,
+                "has_conflict": name in conflict_names,
+                "shape": ENTITY_SHAPES.get(etype, "ellipse"),
+                "color": ENTITY_COLORS.get(etype, "#909399"),
+            }
+        )
 
     # Build edge list（边已由 world_relations 表 UNIQUE 去重）
     edges = []
@@ -133,14 +129,16 @@ def build_graph_data(
             continue
 
         edge_id = f"{src}->{tgt}:{rtype}"
-        edges.append({
-            "id": edge_id,
-            "source": f"{_entity_type(entities, src)}:{src}",
-            "target": f"{_entity_type(entities, tgt)}:{tgt}",
-            "label": rtype,
-            "description": rtype,
-            "relationship_type": rtype,
-        })
+        edges.append(
+            {
+                "id": edge_id,
+                "source": f"{_entity_type(entities, src)}:{src}",
+                "target": f"{_entity_type(entities, tgt)}:{tgt}",
+                "label": rtype,
+                "description": rtype,
+                "relationship_type": rtype,
+            }
+        )
 
     return {"nodes": nodes, "edges": edges}
 

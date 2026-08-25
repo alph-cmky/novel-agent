@@ -47,9 +47,7 @@ class ChapterStore:
         metadatas = [{**meta, "chunk_index": i} for i in range(len(chunks))]
 
         # Remove existing chunks for this chapter
-        existing = collection.get(
-            where={"chapter_number": chapter_number}
-        )
+        existing = collection.get(where={"chapter_number": chapter_number})
         if existing["ids"]:
             collection.delete(ids=existing["ids"])
 
@@ -87,20 +85,21 @@ class ChapterStore:
         output = []
         if results["ids"] and results["ids"][0]:
             for i, doc_id in enumerate(results["ids"][0]):
-                output.append({
-                    "chunk_id": doc_id,
-                    "content": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i]
-                    if results["metadatas"] else {},
-                    "distance": results["distances"][0][i]
-                    if results["distances"] else None,
-                })
+                output.append(
+                    {
+                        "chunk_id": doc_id,
+                        "content": results["documents"][0][i],
+                        "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
+                        "distance": results["distances"][0][i] if results["distances"] else None,
+                    }
+                )
         return output
 
 
 def _sanitize_collection_name(name: str) -> str:
     """ChromaDB collection names must match [a-zA-Z0-9_-]+."""
     import re
+
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
     return sanitized[:63]  # ChromaDB limit
 

@@ -41,8 +41,10 @@ async def test_continuity_benchmark():
             f"P={r.precision:.2f}  R={r.recall:.2f}  F1={r.f1:.2f}  "
             f"TP={r.true_positives} FP={r.false_positives} FN={r.false_negatives}"
         )
-    print(f"\n  Macro: P={summary['macro_precision']:.3f}  "
-          f"R={summary['macro_recall']:.3f}  F1={summary['macro_f1']:.3f}\n")
+    print(
+        f"\n  Macro: P={summary['macro_precision']:.3f}  "
+        f"R={summary['macro_recall']:.3f}  F1={summary['macro_f1']:.3f}\n"
+    )
 
     # Soft assertions — benchmark is informative, not a hard gate
     assert summary["macro_f1"] > 0.0, "F1 should be measurable"
@@ -96,8 +98,7 @@ def test_stress_case_tail_truncation():
         for c in BUILTIN_CASES
         if len(c["draft_content"]) > 4000
         and all(
-            bug["keywords"]
-            and min(c["draft_content"].find(kw) for kw in bug["keywords"]) >= 4000
+            bug["keywords"] and min(c["draft_content"].find(kw) for kw in bug["keywords"]) >= 4000
             for bug in c["injected_bugs"]
         )
     ]

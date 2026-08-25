@@ -15,11 +15,13 @@ class ContinuityService:
         findings: list[dict] = []
         ordered = [event.get("chapter_number", 0) for event in events]
         if ordered != sorted(ordered):
-            findings.append({
-                "type": "event_order_violation",
-                "severity": "major",
-                "chapters": ordered,
-            })
+            findings.append(
+                {
+                    "type": "event_order_violation",
+                    "severity": "major",
+                    "chapters": ordered,
+                }
+            )
 
         death_chapters: dict[str, int] = {}
         for event in events:
@@ -31,13 +33,15 @@ class ContinuityService:
             ):
                 death_chapters[subject] = min(death_chapters.get(subject, chapter), chapter)
             if subject and subject in death_chapters and chapter > death_chapters[subject]:
-                findings.append({
-                    "type": "dead_character_reappeared",
-                    "severity": "critical",
-                    "subject": subject,
-                    "death_chapter": death_chapters[subject],
-                    "appearance_chapter": chapter,
-                })
+                findings.append(
+                    {
+                        "type": "dead_character_reappeared",
+                        "severity": "critical",
+                        "subject": subject,
+                        "death_chapter": death_chapters[subject],
+                        "appearance_chapter": chapter,
+                    }
+                )
 
         for item in foreshadowings:
             status = item.get("status", "")
@@ -48,13 +52,15 @@ class ContinuityService:
             overdue = expected is not None and int(expected) < current_chapter
             dormant = expected is None and current_chapter - planted > dormant_after
             if overdue or dormant:
-                findings.append({
-                    "type": "overdue_foreshadowing" if overdue else "dormant_foreshadowing",
-                    "severity": "major" if overdue else "warning",
-                    "description": item.get("description", ""),
-                    "planted_chapter": planted,
-                    "expected_resolve_chapter": expected,
-                })
+                findings.append(
+                    {
+                        "type": "overdue_foreshadowing" if overdue else "dormant_foreshadowing",
+                        "severity": "major" if overdue else "warning",
+                        "description": item.get("description", ""),
+                        "planted_chapter": planted,
+                        "expected_resolve_chapter": expected,
+                    }
+                )
 
         return {
             "passed": not any(f["severity"] == "critical" for f in findings),

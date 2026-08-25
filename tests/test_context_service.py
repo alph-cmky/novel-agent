@@ -60,9 +60,7 @@ def test_context_compiler_can_compile_from_run_snapshot():
     }
     manager.get_canon_snapshot.return_value = {
         "payload": {
-            "entities": [
-                {"entity_type": "character", "name": "甲", "properties": "{}"}
-            ],
+            "entities": [{"entity_type": "character", "name": "甲", "properties": "{}"}],
             "foreshadowings": [],
             "story_events": [],
             "chapters": [{"chapter_number": 1, "draft_content": "已批准正文"}],

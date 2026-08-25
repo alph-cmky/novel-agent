@@ -134,21 +134,35 @@ class OutputValidator:
                 "context_needed.cross_timeline_references",
             ],
             "editor": [
-                "issues", "banned_phrases", "cliches",
-                "sentence_pattern_issues", "structural_issues", "highlights",
+                "issues",
+                "banned_phrases",
+                "cliches",
+                "sentence_pattern_issues",
+                "structural_issues",
+                "highlights",
             ],
             "continuity": ["inconsistencies"],
             "worldbuilding": [
-                "new_entities", "conflicts", "chapter_events",
-                "updated_entities", "foreshadowings", "resolved_foreshadowings",
+                "new_entities",
+                "conflicts",
+                "chapter_events",
+                "updated_entities",
+                "foreshadowings",
+                "resolved_foreshadowings",
             ],
         }
 
         int_paths = [
             "overall_score",
-            "rhythm_score", "dialogue_score", "logic_score", "writing_quality_score",
-            "dimensions.rhythm", "dimensions.ai_flavor", "dimensions.dialogue",
-            "dimensions.logic", "dimensions.writing",
+            "rhythm_score",
+            "dialogue_score",
+            "logic_score",
+            "writing_quality_score",
+            "dimensions.rhythm",
+            "dimensions.ai_flavor",
+            "dimensions.dialogue",
+            "dimensions.logic",
+            "dimensions.writing",
             "chapter_strategy.suggested_chapter_words",
         ]
 
@@ -165,7 +179,8 @@ class OutputValidator:
 
         for path in list_paths.get(agent_type, []):
             _set(
-                fixed, path,
+                fixed,
+                path,
                 lambda v: ([v] if v else []) if not isinstance(v, list) else v,
             )
 

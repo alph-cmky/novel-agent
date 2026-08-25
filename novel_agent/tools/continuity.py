@@ -8,6 +8,7 @@ from novel_agent.tools.base import BaseTool, ToolResult
 
 class CheckContinuityInput(BaseModel):
     """Input schema for check_continuity tool."""
+
     chapter_content: str = Field(description="Current chapter content to audit")
     chapter_number: int = Field(description="Current chapter number")
     project_id: str = Field(default="", description="Project ID for context retrieval")

@@ -8,14 +8,14 @@ from novel_agent.tools.base import BaseTool, ToolResult
 
 class DetectAiFlavorInput(BaseModel):
     """Input schema for detect_ai_flavor tool."""
+
     text: str = Field(description="The text to analyze for AI writing patterns")
 
 
 class DetectAiFlavorTool(BaseTool):
     name = "detect_ai_flavor"
     description = (
-        "Analyze text for AI writing patterns "
-        "(banned phrases, clichés, structural uniformity)."
+        "Analyze text for AI writing patterns (banned phrases, clichés, structural uniformity)."
     )
 
     @property

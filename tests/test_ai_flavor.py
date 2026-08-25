@@ -31,9 +31,7 @@ class TestBannedPhrases:
     def test_detects_cliches(self):
         text = "他的眼中闪过一丝惊讶，她的嘴角微微上扬。"
         report = detect_ai_flavor(text)
-        cliches = [
-            i["phrase"] for i in report["issues"] if i["type"] == "cliche"
-        ]
+        cliches = [i["phrase"] for i in report["issues"] if i["type"] == "cliche"]
         assert "他的眼中闪过一丝" in cliches
 
     def test_clean_text_scores_high(self):
@@ -84,13 +82,15 @@ class TestParagraphLengths:
         assert result["uniform_paragraphs"] is True
 
     def test_varied_paragraphs_pass(self):
-        text = "\n".join([
-            "A" * 20,
-            "B" * 200,
-            "C" * 50,
-            "D" * 120,
-            "E" * 80,
-        ])
+        text = "\n".join(
+            [
+                "A" * 20,
+                "B" * 200,
+                "C" * 50,
+                "D" * 120,
+                "E" * 80,
+            ]
+        )
         result = check_paragraph_lengths(text)
         assert result["uniform_paragraphs"] is False
 

@@ -1,6 +1,5 @@
 """Tests for the evolution core logic — Delta, termination, improvement plans."""
 
-
 from novel_agent.schema.enums import EvolutionAction
 from novel_agent.services.evolution import (
     EDITOR_DIMENSIONS,
@@ -24,8 +23,11 @@ class TestExtractScores:
             "editor_report": {
                 "overall_score": 72,
                 "dimensions": {
-                    "rhythm": 70, "ai_flavor": 65, "dialogue": 75,
-                    "logic": 80, "writing": 70,
+                    "rhythm": 70,
+                    "ai_flavor": 65,
+                    "dialogue": 75,
+                    "logic": 80,
+                    "writing": 70,
                 },
             },
             "continuity_report": {"overall_score": 80},
@@ -73,14 +75,13 @@ class TestExtractScores:
 
 class TestContinuityOverall:
     def test_unavailable_substitutes_editor(self):
-        assert continuity_overall(
-            {"overall_score": 88}, {"unavailable": True, "overall_score": 0}
-        ) == 88
+        assert (
+            continuity_overall({"overall_score": 88}, {"unavailable": True, "overall_score": 0})
+            == 88
+        )
 
     def test_available_returns_own_score(self):
-        assert continuity_overall(
-            {"overall_score": 88}, {"overall_score": 75}
-        ) == 75
+        assert continuity_overall({"overall_score": 88}, {"overall_score": 75}) == 75
 
     def test_missing_reports_default_to_zero(self):
         assert continuity_overall({"overall_score": 88}, {}) == 0
@@ -88,14 +89,12 @@ class TestContinuityOverall:
 
 class TestEditorOverall:
     def test_unavailable_substitutes_continuity(self):
-        assert editor_overall(
-            {"unavailable": True, "overall_score": 0}, {"overall_score": 75}
-        ) == 75
+        assert (
+            editor_overall({"unavailable": True, "overall_score": 0}, {"overall_score": 75}) == 75
+        )
 
     def test_available_returns_own_score(self):
-        assert editor_overall(
-            {"overall_score": 88}, {"overall_score": 75}
-        ) == 88
+        assert editor_overall({"overall_score": 88}, {"overall_score": 75}) == 88
 
     def test_missing_reports_default_to_zero(self):
         assert editor_overall({"unavailable": True}, {}) == 0
@@ -107,8 +106,11 @@ class TestCompositeScore:
             "editor_overall": 80,
             "continuity_overall": 90,
             "dimensions": {
-                "rhythm": 75, "ai_flavor": 70, "dialogue": 85,
-                "logic": 80, "writing": 75,
+                "rhythm": 75,
+                "ai_flavor": 70,
+                "dialogue": 85,
+                "logic": 80,
+                "writing": 75,
             },
         }
         # dims_avg = (75+70+85+80+75)/5 = 77
@@ -122,7 +124,11 @@ class TestCompositeScore:
             "editor_overall": 80,
             "continuity_overall": 90,
             "dimensions": {
-                "rhythm": 75, "ai_flavor": 70, "dialogue": 85, "logic": 80, "writing": 75,
+                "rhythm": 75,
+                "ai_flavor": 70,
+                "dialogue": 85,
+                "logic": 80,
+                "writing": 75,
             },
         }
         # 80*0.6 + 90*0.2 + 77*0.2 = 48 + 18 + 15.4 = 81.4
@@ -146,14 +152,22 @@ class TestComputeDelta:
             "editor_overall": 80,
             "continuity_overall": 85,
             "dimensions": {
-                "rhythm": 75, "ai_flavor": 70, "dialogue": 80, "logic": 80, "writing": 75,
+                "rhythm": 75,
+                "ai_flavor": 70,
+                "dialogue": 80,
+                "logic": 80,
+                "writing": 75,
             },
         }
         previous = {
             "editor_overall": 70,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 65, "ai_flavor": 60, "dialogue": 75, "logic": 78, "writing": 70,
+                "rhythm": 65,
+                "ai_flavor": 60,
+                "dialogue": 75,
+                "logic": 78,
+                "writing": 70,
             },
         }
         delta = compute_delta(current, previous)
@@ -166,14 +180,22 @@ class TestComputeDelta:
             "editor_overall": 75,
             "continuity_overall": 80,
             "dimensions": {
-                "rhythm": 70, "ai_flavor": 75, "dialogue": 60, "logic": 80, "writing": 65,
+                "rhythm": 70,
+                "ai_flavor": 75,
+                "dialogue": 60,
+                "logic": 80,
+                "writing": 65,
             },
         }
         previous = {
             "editor_overall": 72,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 68, "ai_flavor": 70, "dialogue": 68, "logic": 82, "writing": 68,
+                "rhythm": 68,
+                "ai_flavor": 70,
+                "dialogue": 68,
+                "logic": 82,
+                "writing": 68,
             },
         }
         delta = compute_delta(current, previous)
@@ -185,14 +207,22 @@ class TestComputeDelta:
             "editor_overall": 68,
             "continuity_overall": 78,
             "dimensions": {
-                "rhythm": 65, "ai_flavor": 62, "dialogue": 60, "logic": 75, "writing": 62,
+                "rhythm": 65,
+                "ai_flavor": 62,
+                "dialogue": 60,
+                "logic": 75,
+                "writing": 62,
             },
         }
         previous = {
             "editor_overall": 75,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 72, "ai_flavor": 70, "dialogue": 68, "logic": 80, "writing": 68,
+                "rhythm": 72,
+                "ai_flavor": 70,
+                "dialogue": 68,
+                "logic": 80,
+                "writing": 68,
             },
         }
         delta = compute_delta(current, previous)
@@ -271,8 +301,13 @@ class TestDecideTermination:
         reason, _ = decide_termination(
             delta=self._delta(),
             current_scores=self._scores(
-                editor=95, continuity=92,
-                rhythm=92, ai_flavor=93, dialogue=91, logic=95, writing=94,
+                editor=95,
+                continuity=92,
+                rhythm=92,
+                ai_flavor=93,
+                dialogue=91,
+                logic=95,
+                writing=94,
             ),
             best_scores=self._scores(),
             history=[],
@@ -362,7 +397,8 @@ class TestBuildImprovementPlan:
         """Delta with regressed dimensions → focus on them."""
         current = self._scores(rhythm=68, ai_flavor=75)
         delta = {
-            "editor": 3, "continuity": 2,
+            "editor": 3,
+            "continuity": 2,
             "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
             "trend": "mixed",
         }
@@ -387,9 +423,7 @@ def _candidate_state(content: str, *, critical: int = 0, outline: float = 1.0):
         },
         "continuity_report": {
             "overall_score": 80,
-            "inconsistencies": [
-                {"severity": "critical", "category": "timeline"}
-            ] * critical,
+            "inconsistencies": [{"severity": "critical", "category": "timeline"}] * critical,
         },
     }
 
@@ -451,7 +485,8 @@ def test_evolution_service_returns_continue_decision_with_empty_termination():
         """Dimensions that improved >+3 should be in preserve."""
         current = self._scores(rhythm=68, ai_flavor=80)
         delta = {
-            "editor": 5, "continuity": 2,
+            "editor": 5,
+            "continuity": 2,
             "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
             "trend": "mixed",
         }

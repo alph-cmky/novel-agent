@@ -11,8 +11,7 @@ DEFAULT_MAX_TOKENS = 4096
 # 防止其 max_tokens 里的推理 token 挤空正文 content（实测偶发只出 123 字）
 REASONING_EFFORT = "low"
 NARRATIVE_PACING = (
-    "渐进展开，intro充分铺垫(前5-10%)，development多线并进，"
-    "climax在70-80%处，伏笔长线回收"
+    "渐进展开，intro充分铺垫(前5-10%)，development多线并进，climax在70-80%处，伏笔长线回收"
 )
 TYPICAL_CHAPTERS = "100章以上"
 
@@ -40,9 +39,7 @@ class ExecutionProfile:
             skip_reviews=bool(state.get("skip_reviews", False)),
             review_interval=max(int(state.get("review_interval", 1) or 1), 1),
             skip_worldbuilding=bool(state.get("skip_worldbuilding", False)),
-            skip_evolution_enrichment=bool(
-                state.get("skip_evolution_enrichment", False)
-            ),
+            skip_evolution_enrichment=bool(state.get("skip_evolution_enrichment", False)),
         )
 
     def should_review(self, chapter_number: int) -> bool:

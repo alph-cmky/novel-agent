@@ -57,11 +57,13 @@ class QualityService:
         drafts = scene_drafts or []
         if plans and len(plans) != len(drafts):
             violations.append("scene_count_mismatch")
-            findings.append({
-                "type": "scene_count_mismatch",
-                "planned": len(plans),
-                "generated": len(drafts),
-            })
+            findings.append(
+                {
+                    "type": "scene_count_mismatch",
+                    "planned": len(plans),
+                    "generated": len(drafts),
+                }
+            )
         for index, draft in enumerate(drafts, start=1):
             if not draft.strip():
                 violations.append(f"missing_scene:{index}")
@@ -76,9 +78,11 @@ class QualityService:
             keywords = [str(item) for item in conflict.get("keywords", []) if item]
             if keywords and all(keyword in content for keyword in keywords):
                 violations.append("canon_conflict_exposed")
-                findings.append({
-                    "type": "canon_conflict_exposed",
-                    "severity": conflict.get("severity", "major"),
-                    "keywords": keywords,
-                })
+                findings.append(
+                    {
+                        "type": "canon_conflict_exposed",
+                        "severity": conflict.get("severity", "major"),
+                        "keywords": keywords,
+                    }
+                )
         return {"passed": not violations, "violations": violations, "findings": findings}

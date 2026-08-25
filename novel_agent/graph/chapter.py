@@ -65,6 +65,7 @@ def _text_units(text: str) -> int:
         return cjk
     return len(re.findall(r"\b[\w']+\b", text))
 
+
 # ── Helpers ─────────────────────────────────────────────
 
 
@@ -133,8 +134,11 @@ def _format_improvement_plan(plan: dict | None, version: int) -> str:
     focus = plan.get("focus_dimensions", [])
     if focus:
         dim_labels = {
-            "rhythm": "节奏", "ai_flavor": "AI味", "dialogue": "对话",
-            "logic": "逻辑", "writing": "文笔",
+            "rhythm": "节奏",
+            "ai_flavor": "AI味",
+            "dialogue": "对话",
+            "logic": "逻辑",
+            "writing": "文笔",
         }
         focus_cn = ", ".join(dim_labels.get(d, d) for d in focus)
         parts.append(f"\n### 本轮重点维度\n{focus_cn}")
@@ -153,8 +157,11 @@ def _format_improvement_plan(plan: dict | None, version: int) -> str:
     preserve = constraints.get("preserve", [])
     if preserve:
         dim_labels = {
-            "rhythm": "节奏", "ai_flavor": "AI味", "dialogue": "对话",
-            "logic": "逻辑", "writing": "文笔",
+            "rhythm": "节奏",
+            "ai_flavor": "AI味",
+            "dialogue": "对话",
+            "logic": "逻辑",
+            "writing": "文笔",
         }
         preserve_cn = ", ".join(dim_labels.get(d, d) for d in preserve)
         parts.append(f"\n### 请保持\n{preserve_cn} 方面的已有进步，不要牺牲它们")
@@ -178,6 +185,7 @@ def _format_improvement_plan(plan: dict | None, version: int) -> str:
 
 # ── Nodes ──────────────────────────────────────────────
 
+
 async def orchestrator_node(state: NovelState) -> dict:
     """Orchestrator analyzes narrative position and assembles context."""
     if state.get("skip_orchestrator"):
@@ -197,10 +205,12 @@ async def orchestrator_node(state: NovelState) -> dict:
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
+
             mgr = ProjectManager(persist_dir)
             all_chapters = mgr.get_all_chapters(project_id)
             previous_chapters = [
-                c for c in all_chapters
+                c
+                for c in all_chapters
                 if c["chapter_number"] < state.get("chapter_number", 1)
                 and c.get("status") != "failed"
             ]
@@ -236,8 +246,7 @@ async def orchestrator_node(state: NovelState) -> dict:
             all_fs = mgr2.get_foreshadowings(project_id)
             open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
             unresolved = [
-                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
-                for f in open_fs
+                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}" for f in open_fs
             ]
             if unresolved:
                 print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
@@ -285,23 +294,19 @@ async def orchestrator_node(state: NovelState) -> dict:
     if persp_specific:
         char_ctx = (
             f"{char_ctx}\n[视角特定信息: {persp_specific}]"
-            if char_ctx else f"[视角特定信息: {persp_specific}]"
+            if char_ctx
+            else f"[视角特定信息: {persp_specific}]"
         )
 
     cross_timeline = context_needed.get("cross_timeline_references", [])
     if cross_timeline:
         timeline_hint = f"[跨时间线参考: {', '.join(cross_timeline)}]"
-        world_ctx = (
-            f"{world_ctx}\n{timeline_hint}"
-            if world_ctx else timeline_hint
-        )
+        world_ctx = f"{world_ctx}\n{timeline_hint}" if world_ctx else timeline_hint
 
     recent_ref = context_needed.get("recent_reference", "")
     if recent_ref:
         ref_hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
-        recent_summary = (
-            f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
-        )
+        recent_summary = f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
 
     scene_plan = state.get("scene_plan", [])
     if state.get("scene_first"):
@@ -419,8 +424,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                 scene_content, scene_trace = await writer.write(**scene_args)
             scene_drafts.append(scene_content)
             scene_context = (
-                f"{scene_context}\n\n[前一场 Scene {scene['scene_index']}]\n"
-                f"{scene_content[-1200:]}"
+                f"{scene_context}\n\n[前一场 Scene {scene['scene_index']}]\n{scene_content[-1200:]}"
             )
         content = assemble_scenes(scene_drafts)
         trace = scene_trace or writer.latest_trace
@@ -458,7 +462,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         compensated_args["rewrite_instructions"] = (
             f"【紧急注意】：上一版输出篇幅严重不足（仅有 {content_units} units）。"
             "请务必充分展开场景细节、人物神态、环境氛围与多轮交锋对话，"
-            f"写满至少 {target_words} 字，严禁大纲式概括！\n" + (write_args.get("rewrite_instructions") or "")
+            f"写满至少 {target_words} 字，严禁大纲式概括！\n"
+            + (write_args.get("rewrite_instructions") or "")
         )
         content_comp, trace_comp = await writer.write(**compensated_args)
         if _text_units(content_comp.strip()) > content_units:
@@ -484,10 +489,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         quality_gate_report["violations"].extend(story_checker["violations"])
         quality_gate_report["passed"] = False
     if not quality_gate_report["passed"]:
-        print(
-            "  [QualityGate] blocked: "
-            + ", ".join(quality_gate_report["violations"])
-        )
+        print("  [QualityGate] blocked: " + ", ".join(quality_gate_report["violations"]))
     wmsg = f"  [Writer] {len(content)} chars/{_text_units(content)} units {label} "
     wmsg += f"(target: {target_words}w, tokens: {tok_info})"
     print(wmsg)
@@ -522,9 +524,7 @@ async def continuity_node(state: NovelState) -> dict:
     store = _get_chapter_store(_persist)
     project_id = state.get("project_id", "")
 
-    auditor = ContinuityAgent(
-        config=config, chapter_store=store, project_id=project_id
-    )
+    auditor = ContinuityAgent(config=config, chapter_store=store, project_id=project_id)
     report, _ = await auditor.audit(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
@@ -535,7 +535,8 @@ async def continuity_node(state: NovelState) -> dict:
         print("  [Continuity] unavailable（空输出，一致性维度跳过）")
         return {"continuity_report": report}
     criticals = [
-        i for i in (report.get("inconsistencies") or [])
+        i
+        for i in (report.get("inconsistencies") or [])
         if isinstance(i, dict) and i.get("severity") == "critical"
     ]
     print(f"  [Continuity] {score}/100, Critical: {len(criticals)}")
@@ -596,8 +597,10 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
         editor_score = current_scores["editor_overall"]
         continuity_score = current_scores["continuity_overall"]
-        print(f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
-              f"→ 首轮，记录历史，生成改进计划 focus={plan.get('focus_dimensions', [])}")
+        print(
+            f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
+            f"→ 首轮，记录历史，生成改进计划 focus={plan.get('focus_dimensions', [])}"
+        )
 
         return {
             "evolution_round": 1,
@@ -626,8 +629,11 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         {**current_scores, "composite": composite_score(current_scores)},
     )
     best_candidate = next(
-        (item for item in candidates
-         if item.get("version") == state.get("evolution_best_candidate_version")),
+        (
+            item
+            for item in candidates
+            if item.get("version") == state.get("evolution_best_candidate_version")
+        ),
         None,
     )
     best_snapshot = candidate_to_state(best_candidate) if best_candidate else {}
@@ -635,10 +641,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     best_ct_rpt = best_snapshot.get("continuity_report", {}) or {}
     # 与 current_scores 同口径走 extract_scores：维度缺失补 0、editor/continuity
     # 假 0 一律中和，否则 dims_avg 分母不一致 / best 假 0 拖低对比基准。
-    best_scores = extract_scores({
-        "editor_report": best_ed_rpt,
-        "continuity_report": best_ct_rpt,
-    })
+    best_scores = extract_scores(
+        {
+            "editor_report": best_ed_rpt,
+            "continuity_report": best_ct_rpt,
+        }
+    )
     best_state = {
         "draft_content": best_snapshot.get("draft_content", ""),
         "editor_report": best_ed_rpt,
@@ -706,17 +714,21 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     # 5. Check if new best version
     is_new_best, selection_report = is_better_candidate(state, best_state, evo_config)
     if is_new_best:
-        result.update({
-            "evolution_best_candidate_version": version,
-        })
+        result.update(
+            {
+                "evolution_best_candidate_version": version,
+            }
+        )
 
     # 6. If continuing, increment counters + issue plan
     if not termination:
-        result.update({
-            "evolution_round": current_round + 1,
-            "evolution_version": version + 1,
-            "evolution_improvement_plan": plan,
-        })
+        result.update(
+            {
+                "evolution_round": current_round + 1,
+                "evolution_version": version + 1,
+                "evolution_improvement_plan": plan,
+            }
+        )
 
     editor_score = current_scores["editor_overall"]
     continuity_score = current_scores["continuity_overall"]
@@ -725,8 +737,10 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         state.get("evolution_best_candidate_version", 0),
     )
     status = f"终止:{termination}" if termination else "继续"
-    print(f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
-          f"Δ={delta['trend']} best=v{best_v} {status}")
+    print(
+        f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
+        f"Δ={delta['trend']} best=v{best_v} {status}"
+    )
 
     return result
 
@@ -743,13 +757,13 @@ def select_best_version_node(state: NovelState) -> dict:
 
     # If best is current (no-op) or best is a previous version (rollback)
     if best_version != current_version:
-        print(
-            f"  [SelectBest] Rolling back: "
-            f"v{current_version} → v{best_version} (best)"
-        )
+        print(f"  [SelectBest] Rolling back: v{current_version} → v{best_version} (best)")
         best_candidate = next(
-            (item for item in state.get("evolution_candidates", [])
-             if item.get("version") == best_version),
+            (
+                item
+                for item in state.get("evolution_candidates", [])
+                if item.get("version") == best_version
+            ),
             None,
         )
         if best_candidate:
@@ -772,6 +786,7 @@ async def worldbuilding_node(state: NovelState) -> dict:
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
+
             mgr = ProjectManager(persist_dir)
             existing_fs = mgr.get_foreshadowings(project_id)
         except Exception as exc:
@@ -816,23 +831,25 @@ def human_review_node(state: NovelState) -> dict:
     evolution_rounds = len(state.get("evolution_history", []))
     evolution_termination = state.get("evolution_termination", "")
 
-    feedback = interrupt({
-        "type": "human_review",
-        "chapter_number": state.get("chapter_number", 1),
-        "draft_preview": state.get("draft_content", "")[:1000],
-        "draft_full": state.get("draft_content", ""),
-        "editor_score": editor_score,
-        "continuity_score": continuity_score,
-        "editor_unavailable": editor_unavailable,
-        "continuity_unavailable": continuity_unavailable,
-        "editor_issues": editor_report.get("issues", [])[:10],
-        "continuity_issues": continuity_report.get("inconsistencies", [])[:10],
-        "wb_new_entities": len(wb_report.get("new_entities", [])),
-        "wb_conflicts": len(wb_report.get("conflicts", [])),
-        "retry_count": state.get("retry_count", 0),
-        "evolution_rounds": evolution_rounds,
-        "evolution_termination": evolution_termination,
-    })
+    feedback = interrupt(
+        {
+            "type": "human_review",
+            "chapter_number": state.get("chapter_number", 1),
+            "draft_preview": state.get("draft_content", "")[:1000],
+            "draft_full": state.get("draft_content", ""),
+            "editor_score": editor_score,
+            "continuity_score": continuity_score,
+            "editor_unavailable": editor_unavailable,
+            "continuity_unavailable": continuity_unavailable,
+            "editor_issues": editor_report.get("issues", [])[:10],
+            "continuity_issues": continuity_report.get("inconsistencies", [])[:10],
+            "wb_new_entities": len(wb_report.get("new_entities", [])),
+            "wb_conflicts": len(wb_report.get("conflicts", [])),
+            "retry_count": state.get("retry_count", 0),
+            "evolution_rounds": evolution_rounds,
+            "evolution_termination": evolution_termination,
+        }
+    )
 
     approved = feedback.get("action") == "approve"
     comments = feedback.get("comments", "")
@@ -885,6 +902,7 @@ def human_review_node(state: NovelState) -> dict:
 
 
 # ── Routers ────────────────────────────────────────────
+
 
 def route_after_evolution(
     state: NovelState,
@@ -976,7 +994,8 @@ def _build_workflow() -> StateGraph:
     workflow.add_edge("evolution_continuity", "evolution_worldbuilding")
     workflow.add_edge("evolution_worldbuilding", "evolution_orchestrator")
     workflow.add_conditional_edges(
-        "evolution_orchestrator", route_after_evolution,
+        "evolution_orchestrator",
+        route_after_evolution,
         {
             "evolution_writer": "evolution_writer",
             "evolution_select_best": "evolution_select_best",
@@ -985,7 +1004,8 @@ def _build_workflow() -> StateGraph:
     workflow.add_edge("evolution_select_best", "worldbuilding")
     workflow.add_edge("worldbuilding", "human_review")
     workflow.add_conditional_edges(
-        "human_review", route_after_human_evolution,
+        "human_review",
+        route_after_human_evolution,
         {"__end__": END, "evolution_writer": "evolution_writer"},
     )
 

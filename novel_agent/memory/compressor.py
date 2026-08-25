@@ -12,12 +12,14 @@ from novel_agent.config import env_bool
 class CompressionStrategy:
     trigger_threshold: int = 40000  # tokens
     target_tokens: int = 20000  # after compression
-    preserve_patterns: list[str] = field(default_factory=lambda: [
-        r"伏笔|预示|暗示|以后会|将来",
-        r"第.*?次.*?出现|第一.*?见到|初.*?登场",
-        r"规则|设定|体系|能力|功法|修炼",
-        r"关系|认识|结识|结盟|背叛",
-    ])
+    preserve_patterns: list[str] = field(
+        default_factory=lambda: [
+            r"伏笔|预示|暗示|以后会|将来",
+            r"第.*?次.*?出现|第一.*?见到|初.*?登场",
+            r"规则|设定|体系|能力|功法|修炼",
+            r"关系|认识|结识|结盟|背叛",
+        ]
+    )
 
 
 def estimate_tokens(text: str) -> int:
@@ -46,7 +48,8 @@ class ContextCompressor:
         config = AgentConfig(
             model=os.getenv("BUDGET_MODEL", "deepseek-chat"),
             api_key=os.getenv("BUDGET_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
-            base_url=os.getenv("BUDGET_BASE_URL") or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            base_url=os.getenv("BUDGET_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             max_tokens=600,
             temperature=0.3,
             is_reasoning=env_bool("BUDGET_IS_REASONING"),
@@ -83,12 +86,8 @@ class ContextCompressor:
         older = chapters[:-recent_count]
 
         # Extract critical info from older chapters
-        all_text = "\n".join(
-            (c.get("draft_content") or "")[:2000] for c in older
-        )
-        critical = extract_critical_snippets(
-            all_text, self.strategy.preserve_patterns
-        )
+        all_text = "\n".join((c.get("draft_content") or "")[:2000] for c in older)
+        critical = extract_critical_snippets(all_text, self.strategy.preserve_patterns)
 
         # Build compressed summary
         summary = await self._llm_compress(older)
@@ -112,8 +111,7 @@ class ContextCompressor:
         prompt = (
             "请将以下章节压缩为简洁的摘要（中文，300字以内）。"
             "保留：关键事件、角色行为变化、新设定、伏笔。"
-            "忽略：环境描写、战斗细节、日常对话。\n\n"
-            + "\n".join(chapter_texts)
+            "忽略：环境描写、战斗细节、日常对话。\n\n" + "\n".join(chapter_texts)
         )
 
         try:

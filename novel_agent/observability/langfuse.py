@@ -13,20 +13,13 @@ Setup:
 import contextvars
 import os
 
-_langfuse_handler: contextvars.ContextVar = contextvars.ContextVar(
-    "langfuse_handler", default=None
-)
-_trace: contextvars.ContextVar = contextvars.ContextVar(
-    "langfuse_trace", default=None
-)
+_langfuse_handler: contextvars.ContextVar = contextvars.ContextVar("langfuse_handler", default=None)
+_trace: contextvars.ContextVar = contextvars.ContextVar("langfuse_trace", default=None)
 
 
 def is_configured() -> bool:
     """Check if LangFuse credentials are set."""
-    return bool(
-        os.getenv("LANGFUSE_PUBLIC_KEY")
-        and os.getenv("LANGFUSE_SECRET_KEY")
-    )
+    return bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
 
 
 def _get_client():

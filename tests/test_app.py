@@ -60,21 +60,15 @@ class TestTokenAuth:
         assert json.loads(resp.body) == {"error": "Unauthorized"}
 
     def test_wrong_token_rejected(self):
-        resp = asyncio.run(_run_auth(
-            "/api/foo", [(b"authorization", b"Bearer wrong")], "secret"
-        ))
+        resp = asyncio.run(_run_auth("/api/foo", [(b"authorization", b"Bearer wrong")], "secret"))
         assert resp.status_code == 401
 
     def test_correct_bearer_token_accepted(self):
-        resp = asyncio.run(_run_auth(
-            "/api/foo", [(b"authorization", b"Bearer secret")], "secret"
-        ))
+        resp = asyncio.run(_run_auth("/api/foo", [(b"authorization", b"Bearer secret")], "secret"))
         assert resp is _PASS
 
     def test_correct_api_key_accepted(self):
-        resp = asyncio.run(_run_auth(
-            "/api/foo", [(b"x-api-key", b"secret")], "secret"
-        ))
+        resp = asyncio.run(_run_auth("/api/foo", [(b"x-api-key", b"secret")], "secret"))
         assert resp is _PASS
 
     def test_non_api_path_not_gated(self):

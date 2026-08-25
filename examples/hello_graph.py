@@ -4,12 +4,14 @@ Minimal LangGraph demo: a mock chapter-writing pipeline.
 This is a checkpoint to verify the stack works before building real agents.
 Run: uv run python examples/hello_graph.py
 """
+
 from typing import Literal, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
 
 # ── State ──────────────────────────────────────────────
+
 
 class NovelState(TypedDict):
     chapter_number: int
@@ -20,6 +22,7 @@ class NovelState(TypedDict):
 
 
 # ── Nodes ──────────────────────────────────────────────
+
 
 def writer_node(state: NovelState) -> dict:
     """Mock: generate chapter content from outline."""
@@ -57,6 +60,7 @@ def human_review(state: NovelState) -> dict:
 
 # ── Router ─────────────────────────────────────────────
 
+
 def route_after_editor(state: NovelState) -> Literal["human_review", "writer"]:
     if state["editor_score"] >= 70:
         return "human_review"
@@ -74,6 +78,7 @@ def route_after_human(state: NovelState) -> Literal["__end__", "writer"]:
 
 
 # ── Build Graph ────────────────────────────────────────
+
 
 def build_graph():
     workflow = StateGraph(NovelState)

@@ -24,8 +24,11 @@ def _state(**overrides) -> dict:
                 "continuity": 70,
                 "composite": 70.0,
                 "dimensions": {
-                    "rhythm": 70, "ai_flavor": 70, "dialogue": 70,
-                    "logic": 70, "writing": 70,
+                    "rhythm": 70,
+                    "ai_flavor": 70,
+                    "dialogue": 70,
+                    "logic": 70,
+                    "writing": 70,
                 },
                 "delta": None,
                 "focus": None,
@@ -34,19 +37,25 @@ def _state(**overrides) -> dict:
         "editor_report": {
             "overall_score": 80,
             "dimensions": {
-                "rhythm": 80, "ai_flavor": 80, "dialogue": 80,
-                "logic": 80, "writing": 80,
+                "rhythm": 80,
+                "ai_flavor": 80,
+                "dialogue": 80,
+                "logic": 80,
+                "writing": 80,
             },
         },
         "continuity_report": {"overall_score": 80},
-        "evolution_candidates": [{
-            "version": 1,
-            "draft_content": "旧正文",
-            "editor_report": {
-                "overall_score": 80, "dimensions": {"rhythm": 100},
-            },
-            "continuity_report": {"overall_score": 80},
-        }],
+        "evolution_candidates": [
+            {
+                "version": 1,
+                "draft_content": "旧正文",
+                "editor_report": {
+                    "overall_score": 80,
+                    "dimensions": {"rhythm": 100},
+                },
+                "continuity_report": {"overall_score": 80},
+            }
+        ],
         "evolution_best_candidate_version": 1,
         "evolution_max_rounds": 5,
         "draft_content": "新正文",
@@ -57,8 +66,10 @@ def _state(**overrides) -> dict:
 
 def _run(state: dict) -> dict:
     # patch _config_for 避免真实 env/模型路由；patch Agent 类跳过 LLM 调用。
-    with patch("novel_agent.graph.chapter._config_for", return_value=None), \
-         patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent:
+    with (
+        patch("novel_agent.graph.chapter._config_for", return_value=None),
+        patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent,
+    ):
         mock_agent.return_value.enrich_plan = AsyncMock(return_value=None)
         return asyncio.run(evolution_orchestrator_node(state))
 
@@ -78,18 +89,23 @@ class TestBestScoresZeroFill:
     def test_full_best_dimensions_unchanged(self):
         """best dims 完整 5 维时，补零不改变结果（对照）。"""
         state = _state(
-            evolution_candidates=[{
-                "version": 1,
-                "draft_content": "旧正文",
-                "editor_report": {
-                    "overall_score": 60,
-                    "dimensions": {
-                        "rhythm": 60, "ai_flavor": 60, "dialogue": 60,
-                        "logic": 60, "writing": 60,
+            evolution_candidates=[
+                {
+                    "version": 1,
+                    "draft_content": "旧正文",
+                    "editor_report": {
+                        "overall_score": 60,
+                        "dimensions": {
+                            "rhythm": 60,
+                            "ai_flavor": 60,
+                            "dialogue": 60,
+                            "logic": 60,
+                            "writing": 60,
+                        },
                     },
-                },
-                "continuity_report": {"overall_score": 60},
-            }],
+                    "continuity_report": {"overall_score": 60},
+                }
+            ],
             evolution_best_candidate_version=1,
         )
         result = _run(state)

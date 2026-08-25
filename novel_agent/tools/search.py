@@ -10,10 +10,9 @@ from novel_agent.tools.base import BaseTool, ToolResult
 
 class SearchContextInput(BaseModel):
     """Input schema for search_context tool."""
+
     query: str = Field(description="Search query or description")
-    scope: Literal[
-        "characters", "events", "locations", "foreshadowings", "all"
-    ] = "all"
+    scope: Literal["characters", "events", "locations", "foreshadowings", "all"] = "all"
     top_k: int = Field(default=5, ge=1, le=20)
     chapter_range: tuple[int, int] | None = Field(
         default=None,

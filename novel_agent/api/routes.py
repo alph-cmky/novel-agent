@@ -61,9 +61,11 @@ async def _restore_session(project_id: str, chapter_number: int) -> str | None:
     session_id = session_store.create(graph, asyncio.Queue())
     runs = _get_manager().list_writing_runs(project_id, chapter_number)
     active_run = next(
-        (run for run in runs if run["status"] in {
-            "queued", "running", "waiting_review", "waiting_user", "retrying"
-        }),
+        (
+            run
+            for run in runs
+            if run["status"] in {"queued", "running", "waiting_review", "waiting_user", "retrying"}
+        ),
         None,
     )
     session_store.set_config(session_id, config)
@@ -402,7 +404,8 @@ async def review_scene_version(version_id: str, scene_index: int):
         raise HTTPException(status_code=404, detail="Version not found")
     scene = next(
         (
-            item for item in mgr.get_scene_manifest(version_id)
+            item
+            for item in mgr.get_scene_manifest(version_id)
             if item.get("scene_index") == scene_index
         ),
         None,
@@ -607,9 +610,12 @@ async def write_chapter(project_id: str, chapter_number: int):
     if existing and existing.next:
         runs = mgr.list_writing_runs(project_id, chapter_number)
         run = next(
-            (item for item in runs if item["status"] in {
-                "queued", "running", "waiting_review", "waiting_user", "retrying"
-            }),
+            (
+                item
+                for item in runs
+                if item["status"]
+                in {"queued", "running", "waiting_review", "waiting_user", "retrying"}
+            ),
             None,
         )
         if run is None:
@@ -652,8 +658,14 @@ async def write_chapter(project_id: str, chapter_number: int):
 
     return StreamingResponse(
         create_sse_stream(
-            session_store, session_id, graph, initial_state, config,
-            mgr, project_id, chapter_number,
+            session_store,
+            session_id,
+            graph,
+            initial_state,
+            config,
+            mgr,
+            project_id,
+            chapter_number,
         ),
         media_type="text/event-stream",
         headers={
@@ -676,9 +688,12 @@ async def approve_chapter(project_id: str, chapter_number: int):
 
     return StreamingResponse(
         resume_graph(
-            session_store, session_id,
+            session_store,
+            session_id,
             feedback={"action": "approve", "comments": ""},
-            mgr=mgr, project_id=project_id, chapter_number=chapter_number,
+            mgr=mgr,
+            project_id=project_id,
+            chapter_number=chapter_number,
         ),
         media_type="text/event-stream",
         headers={
@@ -701,9 +716,12 @@ async def reject_chapter(project_id: str, chapter_number: int, req: RejectReques
 
     return StreamingResponse(
         resume_graph(
-            session_store, session_id,
+            session_store,
+            session_id,
             feedback={"action": "reject", "comments": req.comments},
-            mgr=mgr, project_id=project_id, chapter_number=chapter_number,
+            mgr=mgr,
+            project_id=project_id,
+            chapter_number=chapter_number,
         ),
         media_type="text/event-stream",
         headers={
@@ -736,7 +754,10 @@ async def save_draft(project_id: str, chapter_number: int, req: SaveDraftRequest
 
 
 def build_export_content(
-    project: dict, chapters: list[dict], outlines: list[dict], fmt: str,
+    project: dict,
+    chapters: list[dict],
+    outlines: list[dict],
+    fmt: str,
 ) -> str:
     """Build formatted export content."""
     title = project.get("title") or project.get("name", "Untitled")
@@ -750,10 +771,7 @@ def build_export_content(
         title_map[o["chapter_number"]] = o.get("title", "")
 
     # Filter to chapters that have content (guard against None)
-    written = [
-        c for c in chapters
-        if (c.get("draft_content") or "").strip()
-    ]
+    written = [c for c in chapters if (c.get("draft_content") or "").strip()]
     total = len(written)
 
     if fmt == "txt":

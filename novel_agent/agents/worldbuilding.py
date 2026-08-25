@@ -130,15 +130,14 @@ class WorldbuildingAgent(BaseAgent):
 
         Returns (extraction_report, trace).
         """
-        existing_json = json.dumps(
-            self._existing_entities, ensure_ascii=False, indent=2
-        )
+        existing_json = json.dumps(self._existing_entities, ensure_ascii=False, indent=2)
 
         # Build existing foreshadowings context
         fs_context = ""
         if self._existing_foreshadowings:
-            open_fs = [f for f in self._existing_foreshadowings
-                       if f.get("status") in ("open", "planted")]
+            open_fs = [
+                f for f in self._existing_foreshadowings if f.get("status") in ("open", "planted")
+            ]
             if open_fs:
                 items = []
                 for f in open_fs:
@@ -177,14 +176,18 @@ class WorldbuildingAgent(BaseAgent):
             action=f"extract_worldbuilding_ch{chapter_number}",
         )
 
-        report = parse_validated("worldbuilding", content, defaults={
-            "new_entities": [],
-            "conflicts": [],
-            "chapter_events": [],
-            "updated_entities": [],
-            "foreshadowings": [],
-            "resolved_foreshadowings": [],
-        })
+        report = parse_validated(
+            "worldbuilding",
+            content,
+            defaults={
+                "new_entities": [],
+                "conflicts": [],
+                "chapter_events": [],
+                "updated_entities": [],
+                "foreshadowings": [],
+                "resolved_foreshadowings": [],
+            },
+        )
         return report, trace
 
     def set_existing_entities(self, entities: list[dict]):

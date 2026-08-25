@@ -32,23 +32,42 @@ class StyleReport(BaseModel):
     dialogue_score: float = Field(ge=0, le=100)
     issues: list[StyleIssue] = Field(default_factory=list)
 
+
 # ── Banned phrases ────────────────────────────────────
 
 BANNED_CONNECTORS = [
-    "此外", "不仅如此", "更重要的是", "总而言之", "综上所述",
-    "基于以上分析", "值得注意的是", "不难发现", "毫无疑问",
-    "由此可见", "换言之", "也就是说",
+    "此外",
+    "不仅如此",
+    "更重要的是",
+    "总而言之",
+    "综上所述",
+    "基于以上分析",
+    "值得注意的是",
+    "不难发现",
+    "毫无疑问",
+    "由此可见",
+    "换言之",
+    "也就是说",
 ]
 
 BANNED_EMPHASIS = [
-    "至关重要", "不可忽视", "深入探讨", "深刻揭示了",
-    "具有重要的现实意义", "必须指出的是",
+    "至关重要",
+    "不可忽视",
+    "深入探讨",
+    "深刻揭示了",
+    "具有重要的现实意义",
+    "必须指出的是",
 ]
 
 BANNED_CLICHES = [
-    "他的眼中闪过一丝", "她的嘴角微微上扬", "他的心中涌起一股",
-    "一种难以言喻的", "心中充满了", "眼中闪过一抹",
-    "嘴角勾起一抹", "内心深处",
+    "他的眼中闪过一丝",
+    "她的嘴角微微上扬",
+    "他的心中涌起一股",
+    "一种难以言喻的",
+    "心中充满了",
+    "眼中闪过一抹",
+    "嘴角勾起一抹",
+    "内心深处",
 ]
 
 BANNED_SENTENCE_PATTERNS = [
@@ -63,6 +82,7 @@ BANNED_SENTENCE_PATTERNS = [
 
 # ── Structural checks ─────────────────────────────────
 
+
 def check_paragraph_lengths(text: str) -> dict:
     """Check for uniform paragraph lengths (AI tendency)."""
     paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
@@ -73,9 +93,7 @@ def check_paragraph_lengths(text: str) -> dict:
     avg_len = sum(lengths) / len(lengths)
     # If more than 60% of paragraphs are within 20% of average length
     variance_threshold = avg_len * 0.2
-    uniform_count = sum(
-        1 for length in lengths if abs(length - avg_len) < variance_threshold
-    )
+    uniform_count = sum(1 for length in lengths if abs(length - avg_len) < variance_threshold)
     ratio = uniform_count / len(lengths)
 
     return {
@@ -83,8 +101,7 @@ def check_paragraph_lengths(text: str) -> dict:
         "uniform_ratio": round(ratio, 2),
         "avg_paragraph_length": round(avg_len, 0),
         "detail": (
-            f"{uniform_count}/{len(paragraphs)} 段落长度接近"
-            if ratio > 0.6 else "段落长度有变化"
+            f"{uniform_count}/{len(paragraphs)} 段落长度接近" if ratio > 0.6 else "段落长度有变化"
         ),
     }
 
@@ -101,7 +118,7 @@ def check_sentence_variety(text: str) -> dict:
     consecutive_same = 0
     max_consecutive = 0
     for i in range(1, len(lengths)):
-        diff_pct = abs(lengths[i] - lengths[i-1]) / max(lengths[i-1], 1)
+        diff_pct = abs(lengths[i] - lengths[i - 1]) / max(lengths[i - 1], 1)
         if diff_pct < 0.15:  # Within 15% length = same
             consecutive_same += 1
             max_consecutive = max(max_consecutive, consecutive_same)
@@ -112,8 +129,7 @@ def check_sentence_variety(text: str) -> dict:
         "uniform_sentences": max_consecutive >= 3,
         "max_consecutive_same_length": max_consecutive,
         "detail": (
-            f"最长连续{max_consecutive}个句子长度相近"
-            if max_consecutive >= 3 else "句子长短有变化"
+            f"最长连续{max_consecutive}个句子长度相近" if max_consecutive >= 3 else "句子长短有变化"
         ),
     }
 
@@ -125,9 +141,7 @@ def check_dialogue_ratio(text: str) -> dict:
         r'["]([^"]*?)["]|[「]([^」]*?)[」]|[『]([^』]*?)[』]',
         text,
     )
-    dialogue_chars = sum(
-        len(m[0] or m[1] or m[2]) for m in dialogue_parts
-    )
+    dialogue_chars = sum(len(m[0] or m[1] or m[2]) for m in dialogue_parts)
     total_chars = len(text)
     ratio = dialogue_chars / total_chars if total_chars > 0 else 0
     return {
@@ -143,8 +157,15 @@ def check_ending(text: str) -> dict:
     last_text = "\n".join(last_paragraphs)
 
     summary_patterns = [
-        "总之", "总而言之", "通过", "这次经历", "这天的经历",
-        "他明白了", "她终于明白", "他学到了", "她意识到",
+        "总之",
+        "总而言之",
+        "通过",
+        "这次经历",
+        "这天的经历",
+        "他明白了",
+        "她终于明白",
+        "他学到了",
+        "她意识到",
     ]
     has_summary_ending = any(p in last_text for p in summary_patterns)
 
@@ -157,14 +178,17 @@ def check_ending(text: str) -> dict:
         "summary_ending": has_summary_ending,
         "has_hook": has_hook,
         "detail": (
-            "结尾总结式（应改为具体动作或悬念）" if has_summary_ending
-            else "结尾有钩子" if has_hook
+            "结尾总结式（应改为具体动作或悬念）"
+            if has_summary_ending
+            else "结尾有钩子"
+            if has_hook
             else "结尾中性，建议增加悬念"
         ),
     }
 
 
 # ── Main detection ────────────────────────────────────
+
 
 def detect_ai_flavor(text: str) -> dict:
     """Run all AI flavor detection rules and return a report."""
@@ -174,34 +198,40 @@ def detect_ai_flavor(text: str) -> dict:
     for phrase in BANNED_CONNECTORS + BANNED_EMPHASIS:
         count = text.count(phrase)
         if count > 0:
-            issues.append({
-                "type": "banned_phrase",
-                "severity": "major",
-                "phrase": phrase,
-                "count": count,
-            })
+            issues.append(
+                {
+                    "type": "banned_phrase",
+                    "severity": "major",
+                    "phrase": phrase,
+                    "count": count,
+                }
+            )
 
     # 2. Clichés
     for phrase in BANNED_CLICHES:
         count = text.count(phrase)
         if count > 0:
-            issues.append({
-                "type": "cliche",
-                "severity": "minor",
-                "phrase": phrase,
-                "count": count,
-            })
+            issues.append(
+                {
+                    "type": "cliche",
+                    "severity": "minor",
+                    "phrase": phrase,
+                    "count": count,
+                }
+            )
 
     # 3. Sentence patterns
     for pattern, label in BANNED_SENTENCE_PATTERNS:
         matches = re.findall(pattern, text)
         if matches:
-            issues.append({
-                "type": "sentence_pattern",
-                "severity": "minor",
-                "pattern": label,
-                "count": len(matches),
-            })
+            issues.append(
+                {
+                    "type": "sentence_pattern",
+                    "severity": "minor",
+                    "pattern": label,
+                    "count": len(matches),
+                }
+            )
 
     # 4. Structural checks
     para_check = check_paragraph_lengths(text)

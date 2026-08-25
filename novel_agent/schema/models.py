@@ -90,6 +90,7 @@ class AIFlavorReport(BaseModel):
 
 class EditorDimensions(BaseModel):
     """Per-dimension scores matching Editor system prompt output."""
+
     rhythm: int = 0
     ai_flavor: int = 0
     dialogue: int = 0

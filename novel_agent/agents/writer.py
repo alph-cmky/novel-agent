@@ -96,11 +96,7 @@ class WriterAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        prompt = (
-            WRITER_SYSTEM_PROMPT_V2
-            if self._prompt_profile == "v2"
-            else WRITER_SYSTEM_PROMPT
-        )
+        prompt = WRITER_SYSTEM_PROMPT_V2 if self._prompt_profile == "v2" else WRITER_SYSTEM_PROMPT
         if self._target_words:
             prompt = prompt.replace(
                 "每章2000-4000字",
@@ -278,9 +274,12 @@ class WriterAgent(BaseAgent):
         analysis = strategy.get("stage_analysis", "")
         if stage or analysis:
             stage_label = {
-                "intro": "开篇", "development": "发展",
-                "climax": "高潮", "resolution": "收尾",
-                "unit_arc": "单元剧", "mini_climax": "小高潮",
+                "intro": "开篇",
+                "development": "发展",
+                "climax": "高潮",
+                "resolution": "收尾",
+                "unit_arc": "单元剧",
+                "mini_climax": "小高潮",
                 "transition": "过渡",
             }.get(stage, stage)
             lines = ["## 叙事策略（主编指导）"]
@@ -354,9 +353,7 @@ class WriterAgent(BaseAgent):
 
         # Suggested chapter words (fixes 改进点10)
         if cs.get("suggested_chapter_words"):
-            lines.append(
-                f"### 建议字数: {cs['suggested_chapter_words']}字"
-            )
+            lines.append(f"### 建议字数: {cs['suggested_chapter_words']}字")
             has_content = True
 
         return "\n".join(lines) if has_content else ""
@@ -388,9 +385,7 @@ class WriterAgent(BaseAgent):
             )
             lines.append(f"  主线推进：{ua.get('mainline_progress', '?')}")
             if ua.get("carry_over_elements"):
-                lines.append(
-                    f"  跨单元线索：{'；'.join(ua.get('carry_over_elements', []))}"
-                )
+                lines.append(f"  跨单元线索：{'；'.join(ua.get('carry_over_elements', []))}")
             has_content = True
 
         # pov_config: only multi_perspective / ensemble mode
@@ -398,8 +393,7 @@ class WriterAgent(BaseAgent):
             persp = cs["pov_config"]
             if persp.get("current_pov"):
                 lines.append(
-                    f"- 当前POV：{persp['current_pov']}"
-                    f"（{persp.get('access_level', 'deep')}）"
+                    f"- 当前POV：{persp['current_pov']}（{persp.get('access_level', 'deep')}）"
                 )
             if persp.get("knowledge_gap"):
                 lines.append(f"- 视角信息差：{persp['knowledge_gap']}")
@@ -409,8 +403,7 @@ class WriterAgent(BaseAgent):
         ts = cs.get("time_structure") or {}
         if ts.get("mode") and ts["mode"] != "linear":
             lines.append(
-                f"- 时间结构：{ts['mode']}，"
-                f"当前时间线：{ts.get('current_timeline', 'present')}"
+                f"- 时间结构：{ts['mode']}，当前时间线：{ts.get('current_timeline', 'present')}"
             )
             if ts.get("flashback_trigger"):
                 lines.append(f"  倒叙触发：{ts['flashback_trigger']}")
@@ -420,17 +413,14 @@ class WriterAgent(BaseAgent):
         if cs.get("stage_boundary", {}).get("is_boundary"):
             sb = cs["stage_boundary"]
             lines.append(f"- 阶段边界：{sb.get('boundary_type', '?')}")
-            lines.append(
-                f"  前阶段持续了{sb.get('previous_stage_duration', '?')}章"
-            )
+            lines.append(f"  前阶段持续了{sb.get('previous_stage_duration', '?')}章")
             has_content = True
 
         # ending_tone: near resolution / ending
         if cs.get("ending_tone"):
             et = cs["ending_tone"]
             lines.append(
-                f"- 结尾风格：{et.get('type', '?')}"
-                f"（歧义度:{et.get('ambiguity_level', 'medium')}）"
+                f"- 结尾风格：{et.get('type', '?')}（歧义度:{et.get('ambiguity_level', 'medium')}）"
             )
             has_content = True
 
@@ -467,9 +457,7 @@ class WriterAgent(BaseAgent):
         # Scene composition
         if cs.get("scene_composition"):
             sc = cs["scene_composition"]
-            lines.append(
-                f"- 建议主类型：{sc.get('primary_scene_type', '?')}"
-            )
+            lines.append(f"- 建议主类型：{sc.get('primary_scene_type', '?')}")
             if sc.get("diversity_warning"):
                 lines.append(f"- 多样性提醒：{sc['diversity_warning']}")
             has_content = True
@@ -489,10 +477,7 @@ class WriterAgent(BaseAgent):
         if cs.get("character_arcs"):
             lines.append("- 角色弧线：")
             for arc in cs["character_arcs"]:
-                lines.append(
-                    f"  {arc.get('character_name', '?')}: "
-                    f"{arc.get('current_state', '')}"
-                )
+                lines.append(f"  {arc.get('character_name', '?')}: {arc.get('current_state', '')}")
             has_content = True
 
         # Foreshadowing management (only high-risk items)

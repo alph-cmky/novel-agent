@@ -5,7 +5,11 @@ class ChapterRunService:
     """Keep Run/Version lifecycle operations out of transport adapters."""
 
     ACTIVE_STATUSES = {
-        "queued", "running", "waiting_review", "waiting_user", "retrying",
+        "queued",
+        "running",
+        "waiting_review",
+        "waiting_user",
+        "retrying",
     }
 
     def __init__(self, manager):
@@ -21,8 +25,11 @@ class ChapterRunService:
         if run["status"] not in self.ACTIVE_STATUSES:
             raise ValueError("Run is not active")
         version = self.manager.create_chapter_version(
-            run["project_id"], run["chapter_number"], content,
-            run_id=run_id, **kwargs,
+            run["project_id"],
+            run["chapter_number"],
+            content,
+            run_id=run_id,
+            **kwargs,
         )
         self.manager.transition_writing_run(
             run_id,

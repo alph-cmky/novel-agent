@@ -36,9 +36,7 @@ def test_story_checker_detects_missing_scene_and_required_fact():
 def test_story_checker_flags_explicit_canon_conflict_only():
     result = QualityService.check_story_integrity(
         "北墙由黑曜石砌成，青石已经开裂。",
-        canon_conflicts=[
-            {"severity": "critical", "keywords": ["黑曜石", "青石"]}
-        ],
+        canon_conflicts=[{"severity": "critical", "keywords": ["黑曜石", "青石"]}],
     )
 
     assert result["passed"] is False

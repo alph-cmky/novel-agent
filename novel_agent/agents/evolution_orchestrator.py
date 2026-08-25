@@ -86,9 +86,7 @@ class EvolutionOrchestratorAgent(BaseAgent):
         # Build context for the LLM
         dims = current_scores.get("dimensions", {})
         dim_keys = ["rhythm", "ai_flavor", "dialogue", "logic", "writing"]
-        dim_summary = ", ".join(
-            f"{self._dim_label(d)}:{dims.get(d, 0)}" for d in dim_keys
-        )
+        dim_summary = ", ".join(f"{self._dim_label(d)}:{dims.get(d, 0)}" for d in dim_keys)
         editor_score = current_scores.get("editor_overall", 0)
         continuity_score = current_scores.get("continuity_overall", 0)
 

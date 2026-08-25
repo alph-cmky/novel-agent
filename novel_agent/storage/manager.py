@@ -64,24 +64,29 @@ class ProjectManager:
                 "target_chapter_words, world_setting, outline, narrative_mode, "
                 "narrative_perspective) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (project_id, name, title or name, genre, story_length,
-                 target_chapter_words, world_setting, outline,
-                 narrative_mode, narrative_perspective),
+                (
+                    project_id,
+                    name,
+                    title or name,
+                    genre,
+                    story_length,
+                    target_chapter_words,
+                    world_setting,
+                    outline,
+                    narrative_mode,
+                    narrative_perspective,
+                ),
             )
         return project_id
 
     def get_project(self, project_id: str) -> dict | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM projects WHERE id = ?", (project_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         return dict(row) if row else None
 
     def list_projects(self) -> list[dict]:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM projects ORDER BY updated_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
         return [dict(r) for r in rows]
 
     def get_or_create_default_project(self) -> str:
@@ -125,8 +130,18 @@ class ProjectManager:
                    evolution_summary = excluded.evolution_summary,
                    updated_at = datetime('now')
                    RETURNING id""",
-                (chapter_id, project_id, chapter_number, outline, draft_content, status,
-                 editor_report, continuity_report, version, evolution_summary),
+                (
+                    chapter_id,
+                    project_id,
+                    chapter_number,
+                    outline,
+                    draft_content,
+                    status,
+                    editor_report,
+                    continuity_report,
+                    version,
+                    evolution_summary,
+                ),
             ).fetchone()
             chapter_id = row["id"] if row else chapter_id
 
@@ -153,19 +168,25 @@ class ProjectManager:
 
     def update_project(self, project_id: str, **fields) -> None:
         """Update project fields. Only whitelisted fields are accepted."""
-        allowed = {"name", "title", "genre", "story_length",
-                   "target_chapter_words", "world_setting", "outline",
-                   "narrative_mode", "narrative_perspective"}
-        updates = {k: v for k, v in fields.items()
-                   if k in allowed and v is not None}
+        allowed = {
+            "name",
+            "title",
+            "genre",
+            "story_length",
+            "target_chapter_words",
+            "world_setting",
+            "outline",
+            "narrative_mode",
+            "narrative_perspective",
+        }
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return
         with self._conn() as conn:
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [project_id]
             conn.execute(
-                f"UPDATE projects SET {set_clause}, "
-                "updated_at = datetime('now') WHERE id = ?",
+                f"UPDATE projects SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
                 values,
             )
 
@@ -188,22 +209,34 @@ class ProjectManager:
             (project_id,),
         ).fetchall()
         payload = {
-            "entities": [dict(row) for row in conn.execute(
-                "SELECT * FROM world_entities WHERE project_id = ? ORDER BY id",
-                (project_id,),
-            ).fetchall()],
-            "relations": [dict(row) for row in conn.execute(
-                "SELECT * FROM world_relations WHERE project_id = ? ORDER BY id",
-                (project_id,),
-            ).fetchall()],
-            "foreshadowings": [dict(row) for row in conn.execute(
-                "SELECT * FROM foreshadowings WHERE project_id = ? ORDER BY id",
-                (project_id,),
-            ).fetchall()],
-            "story_events": [dict(row) for row in conn.execute(
-                "SELECT * FROM story_events WHERE project_id = ? ORDER BY chapter_number, id",
-                (project_id,),
-            ).fetchall()],
+            "entities": [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM world_entities WHERE project_id = ? ORDER BY id",
+                    (project_id,),
+                ).fetchall()
+            ],
+            "relations": [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM world_relations WHERE project_id = ? ORDER BY id",
+                    (project_id,),
+                ).fetchall()
+            ],
+            "foreshadowings": [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM foreshadowings WHERE project_id = ? ORDER BY id",
+                    (project_id,),
+                ).fetchall()
+            ],
+            "story_events": [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM story_events WHERE project_id = ? ORDER BY chapter_number, id",
+                    (project_id,),
+                ).fetchall()
+            ],
             "chapters": [dict(row) for row in chapters],
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -261,17 +294,14 @@ class ProjectManager:
 
     def get_writing_run(self, run_id: str) -> dict | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM writing_runs WHERE id = ?", (run_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM writing_runs WHERE id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
     def list_writing_runs(self, project_id: str, chapter_number: int | None = None) -> list[dict]:
         with self._conn() as conn:
             if chapter_number is None:
                 rows = conn.execute(
-                    "SELECT * FROM writing_runs WHERE project_id = ? "
-                    "ORDER BY created_at DESC",
+                    "SELECT * FROM writing_runs WHERE project_id = ? ORDER BY created_at DESC",
                     (project_id,),
                 ).fetchall()
             else:
@@ -284,9 +314,16 @@ class ProjectManager:
 
     def update_writing_run(self, run_id: str, **fields) -> None:
         allowed = {
-            "status", "current_node", "current_version_id", "retry_count",
-            "lease_owner", "lease_expires_at", "error_code", "error_message",
-            "started_at", "finished_at",
+            "status",
+            "current_node",
+            "current_version_id",
+            "retry_count",
+            "lease_owner",
+            "lease_expires_at",
+            "error_code",
+            "error_message",
+            "started_at",
+            "finished_at",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         if not updates:
@@ -302,41 +339,54 @@ class ProjectManager:
         """Apply one whitelisted lifecycle transition atomically."""
         transitions = {
             RunStatus.QUEUED.value: {
-                RunStatus.RUNNING.value, RunStatus.CANCELLED.value,
-                RunStatus.EXPIRED.value, RunStatus.WAITING_REVIEW.value,
+                RunStatus.RUNNING.value,
+                RunStatus.CANCELLED.value,
+                RunStatus.EXPIRED.value,
+                RunStatus.WAITING_REVIEW.value,
             },
             RunStatus.RUNNING.value: {
-                RunStatus.WAITING_REVIEW.value, RunStatus.WAITING_USER.value,
-                RunStatus.FAILED.value, RunStatus.CANCELLED.value,
+                RunStatus.WAITING_REVIEW.value,
+                RunStatus.WAITING_USER.value,
+                RunStatus.FAILED.value,
+                RunStatus.CANCELLED.value,
                 RunStatus.EXPIRED.value,
             },
             RunStatus.WAITING_REVIEW.value: {
-                RunStatus.SUCCEEDED.value, RunStatus.RETRYING.value,
+                RunStatus.SUCCEEDED.value,
+                RunStatus.RETRYING.value,
                 RunStatus.CANCELLED.value,
             },
             RunStatus.WAITING_USER.value: {
-                RunStatus.RUNNING.value, RunStatus.RETRYING.value,
+                RunStatus.RUNNING.value,
+                RunStatus.RETRYING.value,
                 RunStatus.CANCELLED.value,
             },
             RunStatus.RETRYING.value: {
-                RunStatus.QUEUED.value, RunStatus.RUNNING.value,
-                RunStatus.FAILED.value, RunStatus.CANCELLED.value,
+                RunStatus.QUEUED.value,
+                RunStatus.RUNNING.value,
+                RunStatus.FAILED.value,
+                RunStatus.CANCELLED.value,
             },
             RunStatus.FAILED.value: {
-                RunStatus.RETRYING.value, RunStatus.CANCELLED.value,
+                RunStatus.RETRYING.value,
+                RunStatus.CANCELLED.value,
             },
         }
         allowed = {
-            "current_node", "current_version_id", "retry_count",
-            "lease_owner", "lease_expires_at", "error_code", "error_message",
-            "started_at", "finished_at",
+            "current_node",
+            "current_version_id",
+            "retry_count",
+            "lease_owner",
+            "lease_expires_at",
+            "error_code",
+            "error_message",
+            "started_at",
+            "finished_at",
         }
         updates = {key: value for key, value in fields.items() if key in allowed}
         updates["status"] = new_status
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT status FROM writing_runs WHERE id = ?", (run_id,)
-            ).fetchone()
+            row = conn.execute("SELECT status FROM writing_runs WHERE id = ?", (run_id,)).fetchone()
             if not row:
                 raise ValueError("Run not found")
             old_status = row["status"]
@@ -369,17 +419,15 @@ class ProjectManager:
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         scene_manifest = []
         for index, draft in enumerate(scene_drafts or [], start=1):
-            plan = (
-                (scene_plan or [])[index - 1]
-                if scene_plan and index <= len(scene_plan)
-                else {}
+            plan = (scene_plan or [])[index - 1] if scene_plan and index <= len(scene_plan) else {}
+            scene_manifest.append(
+                {
+                    "scene_index": plan.get("scene_index", index),
+                    "outline": plan.get("outline", ""),
+                    "target_words": plan.get("target_words", 0),
+                    "content": draft,
+                }
             )
-            scene_manifest.append({
-                "scene_index": plan.get("scene_index", index),
-                "outline": plan.get("outline", ""),
-                "target_words": plan.get("target_words", 0),
-                "content": draft,
-            })
         with self._conn() as conn:
             if parent_version_id is None:
                 parent = conn.execute(
@@ -532,8 +580,7 @@ class ProjectManager:
                     (RunStatus.SUCCEEDED.value, version_id, version["run_id"]),
                 )
             conn.execute(
-                "UPDATE outlines SET status = ? WHERE project_id = ? "
-                "AND chapter_number = ?",
+                "UPDATE outlines SET status = ? WHERE project_id = ? AND chapter_number = ?",
                 (
                     OutlineStatus.APPROVED.value,
                     version["project_id"],
@@ -597,9 +644,14 @@ class ProjectManager:
             "version = excluded.version, current_version_id = excluded.current_version_id, "
             "approved_version_id = excluded.approved_version_id, updated_at = datetime('now')",
             (
-                str(uuid.uuid4())[:8], version["project_id"], version["chapter_number"],
-                version["content"], ChapterStatus.APPROVED.value,
-                version["version_number"], version["id"], version["id"],
+                str(uuid.uuid4())[:8],
+                version["project_id"],
+                version["chapter_number"],
+                version["content"],
+                ChapterStatus.APPROVED.value,
+                version["version_number"],
+                version["id"],
+                version["id"],
             ),
         )
         conn.execute(
@@ -625,8 +677,12 @@ class ProjectManager:
             "(id, project_id, aggregate_type, aggregate_id, event_type, payload) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (
-                str(uuid.uuid4()), version["project_id"], "chapter_version", version["id"],
-                "chapter_committed", json.dumps(
+                str(uuid.uuid4()),
+                version["project_id"],
+                "chapter_version",
+                version["id"],
+                "chapter_committed",
+                json.dumps(
                     {"version_id": version["id"], "chapter_number": version["chapter_number"]},
                     ensure_ascii=False,
                 ),
@@ -639,9 +695,7 @@ class ProjectManager:
         import json
 
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM outbox_events WHERE id = ?", (event_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM outbox_events WHERE id = ?", (event_id,)).fetchone()
         if not row:
             return None
         result = dict(row)
@@ -895,8 +949,7 @@ class ProjectManager:
         """Apply accepted proposals atomically to the Canon projection."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM canon_proposals WHERE run_id = ? AND status = ? "
-                "ORDER BY created_at",
+                "SELECT * FROM canon_proposals WHERE run_id = ? AND status = ? ORDER BY created_at",
                 (run_id, ProposalStatus.ACCEPTED.value),
             ).fetchall()
             for row in rows:
@@ -923,8 +976,7 @@ class ProjectManager:
 
     def _commit_canon_proposals_in_conn(self, conn, run_id: str) -> None:
         rows = conn.execute(
-            "SELECT * FROM canon_proposals WHERE run_id = ? AND status = ? "
-            "ORDER BY created_at",
+            "SELECT * FROM canon_proposals WHERE run_id = ? AND status = ? ORDER BY created_at",
             (run_id, ProposalStatus.ACCEPTED.value),
         ).fetchall()
         for row in rows:
@@ -961,7 +1013,11 @@ class ProjectManager:
             )
 
     def _apply_worldbuilding_proposal_in_conn(
-        self, conn, project_id: str, chapter_number: int, report: dict,
+        self,
+        conn,
+        project_id: str,
+        chapter_number: int,
+        report: dict,
         source_version_id: str | None = None,
     ) -> None:
         for event in report.get("chapter_events", []) or []:
@@ -977,14 +1033,18 @@ class ProjectManager:
                     "object_value, location, story_time, causality, evidence, source_version_id) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        str(uuid.uuid4()), project_id, chapter_number,
+                        str(uuid.uuid4()),
+                        project_id,
+                        chapter_number,
                         str(event.get("event_type", "chapter_event")),
-                        str(event.get("subject", "")), action,
+                        str(event.get("subject", "")),
+                        action,
                         str(event.get("object", event.get("object_value", ""))),
                         str(event.get("location", "")),
                         str(event.get("time", event.get("story_time", ""))),
                         str(event.get("causality", "")),
-                        str(event.get("evidence", "")), source_version_id,
+                        str(event.get("evidence", "")),
+                        source_version_id,
                     ),
                 )
 
@@ -1003,14 +1063,12 @@ class ProjectManager:
             query = (
                 "SELECT id, properties, first_appearance_chapter FROM world_entities "
                 "WHERE project_id = ? AND name = ? ORDER BY id LIMIT 1"
-                if entity_type == "unknown" else
-                "SELECT id, properties, first_appearance_chapter FROM world_entities "
+                if entity_type == "unknown"
+                else "SELECT id, properties, first_appearance_chapter FROM world_entities "
                 "WHERE project_id = ? AND entity_type = ? AND name = ?"
             )
             params = (
-                (project_id, name)
-                if entity_type == "unknown"
-                else (project_id, entity_type, name)
+                (project_id, name) if entity_type == "unknown" else (project_id, entity_type, name)
             )
             existing = conn.execute(query, params).fetchone()
             if existing:
@@ -1030,7 +1088,10 @@ class ProjectManager:
                     "(id, project_id, entity_type, name, properties, first_appearance_chapter) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (
-                        str(uuid.uuid4())[:8], project_id, entity_type, name,
+                        str(uuid.uuid4())[:8],
+                        project_id,
+                        entity_type,
+                        name,
                         json.dumps(incoming, ensure_ascii=False),
                         entity.get("first_appearance_chapter") or chapter_number,
                     ),
@@ -1046,8 +1107,11 @@ class ProjectManager:
                         "(id, project_id, source, target, relation_type, first_appearance_chapter) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (
-                            str(uuid.uuid4())[:8], project_id, entity["name"],
-                            relation["target"], relation.get("relation", "related_to"),
+                            str(uuid.uuid4())[:8],
+                            project_id,
+                            entity["name"],
+                            relation["target"],
+                            relation.get("relation", "related_to"),
                             chapter_number,
                         ),
                     )
@@ -1058,10 +1122,13 @@ class ProjectManager:
             description = str(item["description"])
             planted = int(item.get("planted_chapter", chapter_number))
             values = (
-                "open", item.get("expected_resolve_chapter"),
+                "open",
+                item.get("expected_resolve_chapter"),
                 str(item.get("risk_level", "medium")),
                 str(item.get("action_needed", "maintain")),
-                project_id, description, planted,
+                project_id,
+                description,
+                planted,
             )
             updated = conn.execute(
                 "UPDATE foreshadowings SET status = ?, expected_resolve_chapter = ?, "
@@ -1075,8 +1142,12 @@ class ProjectManager:
                     "(id, project_id, description, planted_chapter, expected_resolve_chapter, "
                     "status, risk_level, action_needed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        str(uuid.uuid4())[:8], project_id, description, planted,
-                        item.get("expected_resolve_chapter"), "open",
+                        str(uuid.uuid4())[:8],
+                        project_id,
+                        description,
+                        planted,
+                        item.get("expected_resolve_chapter"),
+                        "open",
                         str(item.get("risk_level", "medium")),
                         str(item.get("action_needed", "maintain")),
                     ),
@@ -1164,8 +1235,7 @@ class ProjectManager:
                     (ChapterStatus.FAILED.value, project_id, chapter_number),
                 )
                 conn.execute(
-                    "UPDATE outlines SET status = ? WHERE project_id = ? "
-                    "AND chapter_number = ?",
+                    "UPDATE outlines SET status = ? WHERE project_id = ? AND chapter_number = ?",
                     (OutlineStatus.FAILED.value, project_id, chapter_number),
                 )
             return
@@ -1228,7 +1298,8 @@ class ProjectManager:
             if draft:
                 recent_summary_parts.append(
                     f"第{c['chapter_number']}章: {draft[:300]}..."
-                    if len(draft) > 300 else f"第{c['chapter_number']}章: {draft}"
+                    if len(draft) > 300
+                    else f"第{c['chapter_number']}章: {draft}"
                 )
         recent_summary = "\n\n".join(recent_summary_parts) if recent_summary_parts else ""
 
@@ -1243,14 +1314,15 @@ class ProjectManager:
                 (project_id,),
             ).fetchall()
 
-        character_context = "\n".join(
-            f"- {c['name']}: {c['properties']}" for c in chars
-        ) if chars else ""
+        character_context = (
+            "\n".join(f"- {c['name']}: {c['properties']}" for c in chars) if chars else ""
+        )
 
-        world_context = "\n".join(
-            f"- [{e['entity_type']}] {e['name']}: {e['properties']}"
-            for e in world_ents
-        ) if world_ents else ""
+        world_context = (
+            "\n".join(f"- [{e['entity_type']}] {e['name']}: {e['properties']}" for e in world_ents)
+            if world_ents
+            else ""
+        )
 
         return {
             "recent_summary": recent_summary,
@@ -1264,7 +1336,8 @@ class ProjectManager:
         """Build context only from the immutable Canon snapshot payload."""
         payload = snapshot.get("payload", snapshot)
         chapters = [
-            chapter for chapter in payload.get("chapters", [])
+            chapter
+            for chapter in payload.get("chapters", [])
             if chapter.get("chapter_number", 0) < chapter_number
         ]
         recent_parts = []
@@ -1273,14 +1346,17 @@ class ProjectManager:
             if draft:
                 recent_parts.append(
                     f"第{chapter['chapter_number']}章: {draft[:300]}..."
-                    if len(draft) > 300 else f"第{chapter['chapter_number']}章: {draft}"
+                    if len(draft) > 300
+                    else f"第{chapter['chapter_number']}章: {draft}"
                 )
         characters = [
-            entity for entity in payload.get("entities", [])
+            entity
+            for entity in payload.get("entities", [])
             if entity.get("entity_type") == "character"
         ]
         world_entities = [
-            entity for entity in payload.get("entities", [])
+            entity
+            for entity in payload.get("entities", [])
             if entity.get("entity_type") != "character"
         ]
         return {
@@ -1365,8 +1441,14 @@ class ProjectManager:
                         "INSERT INTO world_entities "
                         "(id, project_id, entity_type, name, properties, first_appearance_chapter) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
-                        (str(uuid.uuid4())[:8], project_id, entity_type, name,
-                         json.dumps(incoming, ensure_ascii=False), chapter),
+                        (
+                            str(uuid.uuid4())[:8],
+                            project_id,
+                            entity_type,
+                            name,
+                            json.dumps(incoming, ensure_ascii=False),
+                            chapter,
+                        ),
                     )
                 saved += 1
 
@@ -1403,8 +1485,14 @@ class ProjectManager:
                         "INSERT OR IGNORE INTO world_relations "
                         "(id, project_id, source, target, relation_type, first_appearance_chapter) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
-                        (str(uuid.uuid4())[:8], project_id, source, target,
-                         rel.get("relation", "related_to"), chapter_number),
+                        (
+                            str(uuid.uuid4())[:8],
+                            project_id,
+                            source,
+                            target,
+                            rel.get("relation", "related_to"),
+                            chapter_number,
+                        ),
                     )
                     saved += cur.rowcount
 
@@ -1423,6 +1511,7 @@ class ProjectManager:
     def backfill_world_relations(self, project_id: str) -> int:
         """Backfill edges from existing chapters' worldbuilding_report (idempotent)."""
         import json
+
         chapters = self.get_chapter_worldbuilding(project_id)
         total = 0
         for ch in chapters:
@@ -1430,9 +1519,7 @@ class ProjectManager:
                 wb = json.loads(ch.get("worldbuilding_report", "{}") or "{}")
             except (json.JSONDecodeError, TypeError):
                 wb = {}
-            total += self.save_world_relations(
-                project_id, ch["chapter_number"], wb
-            )
+            total += self.save_world_relations(project_id, ch["chapter_number"], wb)
         return total
 
     # ── Outline ───────────────────────────────────────
@@ -1505,19 +1592,27 @@ class ProjectManager:
         """Record a new foreshadowing. Returns foreshadowing_id."""
         import json as _json
         import uuid as _uuid
+
         fid = str(_uuid.uuid4())[:8]
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO foreshadowings "
                 "(id, project_id, description, planted_chapter, "
-                 "expected_resolve_chapter, status, risk_level, action_needed, reader_knows, "
-                 "characters_aware, characters_unaware) "
-                 "VALUES (?, ?, ?, ?, ?, 'planted', ?, ?, ?, ?, ?)",
-                 (fid, project_id, description, planted_chapter,
-                  expected_resolve_chapter, risk_level, action_needed,
-                 1 if reader_knows else 0,
-                 _json.dumps(characters_aware or [], ensure_ascii=False),
-                 _json.dumps(characters_unaware or [], ensure_ascii=False)),
+                "expected_resolve_chapter, status, risk_level, action_needed, reader_knows, "
+                "characters_aware, characters_unaware) "
+                "VALUES (?, ?, ?, ?, ?, 'planted', ?, ?, ?, ?, ?)",
+                (
+                    fid,
+                    project_id,
+                    description,
+                    planted_chapter,
+                    expected_resolve_chapter,
+                    risk_level,
+                    action_needed,
+                    1 if reader_knows else 0,
+                    _json.dumps(characters_aware or [], ensure_ascii=False),
+                    _json.dumps(characters_unaware or [], ensure_ascii=False),
+                ),
             )
         return fid
 
@@ -1529,13 +1624,21 @@ class ProjectManager:
         **kwargs,
     ) -> bool:
         """Update foreshadowing lifecycle fields (risk_level, action_needed, etc.)."""
-        allowed = {"risk_level", "action_needed", "status", "reader_knows",
-                    "characters_aware", "characters_unaware",
-                    "resolved_chapter", "expected_resolve_chapter"}
+        allowed = {
+            "risk_level",
+            "action_needed",
+            "status",
+            "reader_knows",
+            "characters_aware",
+            "characters_unaware",
+            "resolved_chapter",
+            "expected_resolve_chapter",
+        }
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return False
         import json as _json
+
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values())
         # JSON-serialize list fields
@@ -1549,8 +1652,7 @@ class ProjectManager:
             where += " AND planted_chapter = ?"
         with self._conn() as conn:
             cur = conn.execute(
-                f"UPDATE foreshadowings SET {set_clause} "
-                f"WHERE {where}",
+                f"UPDATE foreshadowings SET {set_clause} WHERE {where}",
                 values,
             )
             updated = cur.rowcount > 0
@@ -1559,8 +1661,8 @@ class ProjectManager:
     def get_foreshadowings(self, project_id: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM foreshadowings WHERE project_id = ? "
-                "ORDER BY planted_chapter", (project_id,)
+                "SELECT * FROM foreshadowings WHERE project_id = ? ORDER BY planted_chapter",
+                (project_id,),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1595,6 +1697,7 @@ class ProjectManager:
         self, project_id: str, chapter_number: int, report: dict
     ) -> None:
         import json
+
         with self._conn() as conn:
             conn.execute(
                 """UPDATE chapters SET worldbuilding_report = ?
@@ -1608,6 +1711,7 @@ class ProjectManager:
         if not checkpoints_db.exists():
             return
         import sqlite3 as _sqlite3
+
         pattern = f"{thread_id}%" if prefix else thread_id
         op = "LIKE" if prefix else "="
         conn = _sqlite3.connect(str(checkpoints_db))
