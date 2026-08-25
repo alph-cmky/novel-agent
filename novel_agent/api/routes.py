@@ -650,7 +650,7 @@ async def write_chapter(project_id: str, chapter_number: int):
         "unresolved_foreshadowings": ctx.get("unresolved_foreshadowings", []),
         "context_packet_hash": ctx.get("context_packet_hash", ""),
         "context_packet": ctx.get("context_packet", {}),
-        "scene_first": True,
+        "scene_first": False,
         "existing_world_entities": mgr.get_all_world_entities(project_id),
         "persist_dir": persist_dir,
         "retry_count": 0,

@@ -263,6 +263,57 @@ class WriterAgent(BaseAgent):
         ):
             yield chunk
 
+    async def narrative_extension(
+        self,
+        *,
+        current_content: str,
+        chapter_number: int,
+        chapter_outline: str,
+        character_context: str = "",
+        gap_words: int = 500,
+        unresolved_foreshadowings: list[str] | None = None,
+    ) -> str:
+        """Generate incremental content to extend a short chapter.
+
+        Only produces the continuation — caller appends to existing content.
+        Uses minimal context (ending + outline + character state), not full
+        chapter context.
+        """
+        ending = current_content[-800:] if len(current_content) > 800 else current_content
+
+        context_parts = [
+            f"## 本章大纲\n{chapter_outline}",
+            f"## 当前正文结尾\n{ending}",
+            f"## 需要续写约 {gap_words} 字",
+        ]
+        if character_context:
+            context_parts.append(f"## 当前角色\n{character_context}")
+        if unresolved_foreshadowings:
+            context_parts.append(
+                "## 待回收伏笔\n" + "\n".join(f"- {item}" for item in unresolved_foreshadowings[:5])
+            )
+
+        user_prompt = (
+            "上面的正文尚未完成本章目标。请从当前结尾处自然续写，继续推进剧情。\n"
+            "续写要求：\n"
+            "- 从当前故事的最后状态自然向前发展，不要回头重写已有内容。\n"
+            "- 优先发展：当前事件的自然后果 → 人物反应 → 新信息/新发现 → 新决策 → 下一 Beat。\n"
+            "- 不要重复已有的环境描写、神态描写或对白。\n"
+            "- 不要总结或解释，直接输出续写正文。\n\n" + "\n\n".join(context_parts)
+        )
+
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        content, _ = await self.run_with_tools(
+            messages,
+            max_rounds=1,
+            action=f"extend_ch{chapter_number}",
+        )
+        return content
+
     def _format_strategy(self, strategy: dict) -> str:
         """Format orchestrator strategy dict into a three-tier prompt section.
 

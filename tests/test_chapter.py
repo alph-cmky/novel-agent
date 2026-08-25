@@ -213,3 +213,129 @@ class TestWriterPromptProfileInGraph:
             "writer_prompt_profile": "v1",
         }
         assert self._run_writer_node(state) == "v1"
+
+
+class TestNarrativeExtension:
+    """Phase 1: writer_node 用 Narrative Extension 替换 compensation。
+
+    回归测试：
+    - actual < target → 触发 narrative_extension（不再调 write 全文重写）
+    - extension 是 append，不是 replace
+    - actual >= target → 不触发 extension
+    - extension 后仍不足 → quality_gate_report['extension_failed'] = True
+    - QualityService 最低门槛从 0.85 改为 0.5
+    """
+
+    @staticmethod
+    def _run_writer_with_mocks(
+        write_content: str = "正" * 3000,
+        extension_content: str = "",
+        target_words: int = 3000,
+    ) -> dict:
+        """Run writer_node with mocked WriterAgent, return result dict."""
+        mock_writer = MagicMock()
+        mock_writer.write = AsyncMock(
+            return_value=(write_content, MagicMock(input_tokens=10, output_tokens=20))
+        )
+        mock_writer.write_stream = MagicMock()
+        mock_writer.narrative_extension = AsyncMock(return_value=extension_content)
+        mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": target_words,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+        }
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter._get_chapter_store"),
+            patch("novel_agent.graph.chapter.WriterAgent", return_value=mock_writer),
+        ):
+            result = asyncio.run(writer_node(state, None))
+        return result
+
+    def test_short_content_triggers_extension(self):
+        """actual < target → 调用 narrative_extension。"""
+        result = self._run_writer_with_mocks(
+            write_content="短" * 1500,
+            extension_content="续" * 1500,
+            target_words=3000,
+        )
+        assert "续" * 1500 in result["draft_content"]
+        assert "短" * 1500 in result["draft_content"]
+
+    def test_extension_appends_not_replaces(self):
+        """Extension 是 append，原始内容保留。"""
+        result = self._run_writer_with_mocks(
+            write_content="原始内容",
+            extension_content="续写内容",
+            target_words=3000,
+        )
+        assert "原始内容" in result["draft_content"]
+        assert "续写内容" in result["draft_content"]
+
+    def test_target_length_no_extension(self):
+        """actual >= target → 不触发 extension。"""
+        mock_writer = MagicMock()
+        mock_writer.write = AsyncMock(
+            return_value=("正" * 3000, MagicMock(input_tokens=10, output_tokens=20))
+        )
+        mock_writer.narrative_extension = AsyncMock(return_value="不该出现")
+        mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": 3000,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+        }
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter._get_chapter_store"),
+            patch("novel_agent.graph.chapter.WriterAgent", return_value=mock_writer),
+        ):
+            result = asyncio.run(writer_node(state, None))
+        mock_writer.narrative_extension.assert_not_called()
+        assert "不该出现" not in result["draft_content"]
+
+    def test_extension_still_short_sets_failed(self):
+        """Extension 后仍不足 → extension_failed = True。"""
+        result = self._run_writer_with_mocks(
+            write_content="短" * 1000,
+            extension_content="续" * 500,
+            target_words=3000,
+        )
+        assert result["quality_gate_report"].get("extension_failed") is True
+
+    def test_extension_success_no_failed_flag(self):
+        """Extension 后达标 → 不设 extension_failed。"""
+        result = self._run_writer_with_mocks(
+            write_content="短" * 1500,
+            extension_content="续" * 1500,
+            target_words=3000,
+        )
+        assert "extension_failed" not in result["quality_gate_report"]
+
+    def test_quality_gate_uses_half_target_not_85(self):
+        """QualityService 硬性检查最低门槛从 0.85 改为 0.5。"""
+        from novel_agent.services.quality import QualityService
+
+        # 50% of target → 0.85 时代会 fail，0.5 时代 pass
+        report = QualityService.check_draft_hard_gates(
+            "字" * 1500,
+            target_words=3000,
+            chapter_outline="大纲",
+        )
+        assert report["passed"] is True
+
+        # 40% of target → 0.5 以下，应该 fail
+        report = QualityService.check_draft_hard_gates(
+            "字" * 1200,
+            target_words=3000,
+            chapter_outline="大纲",
+        )
+        assert "minimum_length" in report["violations"]

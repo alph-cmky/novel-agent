@@ -23,9 +23,13 @@ class QualityService:
         target_words: int,
         chapter_outline: str = "",
     ) -> dict:
-        """Check non-negotiable draft requirements before LLM scoring."""
+        """Check non-negotiable draft requirements before LLM scoring.
+
+        The hard gate rejects only grossly short content (< 50% of target);
+        the narrative-extension layer handles the 50%–100% gap.
+        """
         units = cls.text_units(content.strip())
-        minimum = max(600, int(target_words * 0.85)) if target_words else 1
+        minimum = max(600, int(target_words * 0.5)) if target_words else 1
         violations: list[str] = []
         if not content.strip():
             violations.append("empty_content")

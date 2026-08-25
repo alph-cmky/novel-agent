@@ -2,10 +2,20 @@
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from novel_agent.services.continuity import ContinuityService
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimation: Chinese ~1.5 char/token, other ~4 char/token."""
+    if not text:
+        return 0
+    cjk = len(re.findall(r"[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]", text))
+    other = len(text) - cjk
+    return int(cjk / 1.5 + other / 4)
 
 
 @dataclass(frozen=True)
@@ -156,6 +166,10 @@ class ContextCompiler:
         )
 
     def _bound(self, text: str, limit: int) -> str:
+        return ContextCompiler.bound(text, limit)
+
+    @staticmethod
+    def bound(text: str, limit: int) -> str:
         if len(text) <= limit:
             return text
         marker = "\n[context compacted]\n"
@@ -163,3 +177,74 @@ class ContextCompiler:
         head = available // 2
         tail = available - head
         return text[:head] + marker + text[-tail:]
+
+    # ── Task-aware projections ────────────────────────────
+
+    @staticmethod
+    def for_writer(packet: dict, budget_chars: int = 5000) -> dict:
+        """Minimal context for Writer: chars + summary + foreshadowings + events."""
+        char_budget = budget_chars // 3
+        return {
+            "character_context": ContextCompiler.bound(
+                packet.get("character_context", ""), char_budget
+            ),
+            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), char_budget),
+            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:5],
+            "timeline_events": (packet.get("timeline_events") or [])[-5:],
+            "timeline_findings": (packet.get("timeline_findings") or [])[:3],
+        }
+
+    @staticmethod
+    def for_editor(packet: dict, budget_chars: int = 5000) -> dict:
+        """Minimal context for Editor: brief summary + active chars for consistency."""
+        char_budget = budget_chars // 2
+        return {
+            "character_context": ContextCompiler.bound(
+                packet.get("character_context", ""), char_budget
+            ),
+            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), char_budget),
+            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:3],
+        }
+
+    @staticmethod
+    def for_continuity(packet: dict, budget_chars: int = 4000) -> dict:
+        """Minimal context for Continuity: structured events + findings + foreshadowings."""
+        return {
+            "timeline_events": (packet.get("timeline_events") or [])[-10:],
+            "timeline_findings": (packet.get("timeline_findings") or [])[:5],
+            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:8],
+            "character_context": ContextCompiler.bound(
+                packet.get("character_context", ""), budget_chars // 3
+            ),
+        }
+
+    @staticmethod
+    def for_evolution(
+        current_scores: dict,
+        previous_scores: dict | None = None,
+        delta: dict | None = None,
+        guard_report: dict | None = None,
+        improvement_plan: dict | None = None,
+        budget_chars: int = 3000,
+    ) -> dict:
+        """Minimal context for Evolution: metrics + deltas + violations + plan only."""
+        return {
+            "current_scores": current_scores,
+            "previous_scores": previous_scores or {},
+            "delta": delta or {},
+            "guard_violations": (guard_report or {}).get("violations", []),
+            "improvement_plan": improvement_plan or {},
+        }
+
+    @staticmethod
+    def context_metrics(context: dict, budget_chars: int = 5000) -> dict:
+        """Code-level statistics for logging/debugging. No LLM call."""
+        text = json.dumps(context, ensure_ascii=False, default=str)
+        chars = len(text)
+        tokens = estimate_tokens(text)
+        return {
+            "context_chars": chars,
+            "estimated_tokens": tokens,
+            "budget_chars": budget_chars,
+            "utilization": round(tokens / max(estimate_tokens("字" * budget_chars), 1), 2),
+        }

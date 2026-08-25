@@ -155,6 +155,57 @@ class TestWriteToolHint:
         assert "旧角色" not in user
 
 
+class TestNarrativeExtension:
+    """Phase 1: Narrative Extension — 增量续写，不是 compensation 全文重写。"""
+
+    @staticmethod
+    def _capture_extension_prompt(**kwargs) -> str:
+        writer = WriterAgent()
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("续写正文", None))
+        ) as mocked:
+            asyncio.run(writer.narrative_extension(**kwargs))
+        return mocked.call_args.args[0][1]["content"]
+
+    def test_extension_prompt_uses_ending_not_full_content(self):
+        """Extension context 只含结尾 ~800 字，不含全文。"""
+        full = "起" * 5000 + "结尾段落"
+        user = self._capture_extension_prompt(
+            current_content=full,
+            chapter_number=1,
+            chapter_outline="大纲",
+            gap_words=500,
+        )
+        assert "结尾段落" in user
+        assert "起" * 5000 not in user
+
+    def test_extension_prompt_says_continue_not_expand(self):
+        """Extension 指令是续写向前，不是充分展开已有内容。"""
+        user = self._capture_extension_prompt(
+            current_content="已有正文",
+            chapter_number=1,
+            chapter_outline="大纲",
+            gap_words=500,
+        )
+        assert "续写" in user
+        assert "不要回头重写" in user
+        assert "充分展开" not in user
+
+    def test_extension_returns_only_continuation(self):
+        """返回值是续写文本，不是 (content, trace) 元组。"""
+        writer = WriterAgent()
+        with patch.object(writer, "run_with_tools", new=AsyncMock(return_value=("续写正文", None))):
+            result = asyncio.run(
+                writer.narrative_extension(
+                    current_content="已有正文",
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    gap_words=500,
+                )
+            )
+        assert result == "续写正文"
+
+
 class TestImprovementPlanFormatting:
     """测试演化迭代改进计划格式化，确保篇幅保护和结构硬约束不被丢弃。"""
 

@@ -32,10 +32,11 @@ from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
 from novel_agent.config import DEFAULT_MAX_TOKENS, ExecutionProfile
-from novel_agent.graph.scenes import assemble_scenes, build_scene_plan
+from novel_agent.graph.scenes import assemble_scenes, build_scene_outcome, build_scene_plan
 from novel_agent.graph.state import NovelState
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.model_router import ModelRouter, TaskClass
+from novel_agent.services.context import ContextCompiler
 from novel_agent.services.evolution import (
     EvolutionConfig,
     EvolutionService,
@@ -384,6 +385,10 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         cs = strategy.setdefault("chapter_strategy", {})
         cs.update(override)
 
+    # Project context_packet to minimal Writer context (Phase 3: Context Minimality)
+    full_packet = state.get("context_packet") or {}
+    writer_packet = ContextCompiler.for_writer(full_packet) if full_packet else None
+
     write_args = dict(
         chapter_number=state.get("chapter_number", 1),
         outline=state.get("chapter_outline", ""),
@@ -391,7 +396,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         world_context=state.get("world_context", ""),
         recent_summary=state.get("recent_summary", ""),
         unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
-        context_packet=state.get("context_packet"),
+        context_packet=writer_packet,
         timeline_events=state.get("timeline_events", []),
         timeline_findings=state.get("timeline_findings", []),
         target_chapter_words=target_words,
@@ -424,7 +429,12 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                 scene_content, scene_trace = await writer.write(**scene_args)
             scene_drafts.append(scene_content)
             scene_context = (
-                f"{scene_context}\n\n[前一场 Scene {scene['scene_index']}]\n{scene_content[-1200:]}"
+                (
+                    f"{scene_context}\n\n[前一场 Scene {scene['scene_index']}]\n"
+                    + build_scene_outcome(scene_content)
+                )
+                if scene_context
+                else build_scene_outcome(scene_content)
             )
         content = assemble_scenes(scene_drafts)
         trace = scene_trace or writer.latest_trace
@@ -450,26 +460,33 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         content, trace = await writer.write(**write_args)
         tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
-    # 篇幅硬底线保障：新版本至少保留目标的 85%，否则补偿生成一次。
+    # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
-    min_required_units = max(600, int(target_words * 0.85))
-    if content_units < min_required_units and target_words >= 1000:
+    extension_failed = False
+    if content_units < target_words and target_words >= 1000:
+        gap = target_words - content_units
         print(
-            f"  [Writer] 章节篇幅过短 ({content_units} units < {min_required_units})，"
-            "触发保底补偿生成..."
+            f"  [Writer] 篇幅不足 ({content_units}/{target_words})，"
+            f"触发 Narrative Extension (+{gap})..."
         )
-        compensated_args = dict(write_args)
-        compensated_args["rewrite_instructions"] = (
-            f"【紧急注意】：上一版输出篇幅严重不足（仅有 {content_units} units）。"
-            "请务必充分展开场景细节、人物神态、环境氛围与多轮交锋对话，"
-            f"写满至少 {target_words} 字，严禁大纲式概括！\n"
-            + (write_args.get("rewrite_instructions") or "")
+        extension = await writer.narrative_extension(
+            current_content=content,
+            chapter_number=state.get("chapter_number", 1),
+            chapter_outline=state.get("chapter_outline", ""),
+            character_context=state.get("character_context", ""),
+            gap_words=gap,
+            unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
         )
-        content_comp, trace_comp = await writer.write(**compensated_args)
-        if _text_units(content_comp.strip()) > content_units:
-            content = content_comp
-            trace = trace_comp
-            tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
+        if extension.strip():
+            content = content + "\n\n" + extension.strip()
+            if stream_queue is not None:
+                await stream_queue.put(("chunk", "\n\n" + extension.strip()))
+            content_units = _text_units(content.strip())
+            trace = writer.latest_trace or trace
+            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else tok_info
+        if content_units < target_words:
+            extension_failed = True
+            print(f"  [Writer] Extension 后仍不足 ({content_units}/{target_words})")
 
     label = f"(v{evolution_version})"
     quality_gate_report = QualityService.check_draft_hard_gates(
@@ -477,6 +494,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         target_words=target_words,
         chapter_outline=state.get("chapter_outline", ""),
     )
+    if extension_failed:
+        quality_gate_report["extension_failed"] = True
     story_checker = QualityService.check_story_integrity(
         content,
         scene_plan=state.get("scene_plan", []),

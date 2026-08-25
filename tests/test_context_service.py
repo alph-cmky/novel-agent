@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from novel_agent.services.context import ContextCompiler
+from novel_agent.services.context import ContextCompiler, estimate_tokens
 
 
 def test_context_packet_has_sources_budget_and_stable_hash():
@@ -77,3 +77,74 @@ def test_context_compiler_can_compile_from_run_snapshot():
     assert "已批准正文" in packet.recent_summary
     assert packet.character_context == "- 甲: {}"
     manager.build_context.assert_not_called()
+
+
+class TestTaskAwareProjections:
+    """Phase 3: for_writer / for_editor / for_continuity / for_evolution."""
+
+    def _big_packet(self) -> dict:
+        return {
+            "character_context": "角色" * 5000,
+            "world_context": "设定" * 5000,
+            "recent_summary": "摘要" * 5000,
+            "unresolved_foreshadowings": [f"伏笔{i}" for i in range(20)],
+            "timeline_events": [{"event": f"事件{i}"} for i in range(30)],
+            "timeline_findings": [{"finding": f"发现{i}"} for i in range(10)],
+        }
+
+    def test_for_writer_drops_world_context(self):
+        """Writer projection 不包含 world_context。"""
+        projected = ContextCompiler.for_writer(self._big_packet())
+        assert "world_context" not in projected
+
+    def test_for_writer_caps_character_context(self):
+        projected = ContextCompiler.for_writer(self._big_packet(), budget_chars=3000)
+        assert len(projected["character_context"]) <= 1001
+
+    def test_for_writer_limits_foreshadowings_to_5(self):
+        projected = ContextCompiler.for_writer(self._big_packet())
+        assert len(projected["unresolved_foreshadowings"]) == 5
+
+    def test_for_writer_limits_timeline_events_to_5(self):
+        projected = ContextCompiler.for_writer(self._big_packet())
+        assert len(projected["timeline_events"]) == 5
+
+    def test_for_editor_only_keeps_3_fields(self):
+        projected = ContextCompiler.for_editor(self._big_packet())
+        assert "world_context" not in projected
+        assert "timeline_events" not in projected
+        assert len(projected["unresolved_foreshadowings"]) == 3
+
+    def test_for_continuity_keeps_timeline_and_drops_world(self):
+        projected = ContextCompiler.for_continuity(self._big_packet())
+        assert "world_context" not in projected
+        assert len(projected["timeline_events"]) == 10
+        assert len(projected["unresolved_foreshadowings"]) == 8
+
+    def test_for_evolution_only_keeps_metrics(self):
+        projected = ContextCompiler.for_evolution(
+            current_scores={"editor_overall": 80},
+            previous_scores={"editor_overall": 70},
+            delta={"trend": "improving"},
+            guard_report={"violations": ["length_regression"]},
+            improvement_plan={"primary_instruction": "改进节奏"},
+        )
+        assert "current_scores" in projected
+        assert "guard_violations" in projected
+        assert "character_context" not in projected
+
+    def test_context_metrics_returns_chars_tokens_utilization(self):
+        ctx = {"character_context": "角色" * 100}
+        metrics = ContextCompiler.context_metrics(ctx, budget_chars=5000)
+        assert "context_chars" in metrics
+        assert "estimated_tokens" in metrics
+        assert "budget_chars" in metrics
+        assert "utilization" in metrics
+        assert metrics["context_chars"] > 0
+        assert metrics["estimated_tokens"] > 0
+
+    def test_estimate_tokens_chinese(self):
+        assert estimate_tokens("字" * 300) == 200  # 300/1.5
+
+    def test_estimate_tokens_empty(self):
+        assert estimate_tokens("") == 0
