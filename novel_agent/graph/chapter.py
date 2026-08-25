@@ -263,7 +263,6 @@ async def orchestrator_node(state: NovelState) -> dict:
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
-        prompt_profile=state.get("writer_prompt_profile", "v1"),
         arc_summary=arc_summary,
         unresolved_foreshadowings=unresolved,
         context_packet=state.get("context_packet"),
@@ -350,6 +349,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
+        prompt_profile=state.get("writer_prompt_profile", "v2"),
     )
 
     stream_queue: asyncio.Queue | None = None

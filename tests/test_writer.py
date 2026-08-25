@@ -35,6 +35,47 @@ def test_writer_prompt_v2_prioritizes_canon_over_generic_style_rules():
     assert "对话比例服从场景目标" in prompt
 
 
+class TestPromptProfileDefault:
+    """P0: Writer 默认使用 V2，V1 仅在显式指定时才用。"""
+
+    def test_default_profile_is_v2(self):
+        """不传 prompt_profile 时默认 V2。"""
+        prompt = WriterAgent().system_prompt
+        assert "长篇小说章节执行器" in prompt
+        assert "Canon / 已批准事实" in prompt
+
+    def test_explicit_v2_uses_v2(self):
+        prompt = WriterAgent(prompt_profile="v2").system_prompt
+        assert "长篇小说章节执行器" in prompt
+
+    def test_explicit_v1_uses_v1(self):
+        prompt = WriterAgent(prompt_profile="v1").system_prompt
+        assert "网文黄金标准" in prompt
+
+    def test_v1_no_global_dialogue_ratio(self):
+        """V1 不再包含全局对白 ≥ 40% 硬性规则。"""
+        prompt = WriterAgent(prompt_profile="v1").system_prompt
+        assert "对白占比 40%" not in prompt
+        assert "40%+" not in prompt
+
+    def test_v1_no_mechanical_sentence_alternation(self):
+        """V1 不再包含机械长短句交替规则。"""
+        prompt = WriterAgent(prompt_profile="v1").system_prompt
+        assert "长句与短句交错" not in prompt
+
+    def test_v1_no_forced_cliffhanger(self):
+        """V1 不再强制每章 cliffhanger。"""
+        prompt = WriterAgent(prompt_profile="v1").system_prompt
+        assert "戛然而止" not in prompt
+
+    def test_v2_has_paragraph_principles(self):
+        """V2 包含最少量段落原则。"""
+        prompt = WriterAgent(prompt_profile="v2").system_prompt
+        assert "自然段以叙事单元而非单句为边界" in prompt
+        assert "短句不等于短段" in prompt
+        assert "对白自然独立成段" in prompt
+
+
 class TestFormatStrategy:
     def test_nested_none_does_not_crash(self):
         """``tension_profile.variety_check: None`` used to crash with NoneType.get."""

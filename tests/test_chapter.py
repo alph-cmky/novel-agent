@@ -8,9 +8,13 @@ candidate editor dimensions 缺失某维度，需补 0 到 5 维，否则
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from novel_agent.graph.chapter import evolution_orchestrator_node
+from novel_agent.graph.chapter import (
+    evolution_orchestrator_node,
+    orchestrator_node,
+    writer_node,
+)
 
 
 def _state(**overrides) -> dict:
@@ -111,3 +115,101 @@ class TestBestScoresZeroFill:
         result = _run(state)
         # best composite = 60 < 80 → 仍更新 best
         assert result["evolution_best_candidate_version"] == 2
+
+
+class TestWriterPromptProfileInGraph:
+    """P0: graph 节点正确传递 writer_prompt_profile。
+
+    回归测试：
+    - orchestrator_node 不再向 OrchestratorAgent.analyze() 传 prompt_profile
+      （旧代码会 TypeError: analyze() got an unexpected keyword argument）。
+    - writer_node 从 state 读取 writer_prompt_profile 并传入 WriterAgent 构造。
+    """
+
+    @staticmethod
+    def _orch_state(**overrides) -> dict:
+        state = {
+            "project_id": "",
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "story_length": "short",
+            "character_context": "",
+            "world_context": "",
+            "skip_orchestrator": False,
+        }
+        state.update(overrides)
+        return state
+
+    def test_orchestrator_does_not_pass_prompt_profile(self):
+        """orchestrator_node 不再向 analyze() 传 prompt_profile（修复 TypeError）。"""
+        mock_orch = MagicMock()
+        mock_orch._compressor = MagicMock()
+        mock_orch._compressor.should_compress = MagicMock(return_value=False)
+        mock_orch.analyze = AsyncMock(return_value={})
+        with patch("novel_agent.graph.chapter.OrchestratorAgent", return_value=mock_orch):
+            asyncio.run(orchestrator_node(self._orch_state()))
+        kwargs = mock_orch.analyze.call_args.kwargs
+        assert "prompt_profile" not in kwargs
+
+    @staticmethod
+    def _run_writer_node(state: dict) -> str:
+        """Run writer_node, return prompt_profile passed to WriterAgent."""
+        captured: dict = {}
+
+        def _capture(*args, **kwargs):
+            captured["prompt_profile"] = kwargs.get("prompt_profile")
+            mock_w = MagicMock()
+            mock_w.write = AsyncMock(
+                return_value=("正文" * 600, MagicMock(input_tokens=10, output_tokens=20))
+            )
+            mock_w.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+            return mock_w
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter._get_chapter_store"),
+            patch("novel_agent.graph.chapter.WriterAgent", side_effect=_capture),
+            patch(
+                "novel_agent.graph.chapter.QualityService.check_draft_hard_gates",
+                return_value={"passed": True, "violations": []},
+            ),
+            patch(
+                "novel_agent.graph.chapter.QualityService.check_story_integrity",
+                return_value={"passed": True, "violations": []},
+            ),
+        ):
+            asyncio.run(writer_node(state, None))
+        return captured.get("prompt_profile", "")
+
+    def test_writer_node_default_v2(self):
+        """state 不含 writer_prompt_profile → 传 v2。"""
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": 1000,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+        }
+        assert self._run_writer_node(state) == "v2"
+
+    def test_writer_node_explicit_v2(self):
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": 1000,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+            "writer_prompt_profile": "v2",
+        }
+        assert self._run_writer_node(state) == "v2"
+
+    def test_writer_node_explicit_v1(self):
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": 1000,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+            "writer_prompt_profile": "v1",
+        }
+        assert self._run_writer_node(state) == "v1"
