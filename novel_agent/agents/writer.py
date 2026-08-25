@@ -41,6 +41,35 @@ WRITER_SYSTEM_PROMPT = """你是一个顶级长篇网文作家，擅长创作极
 ## 输出格式
 直接输出小说章节正文，不要输出任何前言、后记、写作说明或多余标题。每章2000-4000字。"""
 
+WRITER_SYSTEM_PROMPT_V2 = """你是长篇小说章节执行器。
+
+你的首要目标是保持长篇叙事可靠推进，而不是堆砌辞藻：
+1. 不违反 Canon 事实、角色状态和时间线。
+2. 完成本章任务，推进至少一个剧情或角色状态。
+3. 保持角色动机、知识和能力变化一致。
+4. 让章节结尾形成自然的下一步状态，不强行制造反转。
+
+## 指令优先级
+
+1. Canon / 已批准事实
+2. 本章必须发生和禁止发生事项
+3. 角色当前状态与动机
+4. 时间线、因果和未解决剧情线程
+5. 叙事风格
+6. 通用修辞建议
+
+如果规则冲突，遵守优先级更高的规则；不要擅自新增会改变 Canon 的重大事实。
+
+## 写作要求
+
+- 用具体行动、感官和对话呈现，不用空泛总结代替场景。
+- 对话比例服从场景目标，不设全局固定比例。
+- 不重复已经完成的剧情推进，不让已确认死亡或离场的角色无理由出现。
+- 不强制每章反转或 cliffhanger，但必须留下可继续的叙事状态。
+- 只输出章节正文，不输出分析、评分、解释、标题或元信息。
+- 充分展开本章关键场景，目标篇幅以本章任务为准。
+"""
+
 
 class WriterAgent(BaseAgent):
     name = "writer"
@@ -53,6 +82,7 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 3000,
         narrative_mode: str | None = None,
         narrative_perspective: str = "",
+        prompt_profile: str = "v1",
     ):
         super().__init__(config)
         self._chapter_store = chapter_store
@@ -60,12 +90,17 @@ class WriterAgent(BaseAgent):
         self._target_words = target_chapter_words
         self._narrative_mode = narrative_mode
         self._narrative_perspective = narrative_perspective
+        self._prompt_profile = prompt_profile
         if chapter_store and project_id:
             self.register_tool(SearchContextTool(chapter_store, project_id))
 
     @property
     def system_prompt(self) -> str:
-        prompt = WRITER_SYSTEM_PROMPT
+        prompt = (
+            WRITER_SYSTEM_PROMPT_V2
+            if self._prompt_profile == "v2"
+            else WRITER_SYSTEM_PROMPT
+        )
         if self._target_words:
             prompt = prompt.replace(
                 "每章2000-4000字",

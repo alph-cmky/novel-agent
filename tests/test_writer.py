@@ -27,6 +27,14 @@ class TestStripNone:
         assert strip_none(None) is None
 
 
+def test_writer_prompt_v2_prioritizes_canon_over_generic_style_rules():
+    prompt = WriterAgent(prompt_profile="v2").system_prompt
+
+    assert "Canon / 已批准事实" in prompt
+    assert "不强制每章反转或 cliffhanger" in prompt
+    assert "对话比例服从场景目标" in prompt
+
+
 class TestFormatStrategy:
     def test_nested_none_does_not_crash(self):
         """``tension_profile.variety_check: None`` used to crash with NoneType.get."""

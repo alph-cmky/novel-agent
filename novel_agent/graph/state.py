@@ -73,6 +73,7 @@ class NovelState(TypedDict, total=False):
     quality_guard_report: dict
     quality_gate_report: dict
     deterministic_gate_first: bool
+    writer_prompt_profile: str
 
     # ── 存储路径 ──
     persist_dir: str
