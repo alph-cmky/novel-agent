@@ -59,19 +59,22 @@ def test_deterministic_gate_skips_expensive_reviews_when_draft_passes():
 
     assert route_after_writer(state) == "worldbuilding"
 
-    def test_select_best_after_actual_rewrites(self):
-        """Bookkeeping v0 plus five rewrites reaches max_rounds=5."""
-        result = route_after_evolution(_evo_state(evolution_round=6, max_rounds=5))
-        assert result == "evolution_select_best"
 
-    def test_select_best_when_over_max_rounds(self):
-        """Over max rounds → select best version."""
-        result = route_after_evolution(_evo_state(evolution_round=7, max_rounds=5))
-        assert result == "evolution_select_best"
+def test_select_best_after_actual_rewrites():
+    """Bookkeeping v0 plus five rewrites reaches max_rounds=5."""
+    result = route_after_evolution(_evo_state(evolution_round=6, max_rounds=5))
+    assert result == "evolution_select_best"
 
-    def test_zero_rewrites_selects_after_initial_review(self):
-        result = route_after_evolution(_evo_state(evolution_round=1, max_rounds=0))
-        assert result == "evolution_select_best"
+
+def test_select_best_when_over_max_rounds():
+    """Over max rounds → select best version."""
+    result = route_after_evolution(_evo_state(evolution_round=7, max_rounds=5))
+    assert result == "evolution_select_best"
+
+
+def test_zero_rewrites_selects_after_initial_review():
+    result = route_after_evolution(_evo_state(evolution_round=1, max_rounds=0))
+    assert result == "evolution_select_best"
 
 
 class TestRouteAfterHumanEvolution:

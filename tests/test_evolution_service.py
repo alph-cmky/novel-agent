@@ -1,9 +1,11 @@
 """Tests for the evolution core logic — Delta, termination, improvement plans."""
 
 
-from novel_agent.graph.evolution import (
+from novel_agent.schema.enums import EvolutionAction
+from novel_agent.services.evolution import (
     EDITOR_DIMENSIONS,
     EvolutionConfig,
+    EvolutionService,
     build_improvement_plan_rule,
     check_quality_guards,
     composite_score,
@@ -414,6 +416,36 @@ def test_better_candidate_requires_guards_before_composite():
     accepted, report = is_better_candidate(current, best)
     assert accepted is False
     assert report["passed"] is False
+
+
+def test_evolution_service_returns_stop_decision_without_changing_reason():
+    helper = TestDecideTermination()
+    decision = EvolutionService.evaluate(
+        delta=helper._delta(),
+        current_scores=helper._scores(),
+        best_scores=helper._scores(),
+        history=[],
+        current_round=5,
+        config=EvolutionConfig(max_rounds=5),
+    )
+
+    assert decision.action is EvolutionAction.STOP
+    assert decision.reason == "max_rounds"
+    assert "已达最大轮次" in decision.details["detail"]
+
+
+def test_evolution_service_returns_continue_decision_with_empty_termination():
+    helper = TestDecideTermination()
+    decision = EvolutionService.evaluate(
+        delta=helper._delta(editor=5, ai_flavor=5, dialogue=4),
+        current_scores=helper._scores(editor=80),
+        best_scores=helper._scores(editor=75),
+        history=[],
+        current_round=1,
+    )
+
+    assert decision.action is EvolutionAction.CONTINUE
+    assert decision.reason == ""
 
     def test_preserve_improved_dimensions(self):
         """Dimensions that improved >+3 should be in preserve."""

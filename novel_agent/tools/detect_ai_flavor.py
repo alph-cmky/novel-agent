@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from novel_agent.style.ai_flavor import detect_ai_flavor
+from novel_agent.style.analyzer import StyleAnalyzer
 from novel_agent.tools.base import BaseTool, ToolResult
 
 
@@ -24,5 +24,5 @@ class DetectAiFlavorTool(BaseTool):
 
     async def execute(self, **kwargs) -> ToolResult:
         inp = DetectAiFlavorInput(**kwargs)
-        report = detect_ai_flavor(inp.text)
+        report = StyleAnalyzer().legacy_report(inp.text)
         return ToolResult(success=True, data=report)

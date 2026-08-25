@@ -3,7 +3,7 @@
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.schema.validator import OutputValidator
-from novel_agent.tools.style import DetectAiFlavorTool
+from novel_agent.tools.detect_ai_flavor import DetectAiFlavorTool
 
 EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，负责把控正文质量，绝不给面子分，必须依据扣分阶梯真实客观打分。
 

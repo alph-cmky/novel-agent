@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from novel_agent.graph.timeline_checker import check_timeline
+from novel_agent.services.continuity import ContinuityService
 
 
 @dataclass(frozen=True)
@@ -85,7 +85,7 @@ class ContextCompiler:
             entities = self.manager.get_all_world_entities(project_id)
             foreshadowings = self.manager.get_foreshadowings(project_id)
             events = self.manager.get_story_events(project_id)
-        timeline_findings = check_timeline(
+        timeline_findings = ContinuityService.check_timeline(
             events,
             foreshadowings,
             current_chapter=chapter_number,

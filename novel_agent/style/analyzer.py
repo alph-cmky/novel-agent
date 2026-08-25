@@ -6,6 +6,32 @@ scoped specifically for Chinese web novel writing.
 
 import re
 
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StyleProfile(BaseModel):
+    """Optional style preferences reserved for future style-aware analysis."""
+
+
+class StyleIssue(BaseModel):
+    """A detected style issue with extensible evidence fields."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    severity: str
+    count: int = 1
+
+
+class StyleReport(BaseModel):
+    """Normalized style analysis result."""
+
+    ai_flavor_score: float = Field(ge=0, le=100)
+    paragraph_structure_score: float = Field(ge=0, le=100)
+    sentence_rhythm_score: float = Field(ge=0, le=100)
+    dialogue_score: float = Field(ge=0, le=100)
+    issues: list[StyleIssue] = Field(default_factory=list)
+
 # ── Banned phrases ────────────────────────────────────
 
 BANNED_CONNECTORS = [
@@ -208,3 +234,25 @@ def detect_ai_flavor(text: str) -> dict:
         "ending_analysis": ending_check,
         "total_issues": len(issues),
     }
+
+
+class StyleAnalyzer:
+    """Single entry point for deterministic style analysis."""
+
+    def analyze(self, text: str, profile: StyleProfile | None = None) -> StyleReport:
+        del profile  # The profile is an extension point; current rules are unchanged.
+        legacy = detect_ai_flavor(text)
+        paragraph = legacy["paragraph_analysis"]
+        sentence = legacy["sentence_analysis"]
+        dialogue = legacy["dialogue_analysis"]
+        return StyleReport(
+            ai_flavor_score=legacy["overall_score"],
+            paragraph_structure_score=60 if paragraph.get("uniform_paragraphs") else 90,
+            sentence_rhythm_score=60 if sentence.get("uniform_sentences") else 90,
+            dialogue_score=dialogue.get("dialogue_ratio", 0) * 100,
+            issues=legacy["issues"],
+        )
+
+    def legacy_report(self, text: str) -> dict:
+        """Return the existing tool payload without changing its contract."""
+        return detect_ai_flavor(text)

@@ -49,7 +49,7 @@ class EvolutionOrchestratorAgent(BaseAgent):
     """Meta-evaluator for the self-evolution loop.
 
     Only called when LLM enrichment is needed. The rule-layer (Delta, termination)
-    runs deterministically in graph/evolution.py before this agent is invoked.
+    runs deterministically in services/evolution.py before this agent is invoked.
     """
 
     name = "evolution_orchestrator"

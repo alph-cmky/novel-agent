@@ -64,3 +64,10 @@ class OutboxStatus(StrEnum):
     DONE = "done"
     FAILED = "failed"
     STALE = "stale"
+
+
+class EvolutionAction(StrEnum):
+    """Control-flow action returned by deterministic evolution evaluation."""
+
+    CONTINUE = "continue"
+    STOP = "stop"

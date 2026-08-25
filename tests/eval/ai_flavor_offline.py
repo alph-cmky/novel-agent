@@ -8,7 +8,7 @@ Runs the deterministic detect_ai_flavor rules over curated samples and reports:
 Pure rule layer — zero LLM cost. Used as a sanity gate before LLM 横评.
 """
 
-from novel_agent.style.ai_flavor import detect_ai_flavor
+from novel_agent.style.analyzer import detect_ai_flavor
 
 
 def load_samples(path: str) -> tuple[list[str], list[str]]:

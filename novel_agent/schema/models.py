@@ -1,8 +1,10 @@
 """Pydantic models for all agent outputs — 3-layer validation boundary."""
 
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
+
+from novel_agent.schema.enums import EvolutionAction
 
 # ── Orchestrator ──────────────────────────────────────
 
@@ -157,3 +159,28 @@ class WorldbuildingReport(BaseModel):
     # Foreshadowing lifecycle — extracted by WorldbuildingAgent
     foreshadowings: list[dict[str, Any]] = Field(default_factory=list)
     resolved_foreshadowings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EvolutionCandidate(TypedDict, total=False):
+    """Serializable candidate data carried by the evolution state."""
+
+    version: int
+    draft_content: str
+    editor_report: dict[str, Any]
+    continuity_report: dict[str, Any]
+    worldbuilding_report: dict[str, Any]
+    quality_guard_report: dict[str, Any]
+    quality_gate_report: dict[str, Any]
+    outline_coverage: float | None
+    required_facts_missing: int
+    scores: dict[str, Any]
+    composite_score: float
+    content_length: int
+
+
+class EvolutionDecision(BaseModel):
+    """Deterministic evolution decision consumed by the Graph."""
+
+    action: EvolutionAction
+    reason: str
+    details: dict[str, Any] = Field(default_factory=dict)

@@ -1,6 +1,8 @@
 """Story length configuration — constants for long-form novel writing."""
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 # 长篇默认配置（短篇/中篇已移除，只保留长篇）
 DEFAULT_CHAPTER_WORDS = 3000
@@ -21,3 +23,33 @@ def env_bool(name: str, default: bool = False) -> bool:
     if val is None:
         return default
     return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class ExecutionProfile:
+    """Resolved execution switches for one chapter run."""
+
+    skip_reviews: bool = False
+    review_interval: int = 1
+    skip_worldbuilding: bool = False
+    skip_evolution_enrichment: bool = False
+
+    @classmethod
+    def from_state(cls, state: Mapping[str, object]) -> "ExecutionProfile":
+        return cls(
+            skip_reviews=bool(state.get("skip_reviews", False)),
+            review_interval=max(int(state.get("review_interval", 1) or 1), 1),
+            skip_worldbuilding=bool(state.get("skip_worldbuilding", False)),
+            skip_evolution_enrichment=bool(
+                state.get("skip_evolution_enrichment", False)
+            ),
+        )
+
+    def should_review(self, chapter_number: int) -> bool:
+        return not self.skip_reviews and chapter_number % self.review_interval == 0
+
+    def should_worldbuild(self) -> bool:
+        return not self.skip_worldbuilding
+
+    def should_enrich_evolution(self) -> bool:
+        return not self.skip_evolution_enrichment

@@ -5,6 +5,10 @@ so they can be unit-tested independently.
 """
 
 from dataclasses import dataclass
+from typing import Any
+
+from novel_agent.schema.enums import EvolutionAction
+from novel_agent.schema.models import EvolutionCandidate, EvolutionDecision
 
 # ── Config ──────────────────────────────────────────────
 
@@ -387,6 +391,35 @@ def decide_termination(
     return ("", "")
 
 
+class EvolutionService:
+    """Facade for deterministic evolution evaluation."""
+
+    @staticmethod
+    def evaluate(
+        delta: dict,
+        current_scores: dict,
+        best_scores: dict,
+        history: list[dict],
+        config: EvolutionConfig | None = None,
+        current_round: int = 0,
+        guard_report: dict | None = None,
+    ) -> EvolutionDecision:
+        termination, detail = decide_termination(
+            delta,
+            current_scores,
+            best_scores,
+            history,
+            config,
+            current_round,
+            guard_report,
+        )
+        return EvolutionDecision(
+            action=EvolutionAction.STOP if termination else EvolutionAction.CONTINUE,
+            reason=termination,
+            details={"detail": detail} if detail else {},
+        )
+
+
 # ── Improvement plan (rule layer) ───────────────────────
 
 def build_improvement_plan_rule(
@@ -517,3 +550,39 @@ def _avoid_patterns(focus: list[str], dim_deltas: dict) -> list[str]:
     if "rhythm" in focus or dim_deltas.get("rhythm", 0) < -3:
         avoid.append("重复使用简短的疑问句作为节奏工具")
     return avoid
+
+
+def candidate_from_state(
+    state: dict,
+    version: int,
+    scores: dict[str, Any],
+    quality_guard_report: dict | None = None,
+) -> EvolutionCandidate:
+    """Build a serializable candidate snapshot from graph state."""
+    return {
+        "version": version,
+        "draft_content": state.get("draft_content", ""),
+        "editor_report": state.get("editor_report", {}) or {},
+        "continuity_report": state.get("continuity_report", {}) or {},
+        "worldbuilding_report": state.get("worldbuilding_report", {}) or {},
+        "quality_guard_report": quality_guard_report or {},
+        "quality_gate_report": state.get("quality_gate_report", {}) or {},
+        "outline_coverage": state.get("outline_coverage"),
+        "required_facts_missing": state.get("required_facts_missing", 0),
+        "scores": scores,
+        "composite_score": scores.get("composite", 0),
+        "content_length": len(state.get("draft_content", "")),
+    }
+
+
+def candidate_to_state(candidate: EvolutionCandidate) -> dict[str, Any]:
+    """Restore the state fields owned by a selected candidate."""
+    return {
+        "draft_content": candidate.get("draft_content", ""),
+        "editor_report": candidate.get("editor_report", {}) or {},
+        "continuity_report": candidate.get("continuity_report", {}) or {},
+        "worldbuilding_report": candidate.get("worldbuilding_report", {}) or {},
+        "outline_coverage": candidate.get("outline_coverage"),
+        "required_facts_missing": candidate.get("required_facts_missing", 0),
+        "quality_gate_report": candidate.get("quality_gate_report", {}) or {},
+    }

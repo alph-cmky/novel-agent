@@ -1,8 +1,8 @@
-from novel_agent.graph.quality_gates import check_draft_hard_gates, check_story_integrity
+from novel_agent.services.quality import QualityService
 
 
 def test_quality_gate_rejects_empty_and_short_draft():
-    result = check_draft_hard_gates("", target_words=3000, chapter_outline="大纲")
+    result = QualityService.check_draft_hard_gates("", target_words=3000, chapter_outline="大纲")
 
     assert result["passed"] is False
     assert "empty_content" in result["violations"]
@@ -10,7 +10,7 @@ def test_quality_gate_rejects_empty_and_short_draft():
 
 
 def test_quality_gate_accepts_target_length_with_outline():
-    result = check_draft_hard_gates(
+    result = QualityService.check_draft_hard_gates(
         "正文" * 2600,
         target_words=3000,
         chapter_outline="主角进入城门",
@@ -21,7 +21,7 @@ def test_quality_gate_accepts_target_length_with_outline():
 
 
 def test_story_checker_detects_missing_scene_and_required_fact():
-    result = check_story_integrity(
+    result = QualityService.check_story_integrity(
         "第一场正文",
         scene_plan=[{"scene_index": 1}, {"scene_index": 2}],
         scene_drafts=["第一场正文"],
@@ -34,7 +34,7 @@ def test_story_checker_detects_missing_scene_and_required_fact():
 
 
 def test_story_checker_flags_explicit_canon_conflict_only():
-    result = check_story_integrity(
+    result = QualityService.check_story_integrity(
         "北墙由黑曜石砌成，青石已经开裂。",
         canon_conflicts=[
             {"severity": "critical", "keywords": ["黑曜石", "青石"]}
@@ -43,3 +43,19 @@ def test_story_checker_flags_explicit_canon_conflict_only():
 
     assert result["passed"] is False
     assert result["findings"][0]["severity"] == "critical"
+
+
+def test_quality_service_keeps_hard_gate_output_shape():
+    result = QualityService.check_draft_hard_gates(
+        "正文" * 600,
+        target_words=600,
+        chapter_outline="大纲",
+    )
+
+    assert result == {
+        "passed": True,
+        "violations": [],
+        "content_units": 1200,
+        "minimum_units": 600,
+        "target_units": 600,
+    }

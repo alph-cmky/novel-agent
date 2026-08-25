@@ -1,8 +1,8 @@
-from novel_agent.graph.timeline_checker import check_timeline
+from novel_agent.services.continuity import ContinuityService
 
 
 def test_timeline_checker_detects_order_and_dead_character_reappearance():
-    result = check_timeline(
+    result = ContinuityService.check_timeline(
         [
             {"chapter_number": 2, "subject": "林风", "action": "回城"},
             {"chapter_number": 1, "subject": "林风", "action": "战死"},
@@ -19,7 +19,7 @@ def test_timeline_checker_detects_order_and_dead_character_reappearance():
 
 
 def test_timeline_checker_detects_overdue_and_dormant_foreshadowings():
-    result = check_timeline(
+    result = ContinuityService.check_timeline(
         [],
         [
             {
@@ -38,3 +38,14 @@ def test_timeline_checker_detects_overdue_and_dormant_foreshadowings():
     assert types.count("overdue_foreshadowing") == 1
     assert types.count("dormant_foreshadowing") == 1
     assert result["passed"] is True
+
+
+def test_continuity_service_does_not_fail_for_warnings_only():
+    result = ContinuityService.check_timeline(
+        [],
+        [{"description": "未回收伏笔", "planted_chapter": 1, "status": "open"}],
+        current_chapter=5,
+    )
+
+    assert result["passed"] is True
+    assert result["findings"][0]["severity"] == "warning"

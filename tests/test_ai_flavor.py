@@ -1,12 +1,16 @@
-"""Tests for AI flavor detection rules."""
+"""Tests for AI flavor detection rules and the unified analyzer boundary."""
 
-from novel_agent.style.ai_flavor import (
+import asyncio
+
+from novel_agent.style.analyzer import (
+    StyleAnalyzer,
     check_dialogue_ratio,
     check_ending,
     check_paragraph_lengths,
     check_sentence_variety,
     detect_ai_flavor,
 )
+from novel_agent.tools.detect_ai_flavor import DetectAiFlavorTool
 
 
 class TestBannedPhrases:
@@ -53,6 +57,23 @@ class TestBannedPhrases:
         report = detect_ai_flavor(text)
         assert report["overall_score"] < 80
         assert report["total_issues"] > 0
+
+    def test_style_analyzer_returns_normalized_report(self):
+        report = StyleAnalyzer().analyze('"你好。"林风转身。')
+
+        assert 0 <= report.ai_flavor_score <= 100
+        assert 0 <= report.paragraph_structure_score <= 100
+        assert 0 <= report.sentence_rhythm_score <= 100
+        assert report.dialogue_score > 0
+        assert isinstance(report.issues, list)
+
+    def test_style_tool_preserves_legacy_payload(self):
+        text = "此外，这个发现至关重要。"
+        direct = detect_ai_flavor(text)
+        result = asyncio.run(DetectAiFlavorTool().execute(text=text))
+
+        assert result.success is True
+        assert result.data == direct
 
 
 class TestParagraphLengths:

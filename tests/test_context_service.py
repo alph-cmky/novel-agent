@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from novel_agent.context import ContextCompiler
+from novel_agent.services.context import ContextCompiler
 
 
 def test_context_packet_has_sources_budget_and_stable_hash():
