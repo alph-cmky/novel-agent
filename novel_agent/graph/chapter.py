@@ -5,11 +5,8 @@ Evolution enabled (default):
         Writer → Editor → Continuity → EvolutionOrchestrator → [continue|select_best]
     ] → Worldbuilding → Human Review → [approved → END | rejected → evolution_writer]
 
-Evolution disabled (legacy):
-    Orchestrator → Writer → Editor → Continuity → [
-        pass → Worldbuilding → Human Review,
-        fail → Orchestrator Review → Writer (feedback loop)
-    ]
+The workflow always uses the recursive self-evolution path; legacy checkpoint
+fields are read only where needed for persisted-state compatibility.
 """
 
 import asyncio
@@ -34,29 +31,27 @@ from novel_agent.agents.evolution_orchestrator import EvolutionOrchestratorAgent
 from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent
-from novel_agent.config import DEFAULT_MAX_TOKENS
-from novel_agent.graph.candidates import candidate_from_state, candidate_to_state
-from novel_agent.graph.evolution import (
+from novel_agent.config import DEFAULT_MAX_TOKENS, ExecutionProfile
+from novel_agent.graph.scenes import assemble_scenes, build_scene_plan
+from novel_agent.graph.state import NovelState
+from novel_agent.memory.embeddings import ChapterStore
+from novel_agent.model_router import ModelRouter, TaskClass
+from novel_agent.services.evolution import (
     EvolutionConfig,
+    EvolutionService,
     build_improvement_plan_rule,
     build_quality_guard_report,
+    candidate_from_state,
+    candidate_to_state,
     check_quality_guards,
     composite_score,
     compute_delta,
     continuity_overall,
-    decide_termination,
     editor_overall,
     extract_scores,
     is_better_candidate,
 )
-from novel_agent.graph.quality_gates import (
-    check_draft_hard_gates,
-    check_story_integrity,
-)
-from novel_agent.graph.scenes import assemble_scenes, build_scene_plan
-from novel_agent.graph.state import NovelState
-from novel_agent.memory.embeddings import ChapterStore
-from novel_agent.routing import ModelRouter, TaskClass
+from novel_agent.services.quality import QualityService
 
 router = ModelRouter()
 
@@ -328,7 +323,8 @@ async def orchestrator_node(state: NovelState) -> dict:
 async def writer_node(state: NovelState, config: RunnableConfig | None = None) -> dict:
     """Writer Agent generates (or rewrites) chapter content.
 
-    Supports both evolution improvement_plan (v2) and legacy rewrite_instructions (v1).
+    Consumes the evolution improvement plan and preserves legacy checkpoint
+    instructions when they are present.
     """
     target_words = state.get("target_chapter_words", 3000)
     max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
@@ -471,12 +467,12 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
 
     label = f"(v{evolution_version})"
-    quality_gate_report = check_draft_hard_gates(
+    quality_gate_report = QualityService.check_draft_hard_gates(
         content,
         target_words=target_words,
         chapter_outline=state.get("chapter_outline", ""),
     )
-    story_checker = check_story_integrity(
+    story_checker = QualityService.check_story_integrity(
         content,
         scene_plan=state.get("scene_plan", []),
         scene_drafts=scene_drafts,
@@ -581,9 +577,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
         # LLM enrichment (optional — fails gracefully to rule_plan)
         plan = rule_plan
-        if state.get("evolution_max_rounds", 5) > 0 and not state.get(
-            "skip_evolution_enrichment"
-        ):
+        profile = ExecutionProfile.from_state(state)
+        if state.get("evolution_max_rounds", 5) > 0 and profile.should_enrich_evolution():
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -657,7 +652,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     current_candidate["quality_guard_report"] = guard_report
 
     # 1. Rule layer: termination decision
-    termination, reason = decide_termination(
+    decision = EvolutionService.evaluate(
         delta,
         current_scores,
         best_scores,
@@ -666,13 +661,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         current_round,
         guard_report,
     )
+    termination = decision.reason if decision.action.value == "stop" else ""
 
     # 2. Rule layer: improvement plan
     rule_plan = build_improvement_plan_rule(current_scores, delta, evo_config)
 
     # 3. LLM enrichment (only if continuing)
     plan = rule_plan
-    if not termination and not state.get("skip_evolution_enrichment"):
+    if not termination and ExecutionProfile.from_state(state).should_enrich_evolution():
         try:
             agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
             enriched = await agent.enrich_plan(
@@ -766,7 +762,7 @@ def select_best_version_node(state: NovelState) -> dict:
 
 async def worldbuilding_node(state: NovelState) -> dict:
     """Worldbuilding Agent extracts entities, conflicts, and foreshadowings."""
-    if state.get("skip_worldbuilding"):
+    if not ExecutionProfile.from_state(state).should_worldbuild():
         return {"worldbuilding_report": {}}
     existing = state.get("existing_world_entities", [])
 
@@ -911,9 +907,8 @@ def route_after_writer(state: NovelState) -> Literal["evolution_editor", "worldb
     gate = state.get("quality_gate_report") or {}
     if state.get("deterministic_gate_first") and gate.get("passed"):
         return "worldbuilding"
-    interval = max(state.get("review_interval", 1), 1)
     chapter_number = state.get("chapter_number", 1)
-    if state.get("skip_reviews") or chapter_number % interval != 0:
+    if not ExecutionProfile.from_state(state).should_review(chapter_number):
         return "worldbuilding"
     return "evolution_editor"
 

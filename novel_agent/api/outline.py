@@ -2,7 +2,7 @@
 
 from novel_agent.agents.base import AgentConfig
 from novel_agent.agents.orchestrator import OrchestratorAgent
-from novel_agent.routing import ModelRouter, TaskClass
+from novel_agent.model_router import ModelRouter, TaskClass
 from novel_agent.schema.enums import OutlineStatus
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.storage.manager import ProjectManager

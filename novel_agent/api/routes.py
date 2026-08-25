@@ -23,14 +23,14 @@ from novel_agent.api.sse import (
     replay_review,
     resume_graph,
 )
-from novel_agent.context import ContextCompiler
 from novel_agent.graph.chapter import (
     _config_for,
     _get_chapter_store,
     build_chapter_graph_async,
 )
-from novel_agent.routing import TaskClass
+from novel_agent.model_router import TaskClass
 from novel_agent.schema.enums import ChapterStatus, OutlineStatus
+from novel_agent.services.context import ContextCompiler
 from novel_agent.storage.manager import ProjectManager
 
 router = APIRouter()
