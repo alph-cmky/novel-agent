@@ -1013,7 +1013,7 @@ def _build_workflow() -> StateGraph:
 
 
 def build_chapter_graph(persist_dir: str = "") -> StateGraph:
-    """Build the chapter pipeline with sync checkpointer (for CLI / Chainlit)."""
+    """Build the chapter pipeline with sync checkpointer (for CLI)."""
     workflow = _build_workflow()
     checkpointer = _get_checkpointer(persist_dir)
     return workflow.compile(checkpointer=checkpointer)
