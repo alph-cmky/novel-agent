@@ -16,7 +16,7 @@ uv run ruff check .                        # lint
 
 ## 技术栈
 
-Python 3.12+, LangGraph (graph orchestration), LangChain + OpenAI (LLM), ChromaDB (vector memory), FastAPI (web API) + React/Vite/Tailwind (前端), Click (CLI), Pydantic (models)。Chainlit 为 legacy 入口。
+ Python 3.12+, LangGraph (graph orchestration), LangChain + OpenAI (LLM), ChromaDB (vector memory), FastAPI (web API) + React/Vite/Tailwind (前端), Click (CLI), Pydantic (models)。
 
 ## 项目约束
 
@@ -53,11 +53,6 @@ Orchestrator → Evolution Subgraph [
 - **Worldbuilding**: 实体提取 + 冲突检测 + 持久化到 SQLite
 - **Human Review**: LangGraph `interrupt()` 暂停流水线，拒绝后触发新进化周期（max 2 轮）
 
-### 已弃用参数（`evolution_enabled`）
-
-`build_chapter_graph()` / `build_chapter_graph_async()` 的 `evolution_enabled`
-参数已弃用，仅为兼容旧调用方保留；流水线始终构建递归自进化图，不接受其他模式。
-
 ## 递归自进化
 
 每轮 Writer → Editor → Continuity 产出评估报告，EvolutionOrchestrator 对比上轮计算各维度 Delta，生成 `improvement_plan`（focus_dimensions + preserve + avoid）驱动下一轮创作。
@@ -83,7 +78,7 @@ Orchestrator → Evolution Subgraph [
 
 ## 模型路由
 
-`novel_agent/routing/__init__.py` — ModelRouter 按 TaskClass 分配模型：
+`novel_agent/model_router.py` — ModelRouter 按 TaskClass 分配模型：
 - CREATIVE → QUALITY_MODEL（创作）
 - STRUCTURAL / REVIEW / EXTRACTION / META_EVALUATION → BUDGET_MODEL（分析）
 - `resolve()` 每次读 env var，支持运行时覆盖
@@ -115,19 +110,7 @@ REST 端点定义在 `novel_agent/api/routes.py`（SSE 流式写作 + Human-in-t
 ## Checkpoint 持久化
 
 `build_chapter_graph(persist_dir)` 接受可选 `persist_dir`：
-- 不传 → `MemorySaver`（兼容 legacy CLI/Chainlit）
+- 不传 → `MemorySaver`（兼容无持久化调用方）
 - 传入 → `SqliteSaver`，checkpoint 写 `{persist_dir}/checkpoints.db`
 - `thread_id` 用 `{project_id}:ch{chapter_number}` 确定性格式，重启可恢复
 - `_checkpointer_cache` 按 persist_dir 缓存
-
-## Chainlit（legacy）
-
-```
-new <name> [title] [genre] [--words N]
-list
-select <project_id>
-chapters
-write <chapter> <outline> [--words N]
-```
-
-`write` 支持 Human-in-the-loop（Approve/Reject）。主入口请用 Web UI。

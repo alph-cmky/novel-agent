@@ -164,8 +164,6 @@ cd frontend && npm run build && cd ..
 novel-agent serve
 ```
 
-> Chainlit 传统 UI（legacy）：`chainlit run novel_agent/api/chainlit_app.py`
-
 ### Docker
 
 ```bash
@@ -207,7 +205,7 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 
 **版本选择（SelectBest）** — 硬约束通过后，使用 Pareto + 综合分兜底的多目标选择：所有维度不退化且至少一个维度提升 → 直接接受；否则按加权综合分决定。
 
-**人工审批** — 进化终止后，流水线在 `Human Review` 节点暂停，等待人类决定。Web UI 按钮式审批（Approve/Reject），Chainlit 对话式审批，均可附带修改意见触发新一轮进化（拒绝后最多再迭代 2 轮，累计最多 3 次拒绝）。
+**人工审批** — 进化终止后，流水线在 `Human Review` 节点暂停，等待人类决定。Web UI 按钮式审批（Approve/Reject）可附带修改意见触发新一轮进化（拒绝后最多再迭代 2 轮，累计最多 3 次拒绝）。
 
 ### Fast Profile
 
@@ -275,17 +273,16 @@ novel_agent/
 │   ├── enums.py         # 状态枚举（章节/大纲生命周期）
 │   ├── parser.py        # JSON 解析器（多层兜底）
 │   └── validator.py     # OutputValidator（类型强制 + 默认值兜底）
-├── routing/             # 模型路由（双模型、运行时读环境变量）
+├── model_router.py      # 模型路由（双模型、运行时读环境变量）
 ├── observability/       # LangFuse 全链路追踪（未配置则 no-op）
 ├── tools/               # 工具协议（MCP 兼容 schema 模式）
 ├── style/               # AI 味检测引擎（禁用句式 + 启发式检查）
-├── api/                 # FastAPI REST + SSE + Chainlit UI
+├── api/                 # FastAPI REST + SSE
 │   ├── routes.py        # REST API（项目 CRUD、大纲、导出）
 │   ├── sse.py           # SSE 流式写作 + Session 管理
 │   ├── graph_data.py    # 关系图谱数据聚合
 │   ├── outline.py       # AI 大纲生成
 │   ├── app.py           # FastAPI 应用（CORS + 静态资源 + 生命周期）
-│   └── chainlit_app.py  # Chainlit 兼容入口
 └── cli/                 # Click CLI（serve / export）
 
 frontend/                # React SPA（Vite + TypeScript + Tailwind）
@@ -300,5 +297,5 @@ MIT
 
 - 项目处于 Alpha 阶段，核心目标是验证 Agent 工作流、状态恢复、记忆和人工审批机制。
 - 真实模型调用、长篇质量和运行成本取决于所选模型与配置；仓库测试默认不调用真实 LLM。
-- 旧版 Chainlit 入口和部分兼容字段仍保留，但 Web UI 是推荐入口。
+- 部分历史兼容字段仍保留，但 Web UI 是推荐入口。
 - 仓库不包含个人运行数据、数据库、checkpoint 或 API 密钥；请从 `.env.example` 创建本地配置。
