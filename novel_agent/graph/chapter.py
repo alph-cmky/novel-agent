@@ -616,6 +616,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "continuity": current_scores["continuity_overall"],
             "composite": composite_score(current_scores),
             "dimensions": current_scores["dimensions"],
+            "style_structure_score": current_scores.get("style_structure_score", 100),
             "delta": None,
             "focus": None,
             "quality_guard": initial_guard,
@@ -674,6 +675,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "editor_overall": previous["editor"],
         "continuity_overall": previous["continuity"],
         "dimensions": previous.get("dimensions", {}),
+        "style_structure_score": previous.get("style_structure_score", 100),
     }
     delta = compute_delta(current_scores, previous_scores)
 
@@ -700,6 +702,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         {
             "editor_report": best_ed_rpt,
             "continuity_report": best_ct_rpt,
+            "style_report": best_snapshot.get("style_report", {}),
         }
     )
     best_state = {
@@ -710,6 +713,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "outline_coverage": best_snapshot.get("outline_coverage"),
         "required_facts_missing": best_snapshot.get("required_facts_missing", 0),
         "quality_gate_report": best_snapshot.get("quality_gate_report", {}),
+        "style_report": best_snapshot.get("style_report", {}),
     }
     guard_report = check_quality_guards(state, best_state, evo_config)
     current_candidate["quality_guard_report"] = guard_report
@@ -756,6 +760,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "continuity": current_scores["continuity_overall"],
         "composite": composite_score(current_scores),
         "dimensions": current_scores["dimensions"],
+        "style_structure_score": current_scores.get("style_structure_score", 100),
         "delta": delta,
         "focus": plan.get("focus_dimensions", []) if plan else [],
         "quality_guard": guard_report,

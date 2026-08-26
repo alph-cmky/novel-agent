@@ -34,6 +34,7 @@ def _state(**overrides) -> dict:
                     "logic": 70,
                     "writing": 70,
                 },
+                "style_structure_score": 70,
                 "delta": None,
                 "focus": None,
             }
@@ -49,6 +50,10 @@ def _state(**overrides) -> dict:
             },
         },
         "continuity_report": {"overall_score": 80},
+        "style_report": {
+            "style_gate": "PASS",
+            "paragraph_structure_score": 90,
+        },
         "evolution_candidates": [
             {
                 "version": 1,
@@ -58,6 +63,10 @@ def _state(**overrides) -> dict:
                     "dimensions": {"rhythm": 100},
                 },
                 "continuity_report": {"overall_score": 80},
+                "style_report": {
+                    "style_gate": "PASS",
+                    "paragraph_structure_score": 60,
+                },
             }
         ],
         "evolution_best_candidate_version": 1,
@@ -80,11 +89,12 @@ def _run(state: dict) -> dict:
 
 class TestBestScoresZeroFill:
     def test_missing_best_dimensions_zero_filled(self):
-        """best dims 只有 1 维时，补零后 dims_avg 分母仍为 5。
+        """best dims 只有 1 维时，补零后 dim_deltas 仍为 5 维。
 
-        current composite = 80（5 维全 80）。
-        修复后 best composite = 80*0.5 + 80*0.3 + (100/5)*0.2 = 68 < 80 → 更新 best。
-        修复前 best composite = 80*0.5 + 80*0.3 + (100/1)*0.2 = 84 > 80 → 误判为不更新。
+        新公式 composite 用 style_structure_score（独立来源），不再依赖 dims_avg。
+        current: editor=80, cont=80, style=90 → composite = 82
+        best:    editor=80, cont=80, style=60 → composite = 76
+        82 > 76 → 更新 best。
         """
         result = _run(_state())
         assert result["evolution_best_candidate_version"] == 2
@@ -108,12 +118,16 @@ class TestBestScoresZeroFill:
                         },
                     },
                     "continuity_report": {"overall_score": 60},
+                    "style_report": {
+                        "style_gate": "PASS",
+                        "paragraph_structure_score": 60,
+                    },
                 }
             ],
             evolution_best_candidate_version=1,
         )
         result = _run(state)
-        # best composite = 60 < 80 → 仍更新 best
+        # best composite = 60*0.5 + 60*0.3 + 60*0.2 = 60 < 82 → 仍更新 best
         assert result["evolution_best_candidate_version"] == 2
 
 

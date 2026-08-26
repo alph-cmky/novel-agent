@@ -112,8 +112,8 @@ class TestCompositeScore:
                 "logic": 80,
                 "writing": 75,
             },
+            "style_structure_score": 77,
         }
-        # dims_avg = (75+70+85+80+75)/5 = 77
         # composite = 80*0.5 + 90*0.3 + 77*0.2 = 40 + 27 + 15.4 = 82.4
         result = composite_score(scores)
         assert result == 82.4
@@ -130,6 +130,7 @@ class TestCompositeScore:
                 "logic": 80,
                 "writing": 75,
             },
+            "style_structure_score": 77,
         }
         # 80*0.6 + 90*0.2 + 77*0.2 = 48 + 18 + 15.4 = 81.4
         result = composite_score(scores, cfg)
@@ -140,10 +141,22 @@ class TestCompositeScore:
             "editor_overall": 70,
             "continuity_overall": 75,
             "dimensions": {},
+            "style_structure_score": 0,
         }
         result = composite_score(scores)
-        # dims_avg = 0/1 = 0, composite = 70*0.5 + 75*0.3 + 0*0.2 = 57.5
+        # composite = 70*0.5 + 75*0.3 + 0*0.2 = 57.5
         assert result == 57.5
+
+    def test_style_structure_defaults_to_100_when_missing(self):
+        """Missing style_structure_score defaults to 100 (neutral)."""
+        scores = {
+            "editor_overall": 80,
+            "continuity_overall": 90,
+            "dimensions": {},
+        }
+        # 80*0.5 + 90*0.3 + 100*0.2 = 40 + 27 + 20 = 87
+        result = composite_score(scores)
+        assert result == 87.0
 
 
 class TestComputeDelta:
@@ -405,6 +418,45 @@ class TestBuildImprovementPlan:
         plan = build_improvement_plan_rule(current, delta=delta)
         assert "rhythm" in plan["focus_dimensions"]  # regressed
 
+    def test_preserve_improved_dimensions(self):
+        """Dimensions that improved >+3 should be in preserve."""
+        current = self._scores(rhythm=68, ai_flavor=80)
+        delta = {
+            "editor": 5,
+            "continuity": 2,
+            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
+            "trend": "mixed",
+        }
+        plan = build_improvement_plan_rule(current, delta=delta)
+        assert "ai_flavor" in plan["constraints"]["preserve"]  # improved +10
+
+    def test_style_gate_fail_injects_structure_instructions(self):
+        """style_gate=FAIL → secondary_instructions must include fragmentation guidance."""
+        scores = self._scores()
+        scores["style_gate"] = "FAIL"
+        scores["style_structure_score"] = 30
+        plan = build_improvement_plan_rule(scores, delta=None)
+        assert any("碎片化" in s for s in plan["secondary_instructions"])
+        assert any("一句一段" in s for s in plan["constraints"]["avoid"])
+
+    def test_style_gate_warning_injects_soft_guidance(self):
+        """style_gate=WARNING → softer structure instruction, no FAIL-level avoid."""
+        scores = self._scores()
+        scores["style_gate"] = "WARNING"
+        scores["style_structure_score"] = 60
+        plan = build_improvement_plan_rule(scores, delta=None)
+        assert any("偏碎" in s for s in plan["secondary_instructions"])
+        assert any("单句独立成段" in s for s in plan["constraints"]["avoid"])
+
+    def test_style_gate_pass_no_style_instructions(self):
+        """style_gate=PASS → no style-structure instructions injected."""
+        scores = self._scores()
+        scores["style_gate"] = "PASS"
+        scores["style_structure_score"] = 95
+        plan = build_improvement_plan_rule(scores, delta=None)
+        assert not any("碎片化" in s for s in plan["secondary_instructions"])
+        assert not any("偏碎" in s for s in plan["secondary_instructions"])
+
 
 def _candidate_state(content: str, *, critical: int = 0, outline: float = 1.0):
     return {
@@ -452,6 +504,47 @@ def test_better_candidate_requires_guards_before_composite():
     assert report["passed"] is False
 
 
+def test_quality_guard_rejects_style_gate_fail():
+    """style_gate=FAIL is a hard violation — candidate must not replace a PASS best."""
+    best = _candidate_state("x" * 100)
+    best["style_report"] = {"style_gate": "PASS", "paragraph_structure_score": 90}
+
+    current = _candidate_state("x" * 100)
+    current["style_report"] = {"style_gate": "FAIL", "paragraph_structure_score": 20}
+
+    report = check_quality_guards(current, best)
+    assert report["passed"] is False
+    assert "style_gate_fail" in report["violations"]
+
+
+def test_quality_guard_passes_with_style_gate_warning():
+    """style_gate=WARNING is not a hard violation — only FAIL blocks."""
+    best = _candidate_state("x" * 100)
+    best["style_report"] = {"style_gate": "PASS", "paragraph_structure_score": 90}
+
+    current = _candidate_state("x" * 100)
+    current["style_report"] = {"style_gate": "WARNING", "paragraph_structure_score": 60}
+
+    report = check_quality_guards(current, best)
+    assert report["passed"] is True
+    assert "style_gate_fail" not in report["violations"]
+
+
+def test_is_better_candidate_rejects_style_gate_fail_even_with_higher_score():
+    """Even if editor/continuity are higher, style_gate=FAIL blocks replacement."""
+    best = _candidate_state("x" * 100)
+    best["editor_report"]["overall_score"] = 70
+    best["style_report"] = {"style_gate": "PASS", "paragraph_structure_score": 90}
+
+    current = _candidate_state("x" * 100)
+    current["editor_report"]["overall_score"] = 95  # higher than best
+    current["style_report"] = {"style_gate": "FAIL", "paragraph_structure_score": 20}
+
+    accepted, report = is_better_candidate(current, best)
+    assert accepted is False
+    assert "style_gate_fail" in report["violations"]
+
+
 def test_evolution_service_returns_stop_decision_without_changing_reason():
     helper = TestDecideTermination()
     decision = EvolutionService.evaluate(
@@ -480,15 +573,3 @@ def test_evolution_service_returns_continue_decision_with_empty_termination():
 
     assert decision.action is EvolutionAction.CONTINUE
     assert decision.reason == ""
-
-    def test_preserve_improved_dimensions(self):
-        """Dimensions that improved >+3 should be in preserve."""
-        current = self._scores(rhythm=68, ai_flavor=80)
-        delta = {
-            "editor": 5,
-            "continuity": 2,
-            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
-            "trend": "mixed",
-        }
-        plan = build_improvement_plan_rule(current, delta=delta)
-        assert "ai_flavor" in plan["constraints"]["preserve"]  # improved +10

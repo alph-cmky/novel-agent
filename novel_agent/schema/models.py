@@ -172,6 +172,7 @@ class EvolutionCandidate(TypedDict, total=False):
     worldbuilding_report: dict[str, Any]
     quality_guard_report: dict[str, Any]
     quality_gate_report: dict[str, Any]
+    style_report: dict[str, Any]
     outline_coverage: float | None
     required_facts_missing: int
     scores: dict[str, Any]

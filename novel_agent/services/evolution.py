@@ -96,6 +96,8 @@ def extract_scores(state: dict) -> dict:
             "editor_overall": int,
             "continuity_overall": int,
             "dimensions": {"rhythm": int, "ai_flavor": int, ...},
+            "style_structure_score": float,  # deterministic, 0 LLM
+            "style_gate": str,               # PASS / WARNING / FAIL
         }
     """
     editor = state.get("editor_report") or {}
@@ -103,29 +105,49 @@ def extract_scores(state: dict) -> dict:
 
     editor_score = editor_overall(editor, continuity)
 
+    # Deterministic style score from StyleAnalyzer (0 LLM) — replaces
+    # dims_avg in composite_score to avoid same-source double-counting.
+    style_report = state.get("style_report") or {}
+    style_structure_score = style_report.get("paragraph_structure_score", 100)
+    if not isinstance(style_structure_score, (int, float)):
+        style_structure_score = 100
+    style_gate_str = style_report.get("style_gate", "PASS")
+    if not isinstance(style_gate_str, str) or style_gate_str not in (
+        "PASS",
+        "WARNING",
+        "FAIL",
+    ):
+        style_gate_str = "PASS"
+
     return {
         "editor_overall": editor_score,
         "continuity_overall": continuity_overall(editor, continuity),
         "dimensions": _neutralized_dimensions(editor, editor_score),
         "editor_unavailable": bool(editor.get("unavailable")),
+        "style_structure_score": float(style_structure_score),
+        "style_gate": style_gate_str,
     }
 
 
 def composite_score(scores: dict, config: EvolutionConfig | None = None) -> float:
-    """Compute composite score from structured scores.
+    """Compute composite score from three independent sources.
 
-    Formula: editor * w_e + continuity * w_c + dims_avg * w_d
+    Formula: editor * w_e + continuity * w_c + style_structure * w_d
+
+    Each term comes from a different source (no same-source double-count):
+    - editor: LLM literary judgment
+    - continuity: LLM consistency judgment
+    - style_structure: deterministic StyleAnalyzer (0 LLM)
     """
     cfg = config or DEFAULT_EVO_CONFIG
     editor = scores.get("editor_overall", 0)
     continuity = scores.get("continuity_overall", 0)
-    dims = scores.get("dimensions", {})
-    dims_avg = sum(dims.values()) / max(len(dims), 1)
+    style_structure = scores.get("style_structure_score", 100)
 
     return round(
         editor * cfg.editor_weight
         + continuity * cfg.continuity_weight
-        + dims_avg * cfg.dimensions_weight,
+        + style_structure * cfg.dimensions_weight,
         1,
     )
 
@@ -160,6 +182,15 @@ def build_quality_guard_report(state: dict, best_state: dict | None = None) -> d
     for severity, count in best_conflicts.items():
         best_errors[severity] += count
 
+    # Deterministic style gate from StyleAnalyzer — structural linter, 0 LLM.
+    # FAIL means severe fragmentation (consecutive short paragraphs, excessive
+    # single-sentence paragraphs).  This is a hard constraint: a candidate with
+    # FAIL should not replace a PASS candidate even if the Editor score is higher.
+    current_style_report = state.get("style_report") or {}
+    best_style_report = (best_state or {}).get("style_report") or {}
+    current_style_gate = current_style_report.get("style_gate", "PASS")
+    best_style_gate = best_style_report.get("style_gate", "PASS")
+
     outline_coverage = state.get("outline_coverage")
     if outline_coverage is None:
         outline_coverage = (state.get("editor_report") or {}).get("outline_coverage")
@@ -181,6 +212,8 @@ def build_quality_guard_report(state: dict, best_state: dict | None = None) -> d
         "best_required_facts_missing": (best_state or {}).get("required_facts_missing", 0),
         "quality_gate": state.get("quality_gate_report") or {},
         "best_quality_gate": (best_state or {}).get("quality_gate_report") or {},
+        "style_gate": current_style_gate,
+        "best_style_gate": best_style_gate,
     }
 
 
@@ -215,6 +248,9 @@ def check_quality_guards(
         violations.append("outline_regression")
     if report["required_facts_missing"] > report["best_required_facts_missing"]:
         violations.append("required_facts_regression")
+    # Deterministic style gate — FAIL is a hard violation (severe fragmentation).
+    if report.get("style_gate") == "FAIL":
+        violations.append("style_gate_fail")
     return {"passed": not violations, "violations": violations, **report}
 
 
@@ -490,6 +526,19 @@ def build_improvement_plan_rule(
         secondary = _dim_suggestions(focus)
         avoid = _avoid_patterns(focus, dim_deltas)
 
+    # ── Style structure targeting (deterministic, from StyleAnalyzer) ──
+    # style_gate and style_structure_score come from extract_scores which
+    # reads style_report from graph state.  When the StyleAnalyzer detects
+    # paragraph fragmentation, inject targeted instructions so the Writer
+    # knows to fix structure, not just editor dimensions.
+    style_gate_val = current_scores.get("style_gate", "PASS")
+    style_score = current_scores.get("style_structure_score", 100)
+    style_instructions, style_avoid = _style_targeting(style_gate_val, style_score)
+    if style_instructions:
+        secondary = style_instructions + secondary
+    if style_avoid:
+        avoid = style_avoid + avoid
+
     return {
         "focus_dimensions": focus,
         "primary_instruction": primary,
@@ -500,6 +549,29 @@ def build_improvement_plan_rule(
             "strategy_override": {},
         },
     }
+
+
+def _style_targeting(style_gate_val: str, style_score: float) -> tuple[list[str], list[str]]:
+    """Generate style-structure instructions based on deterministic signals.
+
+    Returns (instructions, avoid_patterns) — empty lists when style is healthy.
+    These target paragraph fragmentation, NOT literary quality (Editor's job).
+    """
+    instructions: list[str] = []
+    avoid: list[str] = []
+
+    if style_gate_val == "FAIL" or style_score < 50:
+        instructions.append(
+            "段落结构严重碎片化：合并单句叙述段为完整段落，消除连续短段，"
+            "扩展叙述段至 40 字以上。对白段不计入此要求。"
+        )
+        avoid.append("一句一段（单句独立成段）")
+        avoid.append("连续多个短叙述段堆叠")
+    elif style_gate_val == "WARNING" or style_score < 70:
+        instructions.append("段落结构偏碎：注意合并过短的叙述段，避免连续短叙述段。")
+        avoid.append("不必要的单句独立成段")
+
+    return instructions, avoid
 
 
 def _dim_label(dim: str) -> str:
@@ -573,6 +645,7 @@ def candidate_from_state(
         "worldbuilding_report": state.get("worldbuilding_report", {}) or {},
         "quality_guard_report": quality_guard_report or {},
         "quality_gate_report": state.get("quality_gate_report", {}) or {},
+        "style_report": state.get("style_report", {}) or {},
         "outline_coverage": state.get("outline_coverage"),
         "required_facts_missing": state.get("required_facts_missing", 0),
         "scores": scores,
@@ -591,4 +664,5 @@ def candidate_to_state(candidate: EvolutionCandidate) -> dict[str, Any]:
         "outline_coverage": candidate.get("outline_coverage"),
         "required_facts_missing": candidate.get("required_facts_missing", 0),
         "quality_gate_report": candidate.get("quality_gate_report", {}) or {},
+        "style_report": candidate.get("style_report", {}) or {},
     }
