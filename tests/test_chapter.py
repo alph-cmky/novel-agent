@@ -146,6 +146,9 @@ class TestNarrativeExtension:
         write_content: str = "正" * 3000,
         extension_content: str = "",
         target_words: int = 3000,
+        model_calls: int = 2,
+        tool_call_counts: dict | None = None,
+        state_extra: dict | None = None,
     ) -> dict:
         """Run writer_node with mocked WriterAgent, return result dict."""
         mock_writer = MagicMock()
@@ -155,6 +158,8 @@ class TestNarrativeExtension:
         mock_writer.write_stream = MagicMock()
         mock_writer.narrative_extension = AsyncMock(return_value=extension_content)
         mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+        mock_writer.model_calls = model_calls
+        mock_writer.tool_call_counts = tool_call_counts or {}
 
         state = {
             "chapter_number": 1,
@@ -163,6 +168,8 @@ class TestNarrativeExtension:
             "persist_dir": "./novel-data",
             "project_id": "",
         }
+        if state_extra:
+            state.update(state_extra)
 
         with (
             patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
@@ -200,6 +207,8 @@ class TestNarrativeExtension:
         )
         mock_writer.narrative_extension = AsyncMock(return_value="不该出现")
         mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+        mock_writer.model_calls = 1
+        mock_writer.tool_call_counts = {}
 
         state = {
             "chapter_number": 1,
@@ -238,6 +247,29 @@ class TestNarrativeExtension:
         )
         assert "extension_failed" not in result["quality_gate_report"]
 
+    def test_extension_trigger_boundaries(self):
+        """Phase G: 触发边界 — 2999 触发 / 3000 不触发 / 3300 不触发。"""
+        from novel_agent.graph.chapter import _should_extend
+
+        assert _should_extend(1500, 3000) is True  # 半篇幅 → 续写
+        assert _should_extend(2999, 3000) is True  # 差 1 字 → 仍续写
+        assert _should_extend(3000, 3000) is False  # 达标 → 不续写
+        assert _should_extend(3300, 3000) is False  # 超标 → 不续写
+        assert _should_extend(5000, 3000) is False  # 大幅超标 → 不续写
+        # 目标过小（<1000）不启用 extension 机制
+        assert _should_extend(500, 800) is False
+
+    def test_over_target_content_never_truncated(self):
+        """Phase G: 超过 target（>115%）的内容不被强制截断。"""
+        over = "超" * 3600  # 3600/3000 = 120%
+        result = self._run_writer_with_mocks(
+            write_content=over,
+            extension_content="",
+            target_words=3000,
+        )
+        assert result["draft_content"] == over
+        assert "extension_failed" not in result["quality_gate_report"]
+
     def test_quality_gate_uses_half_target_not_85(self):
         """QualityService 硬性检查最低门槛从 0.85 改为 0.5。"""
         from novel_agent.services.quality import QualityService
@@ -257,6 +289,49 @@ class TestNarrativeExtension:
             chapter_outline="大纲",
         )
         assert "minimum_length" in report["violations"]
+
+
+class TestWriterCostCounters:
+    """Phase J: writer tool-loop 成本观测（不动 max_rounds，只计数）。
+
+    writer_model_calls / writer_tool_calls / writer_search_calls 从
+    WriterAgent 实例计数器累计到 state，跨进化轮次累加。
+    """
+
+    def test_counters_from_agent_instance(self):
+        """model=3, tools={search:2, other:1} → 3/3/2。"""
+        result = TestNarrativeExtension._run_writer_with_mocks(
+            model_calls=3,
+            tool_call_counts={"search_context": 2, "other_tool": 1},
+        )
+        assert result["writer_model_calls"] == 3
+        assert result["writer_tool_calls"] == 3
+        assert result["writer_search_calls"] == 2
+
+    def test_counters_zero_without_tool_use(self):
+        """无工具调用 → tool/search 计数为 0。"""
+        result = TestNarrativeExtension._run_writer_with_mocks(
+            model_calls=1,
+            tool_call_counts={},
+        )
+        assert result["writer_model_calls"] == 1
+        assert result["writer_tool_calls"] == 0
+        assert result["writer_search_calls"] == 0
+
+    def test_counters_accumulate_across_rounds(self):
+        """state 已有计数 → 本轮 agent 计数累加，不覆盖。"""
+        result = TestNarrativeExtension._run_writer_with_mocks(
+            model_calls=2,
+            tool_call_counts={"search_context": 1},
+            state_extra={
+                "writer_model_calls": 3,
+                "writer_tool_calls": 2,
+                "writer_search_calls": 1,
+            },
+        )
+        assert result["writer_model_calls"] == 5
+        assert result["writer_tool_calls"] == 3
+        assert result["writer_search_calls"] == 2
 
 
 class TestEvolutionContextMinimal:
@@ -299,9 +374,39 @@ class TestEvolutionContextMinimal:
             result, mock_agent = self._run_evo_first_round({"skip_evolution_enrichment": False})
         mock_agent.return_value.enrich_plan.assert_called_once()
 
+    def test_counters_zero_enrichment_normal_chapter(self):
+        """Phase I: 正常章节 rule plan 有 instruction → rule=1, enrichment=0。"""
+        result, _ = self._run_evo_first_round()
+        assert result["evolution_rule_plan_calls"] == 1
+        assert result["evolution_llm_enrichment_calls"] == 0
+
+    def test_counters_enrichment_counted_when_called(self):
+        """Phase I: rule plan 缺 instruction → enrichment 计 1 次。"""
+        from unittest.mock import patch as _patch
+
+        with _patch(
+            "novel_agent.graph.chapter.build_improvement_plan_rule",
+            return_value={"primary_instruction": "", "focus_dimensions": []},
+        ):
+            result, _ = self._run_evo_first_round({"skip_evolution_enrichment": False})
+        assert result["evolution_rule_plan_calls"] == 1
+        assert result["evolution_llm_enrichment_calls"] == 1
+
+    def test_counters_accumulate_across_rounds(self):
+        """Phase I: 计数器从 state 既有值累加，不覆盖。"""
+        result, _ = self._run_evo_first_round(
+            {"evolution_rule_plan_calls": 2, "evolution_llm_enrichment_calls": 1}
+        )
+        assert result["evolution_rule_plan_calls"] == 3
+        assert result["evolution_llm_enrichment_calls"] == 1
+
     @staticmethod
-    def test_enrichment_draft_preview_capped():
-        """enrich_plan 收到的 draft_preview 不超过 800 字。"""
+    def test_enrichment_receives_violations_not_draft():
+        """Phase H: enrich_plan 只收 violations，不收 draft_preview/正文。
+
+        Evolution 是元评估器——上下文仅限 scores/delta/violations/
+        improvement_plan，正文泄漏进 enrichment prompt 属于回归。
+        """
         from unittest.mock import patch as _patch
 
         long_draft = "草" * 5000
@@ -327,8 +432,9 @@ class TestEvolutionContextMinimal:
                 asyncio.run(evolution_orchestrator_node(state))
 
         call_kwargs = mock_agent.return_value.enrich_plan.call_args.kwargs
-        draft_preview = call_kwargs.get("draft_preview", "")
-        assert len(draft_preview) <= 800
+        assert "draft_preview" not in call_kwargs
+        assert "violations" in call_kwargs
+        assert isinstance(call_kwargs["violations"], list)
 
 
 class TestContextMinimality:

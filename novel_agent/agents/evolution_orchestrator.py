@@ -20,8 +20,9 @@ EVOLUTION_ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说质量元评估师�
 ## 改进指导原则
 
 - 每条指导必须具体可执行（"增加角色对话的个性化口头禅" 而非 "改进对话"）
-- 明确指出需要保持的优势维度（"你在节奏控制上做得很好，保持这种长短句交替的方式"）
-- 指出退步维度时给出具体原因（不是"文笔退步了"而是"在第3段开始出现过度描写的长句"）
+- 明确指出需要保持的优势维度（"节奏维度 +8 且已连续两轮上升，保持现状"）
+- 指出退步维度时给出具体原因（不是"文笔退步了"而是"文笔维度从 78 降至 64，是本轮最大跌幅"）
+- 你只会收到分数、Delta、违规项和规则层计划，不会看到正文本身——所有分析必须基于这些评估数据。
 
 ## 输出格式
 
@@ -68,9 +69,13 @@ class EvolutionOrchestratorAgent(BaseAgent):
         delta: dict | None,
         rule_plan: dict,
         history: list[dict],
-        draft_preview: str = "",
+        violations: list[str] | None = None,
     ) -> dict | None:
         """Enrich a rule-generated improvement plan with LLM natural language.
+
+        The LLM is a meta-evaluator: it only sees evaluation data (scores,
+        delta, guard violations, rule plan) — never the draft, canon, or full
+        history. Keeps enrichment prompts small and analysis data-driven.
 
         Args:
             current_version: Current version number (0-indexed).
@@ -78,7 +83,7 @@ class EvolutionOrchestratorAgent(BaseAgent):
             delta: From compute_delta(), or None for first round.
             rule_plan: Rule-generated plan from build_improvement_plan_rule().
             history: Previous evolution history entries.
-            draft_preview: First 800 chars of current draft for context.
+            violations: Quality-guard violations for the current version.
 
         Returns:
             Enriched plan dict, or None if LLM fails (caller falls back to rule_plan).
@@ -114,6 +119,10 @@ class EvolutionOrchestratorAgent(BaseAgent):
         rule_focus = rule_plan.get("focus_dimensions", [])
         rule_focus_text = ", ".join(self._dim_label(d) for d in rule_focus) if rule_focus else "无"
 
+        violations_text = "无"
+        if violations:
+            violations_text = "\n".join(f"- {v}" for v in violations)
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
@@ -124,11 +133,12 @@ class EvolutionOrchestratorAgent(BaseAgent):
                     f"各维度: {dim_summary}\n\n"
                     f"## 版本对比\n{delta_text}\n\n"
                     f"{history_text}\n\n"
+                    f"## 质量门违规\n{violations_text}\n\n"
                     f"## 规则层分析\n"
                     f"规则层建议聚焦维度：{rule_focus_text}\n"
                     f"规则层核心指令：{rule_plan.get('primary_instruction', '')}\n\n"
-                    f"## 当前草稿预览（前800字）\n{draft_preview[:800]}\n\n"
-                    f"请在规则层分析的基础上，生成更具体的自然语言改进指导。"
+                    f"请在规则层分析的基础上，基于以上分数、Delta 和违规数据，"
+                    f"生成更具体的自然语言改进指导。"
                     f"保持 focus_dimensions 与规则层一致，只丰富 instructions 和 constraints。"
                 ),
             },

@@ -70,3 +70,9 @@ class NovelState(TypedDict, total=False):
 
     # ── 可观测性 ──
     trace_id: str
+    # LLM 成本观测（按章节累计；正常章节 enrichment ≈ 0）
+    evolution_rule_plan_calls: int
+    evolution_llm_enrichment_calls: int
+    writer_model_calls: int
+    writer_tool_calls: int
+    writer_search_calls: int

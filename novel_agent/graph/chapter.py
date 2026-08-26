@@ -64,6 +64,15 @@ def _text_units(text: str) -> int:
     return len(re.findall(r"\b[\w']+\b", text))
 
 
+def _should_extend(content_units: int, target_words: int) -> bool:
+    """Narrative Extension trigger: below target and a meaningful target.
+
+    Over-target content (e.g. 3300/3000) never triggers extension and is
+    never force-truncated — a naturally longer chapter is accepted as-is.
+    """
+    return content_units < target_words and target_words >= 1000
+
+
 # ── Helpers ─────────────────────────────────────────────
 
 
@@ -377,7 +386,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
     extension_failed = False
-    if content_units < target_words and target_words >= 1000:
+    if _should_extend(content_units, target_words):
         gap = target_words - content_units
         print(
             f"  [Writer] 篇幅不足 ({content_units}/{target_words})，"
@@ -426,14 +435,20 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         quality_gate_report["passed"] = False
     if not quality_gate_report["passed"]:
         print("  [QualityGate] blocked: " + ", ".join(quality_gate_report["violations"]))
+    total_tool_calls = sum(writer.tool_call_counts.values())
+    search_calls = writer.tool_call_counts.get("search_context", 0)
     wmsg = f"  [Writer] {len(content)} chars/{_text_units(content)} units {label} "
-    wmsg += f"(target: {target_words}w, tokens: {tok_info})"
+    wmsg += f"(target: {target_words}w, tokens: {tok_info}, "
+    wmsg += f"cost: model={writer.model_calls}/tool={total_tool_calls}/search={search_calls})"
     print(wmsg)
     return {
         "draft_content": content,
         "evolution_round": state.get("evolution_round", 0),
         "quality_gate_report": quality_gate_report,
         "scene_drafts": scene_drafts,
+        "writer_model_calls": state.get("writer_model_calls", 0) + writer.model_calls,
+        "writer_tool_calls": state.get("writer_tool_calls", 0) + total_tool_calls,
+        "writer_search_calls": state.get("writer_search_calls", 0) + search_calls,
     }
 
 
@@ -549,7 +564,9 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         plan = rule_plan
         profile = ExecutionProfile.from_state(state)
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
+        enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
         if not rule_has_instruction and profile.should_enrich_evolution():
+            enrich_calls += 1
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -558,7 +575,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
                     delta=None,
                     rule_plan=rule_plan,
                     history=[],
-                    draft_preview=(state.get("draft_content") or "")[:800],
+                    violations=initial_guard.get("violations", []),
                 )
                 if enriched and enriched.get("primary_instruction"):
                     plan = enriched
@@ -581,6 +598,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "quality_guard_report": initial_guard,
             "evolution_improvement_plan": plan,
             "evolution_termination": "",
+            "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
+            "evolution_llm_enrichment_calls": enrich_calls,
         }
 
     # ── Branch B: Has history → Delta comparison ──
@@ -649,9 +668,11 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
     # 3. LLM enrichment — only when rule plan lacks primary_instruction
     plan = rule_plan
+    enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
     if not termination and ExecutionProfile.from_state(state).should_enrich_evolution():
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
         if not rule_has_instruction:
+            enrich_calls += 1
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -660,7 +681,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
                     delta=delta,
                     rule_plan=rule_plan,
                     history=state["evolution_history"],
-                    draft_preview=(state.get("draft_content") or "")[:800],
+                    violations=guard_report.get("violations", []),
                 )
                 if enriched and enriched.get("primary_instruction"):
                     plan = enriched
@@ -685,6 +706,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "evolution_candidates": candidates + [current_candidate],
         "evolution_termination": termination,
         "quality_guard_report": guard_report,
+        "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
+        "evolution_llm_enrichment_calls": enrich_calls,
     }
 
     # 5. Check if new best version
@@ -715,7 +738,9 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     status = f"终止:{termination}" if termination else "继续"
     print(
         f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
-        f"Δ={delta['trend']} best=v{best_v} {status}"
+        f"Δ={delta['trend']} best=v{best_v} {status} "
+        f"(cost: rule_plans={result['evolution_rule_plan_calls']} "
+        f"enrichments={enrich_calls})"
     )
 
     return result
@@ -757,6 +782,8 @@ async def worldbuilding_node(state: NovelState) -> dict:
 
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
+    chapter_number = state.get("chapter_number", 1)
+    draft = state.get("draft_content", "")
     existing: list[dict] = []
     existing_fs: list[dict] = []
     if project_id:
@@ -764,8 +791,11 @@ async def worldbuilding_node(state: NovelState) -> dict:
             from novel_agent.storage.manager import ProjectManager
 
             mgr = ProjectManager(persist_dir)
-            existing = mgr.get_all_world_entities(project_id)
-            existing_fs = mgr.get_foreshadowings(project_id)
+            # Task-aware retrieval (Phase L): conflict detection only needs
+            # entities this chapter references; full-table reads grow the
+            # extraction prompt unbounded on long projects.
+            existing = mgr.get_relevant_world_entities(project_id, draft)
+            existing_fs = mgr.get_relevant_foreshadowings(project_id, chapter_number)
         except Exception as exc:
             print(f"  [Worldbuilding] 加载实体/伏笔失败，跳过: {exc}")
 
@@ -775,8 +805,8 @@ async def worldbuilding_node(state: NovelState) -> dict:
         existing_foreshadowings=existing_fs,
     )
     report, _ = await wb.extract(
-        chapter_number=state.get("chapter_number", 1),
-        draft_content=state.get("draft_content", ""),
+        chapter_number=chapter_number,
+        draft_content=draft,
         narrative_mode=state.get("narrative_mode"),
     )
     entities = len(report.get("new_entities", []))

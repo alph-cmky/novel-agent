@@ -130,9 +130,7 @@ class WriterAgent(BaseAgent):
         unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
         timeline_events = packet.get("timeline_events", [])
         timeline_findings = packet.get("timeline_findings", [])
-        messages = [
-            {"role": "system", "content": self._build_system_prompt(target_chapter_words)}
-        ]
+        messages = [{"role": "system", "content": self._build_system_prompt(target_chapter_words)}]
 
         # Assemble context
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]

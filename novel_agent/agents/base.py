@@ -167,7 +167,12 @@ def _warn_undeclared_reasoning(config: AgentConfig, reasoning_content: str) -> N
 
 
 class BaseAgent:
-    """Base agent with model calling, tool execution, and trace recording."""
+    """Base agent with model calling, tool execution, and trace recording.
+
+    Instance-level cost counters (model_calls / tool_call_counts) accumulate
+    across every LLM request and tool execution on this agent instance —
+    callers read them after a run to observe per-node LLM cost.
+    """
 
     name: str = "base"
 
@@ -175,6 +180,8 @@ class BaseAgent:
         self.config = config or AgentConfig()
         self._tools: dict[str, BaseTool] = {}
         self._latest_trace: TraceStep | None = None
+        self.model_calls = 0
+        self.tool_call_counts: dict[str, int] = {}
 
     @property
     def system_prompt(self) -> str:
@@ -221,6 +228,7 @@ class BaseAgent:
         # step-3.7-flash 等模型偶发返回空 content（无 tool_calls），重试最多 3 次
         response: AIMessage | None = None
         for _ in range(3):
+            self.model_calls += 1
             response = await bound.ainvoke(lc_messages, config=config)
             if response.content or getattr(response, "tool_calls", None):
                 break
@@ -266,6 +274,7 @@ class BaseAgent:
         if lf_handler:
             config["callbacks"] = [lf_handler]
 
+        self.model_calls += 1
         async for chunk in model.astream(lc_messages, config=config):
             usage = getattr(chunk, "usage_metadata", None)
             if usage:
@@ -317,6 +326,8 @@ class BaseAgent:
                     }
                 )
                 continue
+
+            self.tool_call_counts[tool_name] = self.tool_call_counts.get(tool_name, 0) + 1
 
             if isinstance(tool_args, str):
                 try:

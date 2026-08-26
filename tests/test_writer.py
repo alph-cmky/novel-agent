@@ -166,9 +166,7 @@ class TestWriterTargetWordsInjection:
         with patch.object(
             writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
         ) as mocked:
-            asyncio.run(
-                writer.write(chapter_number=1, outline="大纲", target_chapter_words=5000)
-            )
+            asyncio.run(writer.write(chapter_number=1, outline="大纲", target_chapter_words=5000))
         system = mocked.call_args.args[0][0]["content"]
         assert "目标篇幅：5000 字左右" in system
         assert "3000" not in system
