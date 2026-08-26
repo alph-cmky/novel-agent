@@ -89,6 +89,35 @@ class TestValidInput:
         assert len(result.data.new_entities) == 1
 
 
+class TestOptionalFieldDefaults:
+    """Output Default 收敛：未要求的可选字段 → None，不再以 {}/[] 形式出现。"""
+
+    def test_missing_ending_type_is_none(self):
+        result = parse_validated("orchestrator", '{"chapter_strategy": {"pacing": "fast"}}')
+        assert result["chapter_strategy"].get("ending_type") is None
+
+    def test_missing_optional_mode_fields_are_none(self):
+        """缺省的 character_emotional_state / foreshadowing_management → None。"""
+        result = parse_validated("orchestrator", '{"chapter_strategy": {"pacing": "fast"}}')
+        cs = result["chapter_strategy"]
+        assert cs.get("character_emotional_state") is None
+        assert cs.get("foreshadowing_management") is None
+        assert cs.get("tension_profile") is None
+        assert cs.get("scene_composition") is None
+
+    def test_explicit_optional_values_pass_through(self):
+        raw = (
+            '{"chapter_strategy": {"pacing": "fast", '
+            '"character_emotional_state": '
+            '{"林风": {"mood": "焦躁", "trigger": "", "intensity": 7}}, '
+            '"foreshadowing_management": [{"description": "信物", "risk_level": "high"}]}}'
+        )
+        result = parse_validated("orchestrator", raw)
+        cs = result["chapter_strategy"]
+        assert cs["character_emotional_state"]["林风"]["mood"] == "焦躁"
+        assert cs["foreshadowing_management"][0]["risk_level"] == "high"
+
+
 class TestCoercion:
     def test_list_fields_coerced(self):
         raw = {

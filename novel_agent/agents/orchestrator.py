@@ -193,9 +193,6 @@ class OrchestratorAgent(BaseAgent):
                     "ending_tone": None,
                     "storyline_intersection": None,
                     "character_arcs": [],
-                    "character_emotional_state": {},
-                    "tension_profile": None,
-                    "foreshadowing_management": [],
                     "scene_composition": None,
                 },
                 "context_needed": {

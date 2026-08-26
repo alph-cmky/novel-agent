@@ -46,9 +46,11 @@ class ChapterStrategy(BaseModel):
 
     # ── Phase 3: Character + Experience layer ──
     character_arcs: list[dict] = Field(default_factory=list)
-    character_emotional_state: dict = Field(default_factory=dict)
+    # Optional-mode fields default to None so "not requested" stays
+    # distinguishable from "model explicitly emitted an empty value".
+    character_emotional_state: dict | None = None
     tension_profile: dict | None = None
-    foreshadowing_management: list[dict] = Field(default_factory=list)
+    foreshadowing_management: list[dict] | None = None
     scene_composition: dict | None = None
 
 
