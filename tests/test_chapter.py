@@ -160,6 +160,10 @@ class TestNarrativeExtension:
         mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
         mock_writer.model_calls = model_calls
         mock_writer.tool_call_counts = tool_call_counts or {}
+        mock_writer.input_tokens = 1000
+        mock_writer.output_tokens = 500
+        mock_writer.cached_tokens = 200
+        mock_writer.reasoning_tokens = 50
 
         state = {
             "chapter_number": 1,
@@ -209,6 +213,10 @@ class TestNarrativeExtension:
         mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
         mock_writer.model_calls = 1
         mock_writer.tool_call_counts = {}
+        mock_writer.input_tokens = 1000
+        mock_writer.output_tokens = 500
+        mock_writer.cached_tokens = 200
+        mock_writer.reasoning_tokens = 50
 
         state = {
             "chapter_number": 1,
@@ -252,9 +260,11 @@ class TestNarrativeExtension:
         from novel_agent.graph.chapter import _should_extend
 
         assert _should_extend(1500, 3000) is True  # 半篇幅 → 续写
+        assert _should_extend(2500, 3000) is True  # 明显不足 → 续写
         assert _should_extend(2999, 3000) is True  # 差 1 字 → 仍续写
         assert _should_extend(3000, 3000) is False  # 达标 → 不续写
         assert _should_extend(3300, 3000) is False  # 超标 → 不续写
+        assert _should_extend(3450, 3000) is False  # 超标 → 不续写
         assert _should_extend(5000, 3000) is False  # 大幅超标 → 不续写
         # 目标过小（<1000）不启用 extension 机制
         assert _should_extend(500, 800) is False
@@ -332,6 +342,29 @@ class TestWriterCostCounters:
         assert result["writer_model_calls"] == 5
         assert result["writer_tool_calls"] == 3
         assert result["writer_search_calls"] == 2
+
+    def test_token_usage_from_agent_instance(self):
+        """Phase 7: 四类 token 从实例计数器写入 state。"""
+        result = TestNarrativeExtension._run_writer_with_mocks()
+        assert result["writer_input_tokens"] == 1000
+        assert result["writer_output_tokens"] == 500
+        assert result["writer_cached_tokens"] == 200
+        assert result["writer_reasoning_tokens"] == 50
+
+    def test_token_usage_accumulates_across_rounds(self):
+        """跨进化轮次 token 累加，不覆盖。"""
+        result = TestNarrativeExtension._run_writer_with_mocks(
+            state_extra={
+                "writer_input_tokens": 100,
+                "writer_output_tokens": 50,
+                "writer_cached_tokens": 20,
+                "writer_reasoning_tokens": 5,
+            },
+        )
+        assert result["writer_input_tokens"] == 1100
+        assert result["writer_output_tokens"] == 550
+        assert result["writer_cached_tokens"] == 220
+        assert result["writer_reasoning_tokens"] == 55
 
 
 class TestEvolutionContextMinimal:
@@ -488,7 +521,11 @@ class TestContextMinimality:
             patch("novel_agent.graph.chapter.OrchestratorAgent") as mock_cls,
         ):
             mock_cls.return_value.analyze = _mock_analyze
-            asyncio.run(orchestrator_node(state))
+            mock_cls.return_value.input_tokens = 3000
+            mock_cls.return_value.output_tokens = 800
+            mock_cls.return_value.cached_tokens = 100
+            mock_cls.return_value.reasoning_tokens = 0
+            result = asyncio.run(orchestrator_node(state))
 
         packet = captured["context_packet"]
         # for_orchestrator: world 1/4 预算、伏笔 ≤10、事件 ≤8
@@ -496,6 +533,11 @@ class TestContextMinimality:
         assert len(packet["character_context"]) <= 4000 // 2 + 30
         assert len(packet["unresolved_foreshadowings"]) <= 10
         assert len(packet["timeline_events"]) <= 8
+        # Phase 7: token 观测写入 state
+        assert result["orchestrator_input_tokens"] == 3000
+        assert result["orchestrator_output_tokens"] == 800
+        assert result["orchestrator_cached_tokens"] == 100
+        assert result["orchestrator_reasoning_tokens"] == 0
 
     def test_editor_node_passes_style_report_and_minimal_context(self):
         """Editor receives StyleReport + for_editor projection, not full packet."""
@@ -512,7 +554,11 @@ class TestContextMinimality:
             patch("novel_agent.graph.chapter.EditorAgent") as mock_editor_cls,
         ):
             mock_editor_cls.return_value.review = _mock_review
-            asyncio.run(editor_node(self._editor_state()))
+            mock_editor_cls.return_value.input_tokens = 2000
+            mock_editor_cls.return_value.output_tokens = 300
+            mock_editor_cls.return_value.cached_tokens = 0
+            mock_editor_cls.return_value.reasoning_tokens = 0
+            result = asyncio.run(editor_node(self._editor_state()))
 
         # style_report must be present (deterministic, 0 LLM)
         assert "style_report" in captured
@@ -526,6 +572,10 @@ class TestContextMinimality:
         assert "timeline_events" not in ctx
         assert len(ctx.get("unresolved_foreshadowings", [])) <= 3
 
+        # Phase 7: token 观测写入 state
+        assert result["editor_input_tokens"] == 2000
+        assert result["editor_output_tokens"] == 300
+
     def test_editor_node_returns_style_report_in_state(self):
         """editor_node output includes style_report for Evolution consumption."""
         from novel_agent.graph.chapter import editor_node
@@ -537,11 +587,36 @@ class TestContextMinimality:
             mock_editor_cls.return_value.review = AsyncMock(
                 return_value=({"overall_score": 80, "verdict": "pass"}, MagicMock())
             )
+            mock_editor_cls.return_value.input_tokens = 0
+            mock_editor_cls.return_value.output_tokens = 0
+            mock_editor_cls.return_value.cached_tokens = 0
+            mock_editor_cls.return_value.reasoning_tokens = 0
             result = asyncio.run(editor_node(self._editor_state()))
 
         assert "style_report" in result
         assert result["style_report"]
         assert "style_gate" in result["style_report"]
+
+    def test_editor_node_unavailable_still_records_tokens(self):
+        """unavailable 早退分支同样回写 token（重试消耗不丢失）。"""
+        from novel_agent.graph.chapter import editor_node
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter.EditorAgent") as mock_editor_cls,
+        ):
+            mock_editor_cls.return_value.review = AsyncMock(
+                return_value=({"unavailable": True}, MagicMock())
+            )
+            mock_editor_cls.return_value.input_tokens = 600
+            mock_editor_cls.return_value.output_tokens = 0
+            mock_editor_cls.return_value.cached_tokens = 0
+            mock_editor_cls.return_value.reasoning_tokens = 0
+            result = asyncio.run(editor_node(self._editor_state()))
+
+        assert result["editor_report"].get("unavailable") is True
+        assert result["editor_input_tokens"] == 600
+        assert result["editor_output_tokens"] == 0
 
     @staticmethod
     def _continuity_state(**overrides) -> dict:

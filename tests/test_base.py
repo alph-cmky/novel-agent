@@ -4,8 +4,14 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, AIMessageChunk
 
-from novel_agent.agents.base import AgentConfig, BaseAgent, build_chat_model
+from novel_agent.agents.base import (
+    AgentConfig,
+    BaseAgent,
+    _extract_token_usage,
+    build_chat_model,
+)
 
 
 class TestAgentConfigIsReasoning:
@@ -115,3 +121,104 @@ class TestCostCounters:
         assert content == "正文"
         assert agent.model_calls == 2
         assert agent.tool_call_counts == {"search_context": 1}
+
+
+class TestTokenUsage:
+    """Phase 7: 真实 token 观测 — provider usage 提取 + 实例级累计（重试含）。"""
+
+    @staticmethod
+    def _agent() -> _StubAgent:
+        return _StubAgent(AgentConfig(model="gpt-4o", api_key="k"))
+
+    def test_extract_prefers_usage_metadata(self):
+        msg = AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_token_details": {"cache_read": 80},
+                "output_token_details": {"reasoning": 20},
+            },
+        )
+        assert _extract_token_usage(msg) == (100, 50, 80, 20)
+
+    def test_extract_falls_back_to_response_metadata(self):
+        msg = AIMessage(
+            content="ok",
+            response_metadata={
+                "token_usage": {
+                    "prompt_tokens": 30,
+                    "completion_tokens": 10,
+                    "prompt_tokens_details": {"cached_tokens": 5},
+                    "completion_tokens_details": {"reasoning_tokens": 2},
+                }
+            },
+        )
+        assert _extract_token_usage(msg) == (30, 10, 5, 2)
+
+    def test_extract_zero_when_unreported(self):
+        assert _extract_token_usage(AIMessage(content="ok")) == (0, 0, 0, 0)
+
+    def test_call_model_accumulates_tokens_with_retries(self):
+        """空输出重试的每次请求都计入累计，不只是最终那次。"""
+        agent = self._agent()
+        empty = AIMessage(content="")
+        ok = AIMessage(
+            content="ok",
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_token_details": {"cache_read": 4},
+                "output_token_details": {"reasoning": 1},
+            },
+        )
+        fake_model = MagicMock()
+        fake_model.ainvoke = AsyncMock(side_effect=[empty, ok])
+
+        with patch("novel_agent.agents.base.build_chat_model", return_value=fake_model):
+            resp = asyncio.run(agent.call_model([{"role": "user", "content": "x"}]))
+
+        assert resp.content == "ok"
+        assert agent.model_calls == 2
+        assert agent.input_tokens == 10
+        assert agent.output_tokens == 5
+        assert agent.cached_tokens == 4
+        assert agent.reasoning_tokens == 1
+
+    def test_call_model_stream_accumulates_tokens(self):
+        """流式路径从 usage_metadata 累计四类 token。"""
+        agent = self._agent()
+
+        async def _stream(*args, **kwargs):
+            yield AIMessageChunk(content="你")
+            yield AIMessageChunk(
+                content="好",
+                usage_metadata={
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "total_tokens": 10,
+                    "input_token_details": {"cache_read": 6},
+                    "output_token_details": {"reasoning": 2},
+                },
+            )
+
+        fake_model = MagicMock()
+        fake_model.astream = _stream
+
+        async def _collect():
+            out = []
+            async for chunk in agent.call_model_stream([{"role": "user", "content": "x"}]):
+                out.append(chunk)
+            return out
+
+        with patch("novel_agent.agents.base.build_chat_model", return_value=fake_model):
+            chunks = asyncio.run(_collect())
+
+        assert "".join(chunks) == "你好"
+        assert agent.model_calls == 1
+        assert agent.input_tokens == 7
+        assert agent.output_tokens == 3
+        assert agent.cached_tokens == 6
+        assert agent.reasoning_tokens == 2

@@ -166,12 +166,42 @@ def _warn_undeclared_reasoning(config: AgentConfig, reasoning_content: str) -> N
         )
 
 
+def _extract_token_usage(response: AIMessage) -> tuple[int, int, int, int]:
+    """Extract (input, output, cached, reasoning) tokens from a response.
+
+    Prefers LangChain ``usage_metadata``; falls back to OpenAI-style
+    ``response_metadata.token_usage`` for providers that only populate
+    that. cached/reasoning are 0 unless the provider exposes them.
+    """
+    um = getattr(response, "usage_metadata", None) or {}
+    if um.get("input_tokens") or um.get("output_tokens"):
+        in_details = um.get("input_token_details") or {}
+        out_details = um.get("output_token_details") or {}
+        return (
+            um.get("input_tokens", 0),
+            um.get("output_tokens", 0),
+            in_details.get("cache_read", 0),
+            out_details.get("reasoning", 0),
+        )
+    tu = (getattr(response, "response_metadata", None) or {}).get("token_usage") or {}
+    in_details = tu.get("prompt_tokens_details") or {}
+    out_details = tu.get("completion_tokens_details") or {}
+    return (
+        tu.get("prompt_tokens", 0),
+        tu.get("completion_tokens", 0),
+        in_details.get("cached_tokens", 0),
+        out_details.get("reasoning_tokens", 0),
+    )
+
+
 class BaseAgent:
     """Base agent with model calling, tool execution, and trace recording.
 
     Instance-level cost counters (model_calls / tool_call_counts) accumulate
     across every LLM request and tool execution on this agent instance —
-    callers read them after a run to observe per-node LLM cost.
+    callers read them after a run to observe per-node LLM cost. Token
+    counters (input/output/cached/reasoning) accumulate real provider
+    usage per request, retries included.
     """
 
     name: str = "base"
@@ -182,6 +212,10 @@ class BaseAgent:
         self._latest_trace: TraceStep | None = None
         self.model_calls = 0
         self.tool_call_counts: dict[str, int] = {}
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cached_tokens = 0
+        self.reasoning_tokens = 0
 
     @property
     def system_prompt(self) -> str:
@@ -230,6 +264,11 @@ class BaseAgent:
         for _ in range(3):
             self.model_calls += 1
             response = await bound.ainvoke(lc_messages, config=config)
+            in_tok, out_tok, cached_tok, reasoning_tok = _extract_token_usage(response)
+            self.input_tokens += in_tok
+            self.output_tokens += out_tok
+            self.cached_tokens += cached_tok
+            self.reasoning_tokens += reasoning_tok
             if response.content or getattr(response, "tool_calls", None):
                 break
         assert response is not None  # 循环至少执行一次
@@ -265,6 +304,8 @@ class BaseAgent:
         lc_messages = _to_langchain_messages(messages)
         total_input = 0
         total_output = 0
+        total_cached = 0
+        total_reasoning = 0
         reasoning_chars = 0
         warned = False
 
@@ -280,6 +321,10 @@ class BaseAgent:
             if usage:
                 total_input = usage.get("input_tokens", total_input)
                 total_output = usage.get("output_tokens", total_output)
+                in_details = usage.get("input_token_details") or {}
+                out_details = usage.get("output_token_details") or {}
+                total_cached = in_details.get("cache_read", total_cached)
+                total_reasoning = out_details.get("reasoning", total_reasoning)
 
             content = getattr(chunk, "content", "") or ""
             rc = getattr(chunk, "reasoning_content", "") or ""
@@ -293,6 +338,11 @@ class BaseAgent:
 
         if reasoning_chars > 0 and total_output == 0:
             total_output = reasoning_chars
+
+        self.input_tokens += total_input
+        self.output_tokens += total_output
+        self.cached_tokens += total_cached
+        self.reasoning_tokens += total_reasoning
 
         trace.input_tokens = total_input
         trace.output_tokens = total_output

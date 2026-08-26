@@ -76,3 +76,16 @@ class NovelState(TypedDict, total=False):
     writer_model_calls: int
     writer_tool_calls: int
     writer_search_calls: int
+    # 真实 token 消耗（provider usage_metadata；cached/reasoning 依赖 provider 暴露）
+    orchestrator_input_tokens: int
+    orchestrator_output_tokens: int
+    orchestrator_cached_tokens: int
+    orchestrator_reasoning_tokens: int
+    writer_input_tokens: int
+    writer_output_tokens: int
+    writer_cached_tokens: int
+    writer_reasoning_tokens: int
+    editor_input_tokens: int
+    editor_output_tokens: int
+    editor_cached_tokens: int
+    editor_reasoning_tokens: int

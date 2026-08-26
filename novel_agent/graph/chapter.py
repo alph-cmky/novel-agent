@@ -209,7 +209,10 @@ async def orchestrator_node(state: NovelState) -> dict:
     stage = strategy.get("narrative_stage", "?")
     pacing = strategy.get("chapter_strategy", {}).get("pacing", "?")
     prev_count = len(previous_chapters)
-    print(f"  [Orchestrator] Stage: {stage}, Pacing: {pacing}, Prev: {prev_count}ch")
+    print(
+        f"  [Orchestrator] Stage: {stage}, Pacing: {pacing}, Prev: {prev_count}ch, "
+        f"tokens: {orchestrator.input_tokens}/{orchestrator.output_tokens}"
+    )
 
     # context_needed is the Orchestrator → ContextCompiler demand signal;
     # ContextCompiler owns packet shaping, so enrichment lives there.
@@ -228,6 +231,14 @@ async def orchestrator_node(state: NovelState) -> dict:
         "orchestrator_strategy": strategy,
         "context_packet": full_packet,
         "scene_plan": scene_plan,
+        "orchestrator_input_tokens": state.get("orchestrator_input_tokens", 0)
+        + orchestrator.input_tokens,
+        "orchestrator_output_tokens": state.get("orchestrator_output_tokens", 0)
+        + orchestrator.output_tokens,
+        "orchestrator_cached_tokens": state.get("orchestrator_cached_tokens", 0)
+        + orchestrator.cached_tokens,
+        "orchestrator_reasoning_tokens": state.get("orchestrator_reasoning_tokens", 0)
+        + orchestrator.reasoning_tokens,
     }
 
 
@@ -294,7 +305,6 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     )
 
     scene_drafts: list[str] = []
-    scene_trace = None
     if state.get("scene_first") and state.get("scene_plan"):
         scene_context = (writer_packet or {}).get("recent_summary", "")
         for scene in state["scene_plan"]:
@@ -316,9 +326,9 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                     await stream_queue.put(("chunk", chunk))
                 scene_content = "".join(chunks)
                 if not scene_content.strip():
-                    scene_content, scene_trace = await writer.write(**scene_args)
+                    scene_content, _ = await writer.write(**scene_args)
             else:
-                scene_content, scene_trace = await writer.write(**scene_args)
+                scene_content, _ = await writer.write(**scene_args)
             scene_drafts.append(scene_content)
             scene_context = (
                 (
@@ -329,8 +339,6 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                 else build_scene_outcome(scene_content)
             )
         content = assemble_scenes(scene_drafts)
-        trace = scene_trace or writer.latest_trace
-        tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
     elif stream_queue is not None:
         collected: list[str] = []
         async for chunk in writer.write_stream(**write_args):
@@ -341,16 +349,11 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 
         if not content.strip():
             print("  [Writer] Stream returned empty, falling back to non-streaming...")
-            content, trace = await writer.write(**write_args)
+            content, _ = await writer.write(**write_args)
             if content.strip():
                 await stream_queue.put(("chunk", content))
-            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
-        else:
-            trace = writer.latest_trace
-            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else "?/?"
     else:
-        content, trace = await writer.write(**write_args)
-        tok_info = f"{trace.input_tokens}/{trace.output_tokens}"
+        content, _ = await writer.write(**write_args)
 
     # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
@@ -375,8 +378,6 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             if stream_queue is not None:
                 await stream_queue.put(("chunk", "\n\n" + extension.strip()))
             content_units = _text_units(content.strip())
-            trace = writer.latest_trace or trace
-            tok_info = f"{trace.input_tokens}/{trace.output_tokens}" if trace else tok_info
         if content_units < target_words:
             extension_failed = True
             print(f"  [Writer] Extension 后仍不足 ({content_units}/{target_words})")
@@ -406,6 +407,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         print("  [QualityGate] blocked: " + ", ".join(quality_gate_report["violations"]))
     total_tool_calls = sum(writer.tool_call_counts.values())
     search_calls = writer.tool_call_counts.get("search_context", 0)
+    tok_info = f"{writer.input_tokens}/{writer.output_tokens}"
     wmsg = f"  [Writer] {len(content)} chars/{_text_units(content)} units {label} "
     wmsg += f"(target: {target_words}w, tokens: {tok_info}, "
     wmsg += f"cost: model={writer.model_calls}/tool={total_tool_calls}/search={search_calls})"
@@ -418,6 +420,11 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         "writer_model_calls": state.get("writer_model_calls", 0) + writer.model_calls,
         "writer_tool_calls": state.get("writer_tool_calls", 0) + total_tool_calls,
         "writer_search_calls": state.get("writer_search_calls", 0) + search_calls,
+        "writer_input_tokens": state.get("writer_input_tokens", 0) + writer.input_tokens,
+        "writer_output_tokens": state.get("writer_output_tokens", 0) + writer.output_tokens,
+        "writer_cached_tokens": state.get("writer_cached_tokens", 0) + writer.cached_tokens,
+        "writer_reasoning_tokens": state.get("writer_reasoning_tokens", 0)
+        + writer.reasoning_tokens,
     }
 
 
@@ -450,13 +457,23 @@ async def editor_node(state: NovelState) -> dict:
         style_report=style_report_dict or None,
         context_packet=editor_packet,
     )
+    token_delta = {
+        "editor_input_tokens": state.get("editor_input_tokens", 0) + editor.input_tokens,
+        "editor_output_tokens": state.get("editor_output_tokens", 0) + editor.output_tokens,
+        "editor_cached_tokens": state.get("editor_cached_tokens", 0) + editor.cached_tokens,
+        "editor_reasoning_tokens": state.get("editor_reasoning_tokens", 0)
+        + editor.reasoning_tokens,
+    }
     if report.get("unavailable"):
         print("  [Editor] unavailable（空输出，审查维度跳过）")
-        return {"editor_report": report, "style_report": style_report_dict}
+        return {"editor_report": report, "style_report": style_report_dict, **token_delta}
     score = report.get("overall_score", 0)
     gate = style_report_dict.get("style_gate", "?")
-    print(f"  [Editor] {score}/100 — {report.get('verdict', '?')} (gate: {gate})")
-    return {"editor_report": report, "style_report": style_report_dict}
+    print(
+        f"  [Editor] {score}/100 — {report.get('verdict', '?')} (gate: {gate}, "
+        f"tokens: {editor.input_tokens}/{editor.output_tokens})"
+    )
+    return {"editor_report": report, "style_report": style_report_dict, **token_delta}
 
 
 async def continuity_node(state: NovelState) -> dict:
