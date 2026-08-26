@@ -1,9 +1,8 @@
 """Build an auditable, bounded context packet for chapter agents."""
 
-import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from novel_agent.services.continuity import ContinuityService
@@ -28,33 +27,10 @@ class ContextPacket:
     unresolved_foreshadowings: list[str]
     timeline_events: list[dict[str, Any]]
     timeline_findings: list[dict[str, Any]]
-    sources: list[dict[str, Any]]
-    token_budget: dict[str, int]
-    packet_hash: str
 
     def to_state(self) -> dict[str, Any]:
-        return {
-            "character_context": self.character_context,
-            "world_context": self.world_context,
-            "recent_summary": self.recent_summary,
-            "unresolved_foreshadowings": list(self.unresolved_foreshadowings),
-            "timeline_events": list(self.timeline_events),
-            "timeline_findings": list(self.timeline_findings),
-            "context_packet_hash": self.packet_hash,
-            "context_packet": {
-                "project_id": self.project_id,
-                "chapter_number": self.chapter_number,
-                "character_context": self.character_context,
-                "world_context": self.world_context,
-                "recent_summary": self.recent_summary,
-                "unresolved_foreshadowings": list(self.unresolved_foreshadowings),
-                "timeline_events": list(self.timeline_events),
-                "timeline_findings": list(self.timeline_findings),
-                "sources": self.sources,
-                "token_budget": self.token_budget,
-                "packet_hash": self.packet_hash,
-            },
-        }
+        """Single context contract: the packet lives only under context_packet."""
+        return {"context_packet": asdict(self)}
 
 
 class ContextCompiler:
@@ -83,7 +59,6 @@ class ContextCompiler:
                 snapshot, chapter_number, max_recent_chapters=self.recent_chapters
             )
             payload = snapshot["payload"]
-            entities = payload.get("entities", [])
             foreshadowings = payload.get("foreshadowings", [])
             events = payload.get("story_events", [])
         else:
@@ -92,7 +67,6 @@ class ContextCompiler:
                 chapter_number,
                 max_recent_chapters=self.recent_chapters,
             )
-            entities = self.manager.get_all_world_entities(project_id)
             foreshadowings = self.manager.get_foreshadowings(project_id)
             events = self.manager.get_story_events(project_id)
         timeline_findings = ContinuityService.check_timeline(
@@ -110,50 +84,16 @@ class ContextCompiler:
         world_context = self._bound(context.get("world_context", ""), section_budget)
         recent_summary = self._bound(context.get("recent_summary", ""), section_budget)
         unresolved = [item for item in unresolved if item.strip()][:40]
-        sources = [
-            {
-                "kind": "world_entities",
-                "count": len(entities),
-                "authority": "canon_projection",
-            },
-            {
-                "kind": "foreshadowings",
-                "count": len(unresolved),
-                "authority": "canon_projection",
-            },
-            {
-                "kind": "recent_chapters",
-                "count": self.recent_chapters,
-                "authority": "approved_or_draft_summary",
-            },
-            {
-                "kind": "story_events",
-                "count": len(events),
-                "authority": "canon_event_ledger",
-            },
-        ]
-        token_budget = {
-            "max_context_chars": self.max_context_chars,
-            "character_chars": len(character_context),
-            "world_chars": len(world_context),
-            "recent_chars": len(recent_summary),
-        }
-        payload = {
-            "project_id": project_id,
-            "chapter_number": chapter_number,
-            "character_context": character_context,
-            "world_context": world_context,
-            "recent_summary": recent_summary,
-            "unresolved_foreshadowings": unresolved,
-            "timeline_events": events[-30:],
-            "timeline_findings": timeline_findings,
-            "sources": sources,
-            "token_budget": token_budget,
-        }
-        packet_hash = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        return ContextPacket(**payload, packet_hash=packet_hash)
+        return ContextPacket(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            character_context=character_context,
+            world_context=world_context,
+            recent_summary=recent_summary,
+            unresolved_foreshadowings=unresolved,
+            timeline_events=events[-30:],
+            timeline_findings=timeline_findings,
+        )
 
     def compile_for_run(self, run_id: str) -> ContextPacket:
         run = self.manager.get_writing_run(run_id)

@@ -139,6 +139,21 @@ class TestChapterCRUD:
         assert len(chapters) == 1
         assert chapters[0]["draft_content"] == "v2"
 
+    def test_get_recent_chapters_sql_tail_slice(self, tmp_path):
+        """get_recent_chapters 在 SQL 侧取尾部切片：latest-first、排除 failed、不含当前章。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        for n in range(1, 6):
+            mgr.save_chapter(pid, n, draft_content=f"第{n}章")
+        mgr.mark_chapter_failed(pid, 2)
+        mgr.save_chapter(pid, 7, draft_content="当前章")
+
+        recent = mgr.get_recent_chapters(pid, before=7, limit=2)
+
+        assert [c["chapter_number"] for c in recent] == [5, 4]
+        assert mgr.count_chapters(pid, before=7) == 4
+        assert mgr.count_chapters(pid) == 5
+
     def test_v2_run_lock_and_immutable_versions(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")

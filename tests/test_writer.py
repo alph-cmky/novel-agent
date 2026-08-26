@@ -197,10 +197,10 @@ class TestNarrativeExtension:
 
 
 class TestImprovementPlanFormatting:
-    """测试演化迭代改进计划格式化，确保篇幅保护和结构硬约束不被丢弃。"""
+    """测试演化迭代改进计划格式化，确保篇幅保护和最小修改约束不被丢弃。"""
 
     def test_improvement_plan_includes_length_and_structure_protection(self):
-        from novel_agent.graph.chapter import _format_improvement_plan
+        from novel_agent.agents.writer import WriterAgent
 
         plan = {
             "focus_dimensions": ["dialogue", "ai_flavor"],
@@ -212,7 +212,7 @@ class TestImprovementPlanFormatting:
             },
         }
 
-        formatted = _format_improvement_plan(plan, version=1)
+        formatted = WriterAgent._format_improvement_plan(plan, version=1)
 
         # 验证重点维度与核心指令
         assert "第 2 次迭代" in formatted
@@ -222,12 +222,13 @@ class TestImprovementPlanFormatting:
 
         # 核心：必须包含全篇完整性与篇幅保护硬约束
         assert "篇幅与结构硬性要求" in formatted
-        assert "必须输出完整的全章节正文" in formatted
+        assert "输出完整的全章节正文" in formatted
         assert "绝对禁止只输出修改片段" in formatted
-        assert "字数必须达标" in formatted
+        assert "字数不得缩水" in formatted
+        assert "只修改必要部分" in formatted
 
     def test_empty_plan_returns_empty_string(self):
-        from novel_agent.graph.chapter import _format_improvement_plan
+        from novel_agent.agents.writer import WriterAgent
 
-        assert _format_improvement_plan(None, 0) == ""
-        assert _format_improvement_plan({}, 0) == ""
+        assert WriterAgent._format_improvement_plan(None, 0) == ""
+        assert WriterAgent._format_improvement_plan({}, 0) == ""

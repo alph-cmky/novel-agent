@@ -16,7 +16,7 @@ class NovelState(TypedDict, total=False):
     chapter_outline: str
     story_length: str
     target_chapter_words: int
-    # 叙事模式：linear / unit_arc / hybrid / multi_perspective / ensemble（None = 旧项目）
+    # 叙事模式：linear / unit_arc / hybrid / multi_perspective / ensemble（None = 未配置）
     narrative_mode: str | None
     # 叙事视角：first_person / third_person_limited / third_person_omniscient / ...
     narrative_perspective: str
@@ -40,9 +40,6 @@ class NovelState(TypedDict, total=False):
     scene_first: bool
     scene_plan: list[dict]
     scene_drafts: list[str]
-
-    # ── Worldbuilding 上下文 ──
-    existing_world_entities: list[dict]
 
     # ── 人类审阅 ──
     human_approved: bool

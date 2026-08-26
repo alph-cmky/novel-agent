@@ -24,10 +24,6 @@ from novel_agent.config import (
 # ── Models ──────────────────────────────────────────────
 
 
-class StyleProfile(BaseModel):
-    """Optional style preferences reserved for future style-aware analysis."""
-
-
 class StyleIssue(BaseModel):
     """A detected style issue with extensible evidence fields."""
 
@@ -385,9 +381,7 @@ class StyleAnalyzer:
     └── Dialogue Statistics (descriptive)
     """
 
-    def analyze(self, text: str, profile: StyleProfile | None = None) -> StyleReport:
-        del profile  # reserved for future style-aware analysis
-
+    def analyze(self, text: str) -> StyleReport:
         # ── AI flavor evidence ──
         issues: list[StyleIssue] = []
 

@@ -3,14 +3,13 @@ from unittest.mock import MagicMock
 from novel_agent.services.context import ContextCompiler, estimate_tokens
 
 
-def test_context_packet_has_sources_budget_and_stable_hash():
+def test_context_packet_single_contract():
     manager = MagicMock()
     manager.build_context.return_value = {
         "character_context": "- 主角: 冷静",
         "world_context": "- 北墙: 黑曜石",
         "recent_summary": "第1章：主角出城",
     }
-    manager.get_all_world_entities.return_value = [{"name": "主角"}]
     manager.get_story_events.return_value = []
     manager.get_foreshadowings.return_value = [
         {"description": "神秘信物", "planted_chapter": 1, "status": "open"},
@@ -19,16 +18,14 @@ def test_context_packet_has_sources_budget_and_stable_hash():
 
     packet = ContextCompiler(manager, max_context_chars=1000).compile("p", 2)
 
-    assert packet.packet_hash
     assert packet.unresolved_foreshadowings == ["[第1章] 神秘信物"]
-    assert packet.sources[0]["count"] == 1
-    assert packet.token_budget["max_context_chars"] == 1000
-    assert (
-        packet.token_budget["character_chars"]
-        + packet.token_budget["world_chars"]
-        + packet.token_budget["recent_chars"]
-        <= 1000
-    )
+    # to_state() 只产出 context_packet 单键 —— 不再有平铺字段 / hash / observability
+    state = packet.to_state()
+    assert set(state.keys()) == {"context_packet"}
+    assert state["context_packet"]["character_context"] == "- 主角: 冷静"
+    assert "packet_hash" not in state["context_packet"]
+    assert "sources" not in state["context_packet"]
+    assert "token_budget" not in state["context_packet"]
 
 
 def test_context_packet_bounds_each_section():
@@ -47,8 +44,6 @@ def test_context_packet_bounds_each_section():
     assert len(packet.character_context) <= 101
     assert len(packet.world_context) <= 101
     assert len(packet.recent_summary) <= 101
-    assert packet.to_state()["context_packet_hash"] == packet.packet_hash
-    assert packet.to_state()["context_packet"]["packet_hash"] == packet.packet_hash
 
 
 def test_context_compiler_can_compile_from_run_snapshot():

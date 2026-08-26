@@ -3,7 +3,6 @@ from novel_agent.style.analyzer import (
     ParagraphStructureReport,
     StyleAnalyzer,
     StyleIssue,
-    StyleProfile,
     StyleReport,
     style_gate,
 )
@@ -13,7 +12,6 @@ __all__ = [
     "ParagraphStructureReport",
     "StyleAnalyzer",
     "StyleIssue",
-    "StyleProfile",
     "StyleReport",
     "style_gate",
 ]

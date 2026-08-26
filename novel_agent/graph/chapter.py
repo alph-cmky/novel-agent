@@ -121,66 +121,6 @@ def _config_for(task: TaskClass) -> AgentConfig:
     return AgentConfig(**kwargs)
 
 
-def _format_improvement_plan(plan: dict | None, version: int) -> str:
-    """Format an improvement_plan dict into a prompt section for Writer."""
-    if not plan:
-        return ""
-
-    parts = [f"## 进化改进指导 (第 {version + 1} 次迭代)"]
-    parts.append(f"这是第 {version + 1} 次改进。前面几轮的改进已经提升了部分维度的质量。")
-
-    focus = plan.get("focus_dimensions", [])
-    if focus:
-        dim_labels = {
-            "rhythm": "节奏",
-            "ai_flavor": "AI味",
-            "dialogue": "对话",
-            "logic": "逻辑",
-            "writing": "文笔",
-        }
-        focus_cn = ", ".join(dim_labels.get(d, d) for d in focus)
-        parts.append(f"\n### 本轮重点维度\n{focus_cn}")
-
-    primary = plan.get("primary_instruction", "")
-    if primary:
-        parts.append(f"\n### 核心指令\n{primary}")
-
-    secondary = plan.get("secondary_instructions", [])
-    if secondary:
-        parts.append("\n### 辅助指令")
-        for s in secondary:
-            parts.append(f"- {s}")
-
-    constraints = plan.get("constraints", {})
-    preserve = constraints.get("preserve", [])
-    if preserve:
-        dim_labels = {
-            "rhythm": "节奏",
-            "ai_flavor": "AI味",
-            "dialogue": "对话",
-            "logic": "逻辑",
-            "writing": "文笔",
-        }
-        preserve_cn = ", ".join(dim_labels.get(d, d) for d in preserve)
-        parts.append(f"\n### 请保持\n{preserve_cn} 方面的已有进步，不要牺牲它们")
-
-    avoid = constraints.get("avoid", [])
-    if avoid:
-        parts.append("\n### 明确禁止")
-        for a in avoid:
-            parts.append(f"- {a}")
-
-    # 篇幅与结构完整性保护（防止迭代时字数缩水或仅输出片段）
-    parts.append(
-        "\n### ⚠️ 篇幅与结构硬性要求（必须严格遵守）\n"
-        "1. **必须输出完整的全章节正文**：绝对禁止只输出修改片段、大纲提要或省略号！\n"
-        "2. **字数必须达标**：严格保持全章篇幅完整展开，情节要充分铺陈细化，严禁过度压缩概括。\n"
-        "3. **保持故事连续性**：在优化局部细节的同时，必须保留全部核心剧情、人物对话与冲突高潮。"
-    )
-
-    return "\n".join(parts)
-
-
 # ── Nodes ──────────────────────────────────────────────
 
 
@@ -200,34 +140,24 @@ async def orchestrator_node(state: NovelState) -> dict:
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
     previous_chapters: list[dict] = []
+    total_chapters = 0
+    unresolved: list[str] = []
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
 
             mgr = ProjectManager(persist_dir)
-            all_chapters = mgr.get_all_chapters(project_id)
-            previous_chapters = [
-                c
-                for c in all_chapters
-                if c["chapter_number"] < state.get("chapter_number", 1)
-                and c.get("status") != "failed"
-            ]
-        except Exception as exc:
-            print(f"  [Orchestrator] 加载前文失败，跳过: {exc}")
-
-    target_words = state.get("target_chapter_words", 3000)
-    narrative_mode = state.get("narrative_mode")
-    narrative_perspective = state.get("narrative_perspective", "")
-
-    arc_summary = _build_arc_summary(previous_chapters)
-
-    # Load unresolved foreshadowings before planning so the same long-range
-    # constraints reach both the orchestrator and the writer.
-    unresolved: list[str] = []
-    if project_id:
-        try:
-            mgr2 = ProjectManager(persist_dir)
-            all_fs = mgr2.get_foreshadowings(project_id)
+            # SQL-side tail slice — no full chapter table load for long projects
+            previous_chapters = mgr.get_recent_chapters(
+                project_id,
+                before=state.get("chapter_number", 1),
+                limit=5,
+            )
+            previous_chapters.reverse()  # → ascending order for summaries
+            total_chapters = mgr.count_chapters(project_id, before=state.get("chapter_number", 1))
+            # Load unresolved foreshadowings before planning so the same
+            # long-range constraints reach both the orchestrator and the writer.
+            all_fs = mgr.get_foreshadowings(project_id)
             open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
             unresolved = [
                 f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}" for f in open_fs
@@ -235,7 +165,13 @@ async def orchestrator_node(state: NovelState) -> dict:
             if unresolved:
                 print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
         except Exception as exc:
-            print(f"  [Orchestrator] 加载伏笔失败，跳过: {exc}")
+            print(f"  [Orchestrator] 加载前文/伏笔失败，跳过: {exc}")
+
+    target_words = state.get("target_chapter_words", 3000)
+    narrative_mode = state.get("narrative_mode")
+    narrative_perspective = state.get("narrative_perspective", "")
+
+    arc_summary = _build_arc_summary(previous_chapters)
 
     # Merge fresh foreshadowings into context_packet — single context carrier
     full_packet = dict(state.get("context_packet") or {})
@@ -252,6 +188,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         narrative_perspective=narrative_perspective,
         arc_summary=arc_summary,
         context_packet=full_packet,
+        total_chapters=total_chapters,
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -342,15 +279,14 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     if config and config.get("configurable"):
         stream_queue = config["configurable"].get("stream_queue")
 
-    # Evolution improvement plan drives rewrite instructions
-    rewrite_text = ""
-    constraints = {}
+    # Evolution improvement plan is passed to the Writer as a structured dict;
+    # the Writer formats it into a prompt section itself.
     evolution_version = state.get("evolution_version", 0)
 
     improvement_plan = state.get("evolution_improvement_plan") or {}
+    constraints: dict = {}
     if improvement_plan.get("primary_instruction"):
-        rewrite_text = _format_improvement_plan(improvement_plan, evolution_version)
-        constraints = improvement_plan.get("constraints", {})
+        constraints = improvement_plan.get("constraints", {}) or {}
 
     # Merge constraints.strategy_override into orchestrator_strategy
     strategy = state.get("orchestrator_strategy", {})
@@ -370,7 +306,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         outline=state.get("chapter_outline", ""),
         context_packet=writer_packet,
         target_chapter_words=target_words,
-        rewrite_instructions=rewrite_text,
+        improvement_plan=improvement_plan or None,
+        evolution_version=evolution_version,
         orchestrator_strategy=strategy,
     )
 
@@ -812,19 +749,20 @@ async def worldbuilding_node(state: NovelState) -> dict:
     """Worldbuilding Agent extracts entities, conflicts, and foreshadowings."""
     if not ExecutionProfile.from_state(state).should_worldbuild():
         return {"worldbuilding_report": {}}
-    existing = state.get("existing_world_entities", [])
 
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
+    existing: list[dict] = []
     existing_fs: list[dict] = []
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
 
             mgr = ProjectManager(persist_dir)
+            existing = mgr.get_all_world_entities(project_id)
             existing_fs = mgr.get_foreshadowings(project_id)
         except Exception as exc:
-            print(f"  [Worldbuilding] 加载伏笔失败，跳过: {exc}")
+            print(f"  [Worldbuilding] 加载实体/伏笔失败，跳过: {exc}")
 
     wb = WorldbuildingAgent(
         config=_config_for(TaskClass.EXTRACTION),

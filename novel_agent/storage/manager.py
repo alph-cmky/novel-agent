@@ -1253,6 +1253,36 @@ class ProjectManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_recent_chapters(
+        self,
+        project_id: str,
+        before: int,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Most recent chapters before a chapter number, newest first.
+
+        Ordered by chapter_number DESC in SQL so long projects don't load the
+        full chapter table into Python just to slice the tail.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM chapters WHERE project_id = ? AND chapter_number < ? "
+                "AND status != 'failed' ORDER BY chapter_number DESC LIMIT ?",
+                (project_id, before, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_chapters(self, project_id: str, before: int | None = None) -> int:
+        """Count stored (non-failed) chapters, optionally only before a chapter number."""
+        query = "SELECT COUNT(*) FROM chapters WHERE project_id = ? AND status != 'failed'"
+        params: list = [project_id]
+        if before is not None:
+            query += " AND chapter_number < ?"
+            params.append(before)
+        with self._conn() as conn:
+            (count,) = conn.execute(query, params).fetchone()
+        return count
+
     def get_chapter_worldbuilding(self, project_id: str) -> list[dict]:
         """Lightweight fetch of chapter_number + worldbuilding_report only.
 

@@ -12,13 +12,13 @@
 |------|------|
 | 递归自进化流水线 | Orchestrator → 进化子图（Writer → Editor → Continuity → Worldbuilding → EvolutionOrchestrator）→ SelectBest → Worldbuilding → Human Review，多轮迭代直至收敛或触顶 |
 | 确定性质量门 | Writer 输出先过 `QualityService` 硬性检查（篇幅/空内容/大纲覆盖），通过时可跳过 LLM 审查直接进入 Worldbuilding |
-| Scene-first 生成 | 可按场景拆分逐场写作（`scene_first` + `build_scene_plan`），每场独立生成后拼接为完整章节 |
+| Scene-first 生成（可选高级模式） | 默认 Chapter-first 整章生成；启用 `scene_first` 后按场景拆分逐场写作（`build_scene_plan`），每场独立生成后拼接为完整章节 |
 | 流式写作 | SSE 实时推送，逐字渲染创作过程，非一次性返回 |
 | 知识图谱可视化 | Cytoscape.js 渲染角色/地点/物品/组织/事件的关系网络，支持逐章回溯 |
 | 长篇写作策略 | 3000 字/章，渐进展开、多线并进、伏笔长线回收 |
 | 双模型路由 | Quality 模型负责创作，Budget 模型负责审查/分析/抽取，按任务自动分配 |
 | 质量保障 | 递归自进化（版本对比 + Delta 分析 + 6 种终止状态）+ 人工审批，支持 Web 审批 |
-| 双层记忆 | 短期摘要（ContextCompressor）+ 长期向量/结构化存储（ChromaDB + SQLite） |
+| 双层记忆 | 短期上下文（ContextCompiler 任务级投影）+ 长期向量/结构化存储（ChromaDB + SQLite） |
 | 可观测性 | 调用元数据采集 + LangFuse 全链路追踪 |
 | 两种交互方式 | CLI（服务/导出/运维）/ Web SPA（React），共享同一后端 |
 
@@ -224,13 +224,13 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 | `skip_evolution_enrichment` | 关闭 EvolutionOrchestrator 的 LLM enrichment | `false` |
 | `deterministic_gate_first` | Writer 输出通过确定性硬性检查时跳过 LLM 审查，直接进入 Worldbuilding | `false` |
 
-### Scene-first 逐场生成
+### Scene-first 逐场生成（可选高级模式）
 
-启用 `scene_first` 后，Orchestrator 的 `key_scenes` 被拆解为 `scene_plan`（3–4 场），Writer 逐场独立生成后拼接为完整章节。每场携带前一场尾部上下文，确保叙事连贯。`build_scene_plan`（确定性拆分）和 `assemble_scenes`（拼接）在 `graph/scenes.py` 中实现。
+默认 Chapter-first：Writer 一次性生成整章。启用 `scene_first` 后，Orchestrator 的 `key_scenes` 被拆解为 `scene_plan`（3–4 场），Writer 逐场独立生成后拼接为完整章节。每场携带前一场尾部上下文，确保叙事连贯。`build_scene_plan`（确定性拆分）和 `assemble_scenes`（拼接）在 `graph/scenes.py` 中实现。
 
 ### 双层记忆
 
-- **短期记忆**：ContextCompressor 将前文章节压缩为摘要（约 40K token 阈值）
+- **短期上下文**：ContextCompiler 按「当前章节 + 最近 N 章」组装 context packet，再按任务投影裁剪（Writer 5K / Editor 5K / Continuity 4K chars）
 - **长期记忆**：ChromaDB 向量存储 + SQLite 结构化存储（项目、章节、世界观实体、关系、伏笔）
 
 ### 长篇写作
@@ -277,11 +277,10 @@ novel_agent/
 │   ├── quality.py       # QualityService（篇幅/空内容/大纲/场景硬性检查）
 │   ├── context.py       # ContextService（结构化 context packet 组装）
 │   └── continuity.py    # ContinuityService（时间线/伏笔确定性检查）
-├── memory/              # 双层记忆系统
-│   ├── compressor.py    # ContextCompressor（40K token 阈值）
+├── memory/              # 长期向量记忆
 │   └── embeddings.py    # ChromaDB 向量存储
 ├── storage/             # SQLite 持久化
-│   ├── models.py        # Schema + 迁移
+│   ├── models.py        # SQLite Schema（CREATE TABLE 即最终态）
 │   └── manager.py       # ProjectManager（章节、实体、关系管理）
 ├── schema/              # 输出校验边界
 │   ├── models.py        # 所有 Agent 输出的 Pydantic 模型

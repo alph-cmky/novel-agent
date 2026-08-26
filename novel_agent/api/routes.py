@@ -270,15 +270,15 @@ async def get_chapter(project_id: str, chapter_number: int):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     # Include context data for the writing page
-    ctx = ContextCompiler(mgr).compile(project_id, chapter_number).to_state()
+    packet = ContextCompiler(mgr).compile(project_id, chapter_number)
     outline_items = mgr.get_outline(project_id)
     for item in outline_items:
         if item["chapter_number"] == chapter_number:
             chapter["chapter_outline"] = item.get("summary", "") or item.get("title", "")
             break
-    chapter["character_context"] = ctx.get("character_context", "")
-    chapter["world_context"] = ctx.get("world_context", "")
-    chapter["recent_summary"] = ctx.get("recent_summary", "")
+    chapter["character_context"] = packet.character_context
+    chapter["world_context"] = packet.world_context
+    chapter["recent_summary"] = packet.recent_summary
     return chapter
 
 
@@ -586,7 +586,7 @@ async def write_chapter(project_id: str, chapter_number: int):
         )
     mgr.update_outline_item(project_id, chapter_number, status=OutlineStatus.WRITING.value)
 
-    # Build context
+    # Build context — single context carrier: context_packet only
     ctx = ContextCompiler(mgr).compile(project_id, chapter_number).to_state()
 
     # Build initial state
@@ -644,7 +644,6 @@ async def write_chapter(project_id: str, chapter_number: int):
         "narrative_perspective": project.get("narrative_perspective", ""),
         "context_packet": ctx.get("context_packet", {}),
         "scene_first": False,
-        "existing_world_entities": mgr.get_all_world_entities(project_id),
         "persist_dir": persist_dir,
     }
 

@@ -48,6 +48,14 @@ WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 class WriterAgent(BaseAgent):
     name = "writer"
 
+    _DIMENSION_LABELS = {
+        "rhythm": "节奏",
+        "ai_flavor": "AI味",
+        "dialogue": "对话",
+        "logic": "逻辑",
+        "writing": "文笔",
+    }
+
     def __init__(
         self,
         config: AgentConfig | None = None,
@@ -82,7 +90,8 @@ class WriterAgent(BaseAgent):
         outline: str,
         context_packet: dict | None = None,
         target_chapter_words: int = 0,
-        rewrite_instructions: str = "",
+        improvement_plan: dict | None = None,
+        evolution_version: int = 0,
         orchestrator_strategy: dict | None = None,
     ) -> tuple[str, TraceStep]:
         """Generate a chapter.
@@ -92,7 +101,8 @@ class WriterAgent(BaseAgent):
             outline: Chapter outline / plot points.
             context_packet: Projected context from ContextCompiler.for_writer().
             target_chapter_words: Override per-chapter word count (0 = use default).
-            rewrite_instructions: Specific guidance from evolution or human feedback.
+            improvement_plan: Structured plan from evolution or human feedback.
+            evolution_version: Current evolution version (for prompt wording).
             orchestrator_strategy: Narrative strategy from Orchestrator (stage, pacing, etc.).
         """
         packet = context_packet or {}
@@ -106,12 +116,13 @@ class WriterAgent(BaseAgent):
 
         # Assemble context
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
-        if rewrite_instructions:
-            context_parts.insert(0, f"## 重写指导（务必遵守）\n{rewrite_instructions}")
+        plan_text = self._format_improvement_plan(improvement_plan, evolution_version)
+        if plan_text:
+            context_parts.insert(0, plan_text)
         if orchestrator_strategy:
             strategy_text = self._format_strategy(orchestrator_strategy)
             if strategy_text:
-                context_parts.insert(1 if rewrite_instructions else 0, strategy_text)
+                context_parts.insert(1 if plan_text else 0, strategy_text)
         if character_context:
             context_parts.append(f"## 相关角色\n{character_context}")
         if world_context:
@@ -156,7 +167,8 @@ class WriterAgent(BaseAgent):
         outline: str,
         context_packet: dict | None = None,
         target_chapter_words: int = 0,
-        rewrite_instructions: str = "",
+        improvement_plan: dict | None = None,
+        evolution_version: int = 0,
         orchestrator_strategy: dict | None = None,
     ) -> AsyncIterator[str]:
         """Generate a chapter with streaming output. Yields text chunks.
@@ -171,12 +183,13 @@ class WriterAgent(BaseAgent):
         timeline_events = packet.get("timeline_events", [])
         timeline_findings = packet.get("timeline_findings", [])
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
-        if rewrite_instructions:
-            context_parts.insert(0, f"## 重写指导（务必遵守）\n{rewrite_instructions}")
+        plan_text = self._format_improvement_plan(improvement_plan, evolution_version)
+        if plan_text:
+            context_parts.insert(0, plan_text)
         if orchestrator_strategy:
             strategy_text = self._format_strategy(orchestrator_strategy)
             if strategy_text:
-                context_parts.insert(1 if rewrite_instructions else 0, strategy_text)
+                context_parts.insert(1 if plan_text else 0, strategy_text)
         if character_context:
             context_parts.append(f"## 相关角色\n{character_context}")
         if world_context:
@@ -503,3 +516,53 @@ class WriterAgent(BaseAgent):
             has_content = True
 
         return "\n".join(lines) if has_content else ""
+
+    @classmethod
+    def _format_improvement_plan(cls, plan: dict | None, version: int) -> str:
+        """Format an evolution improvement_plan dict into a prompt section."""
+        if not plan:
+            return ""
+
+        parts = [f"## 进化改进指导 (第 {version + 1} 次迭代)"]
+        parts.append(f"这是第 {version + 1} 次改进。前面几轮的改进已经提升了部分维度的质量。")
+
+        focus = plan.get("focus_dimensions", [])
+        if focus:
+            focus_cn = ", ".join(cls._DIMENSION_LABELS.get(d, d) for d in focus)
+            parts.append(f"\n### 本轮重点维度\n{focus_cn}")
+
+        primary = plan.get("primary_instruction", "")
+        if primary:
+            parts.append(f"\n### 核心指令\n{primary}")
+
+        secondary = plan.get("secondary_instructions", [])
+        if secondary:
+            parts.append("\n### 辅助指令")
+            for s in secondary:
+                parts.append(f"- {s}")
+
+        constraints = plan.get("constraints", {})
+        preserve = constraints.get("preserve", [])
+        if preserve:
+            preserve_cn = ", ".join(cls._DIMENSION_LABELS.get(d, d) for d in preserve)
+            parts.append(f"\n### 请保持\n{preserve_cn} 方面的已有进步，不要牺牲它们")
+
+        avoid = constraints.get("avoid", [])
+        if avoid:
+            parts.append("\n### 明确禁止")
+            for a in avoid:
+                parts.append(f"- {a}")
+
+        # 篇幅与结构完整性保护（防止迭代时字数缩水或仅输出片段）
+        parts.append(
+            "\n### ⚠️ 篇幅与结构硬性要求（必须严格遵守）\n"
+            "1. **输出完整的全章节正文**：以当前版本为基础修改，"
+            "绝对禁止只输出修改片段、大纲提要或省略号。\n"
+            "2. **只修改必要部分**：聚焦本轮重点维度与核心指令，"
+            "未涉及的部分保持上一版的剧情与文字稳定，不要为改而改。\n"
+            "3. **字数不得缩水**：保持全章篇幅完整展开，情节充分铺陈，"
+            "严禁过度压缩概括。\n"
+            "4. **保持连续性**：保留全部核心剧情、人物对话与冲突高潮。"
+        )
+
+        return "\n".join(parts)

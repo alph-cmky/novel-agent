@@ -199,12 +199,19 @@ class OrchestratorAgent(BaseAgent):
         narrative_perspective: str = "",
         arc_summary: str = "",
         context_packet: dict | None = None,
+        total_chapters: int = 0,
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
+        Args:
+            previous_chapters: Recent chapters (ascending) — a tail slice, not
+                the full history.
+            total_chapters: Total completed chapters; falls back to
+                len(previous_chapters) when not provided.
+
         Returns a dict with narrative_stage, chapter_strategy, context_needed.
         """
-        total_chapters = len(previous_chapters)
+        total = total_chapters or len(previous_chapters)
 
         recent = previous_chapters[-3:] if len(previous_chapters) > 3 else previous_chapters
         recent_titles = ", ".join(f"第{c.get('chapter_number', '?')}章" for c in recent)
@@ -240,7 +247,7 @@ class OrchestratorAgent(BaseAgent):
                     f"## 篇幅信息\n"
                     f"- 篇幅：{length_label}\n"
                     f"- 目标每章字数：{target_chapter_words}字\n"
-                    f"- 已完成章节数：{total_chapters}章\n\n"
+                    f"- 已完成章节数：{total}章\n\n"
                     f"## 本章大纲\n{chapter_outline}\n\n"
                     f"## 已有角色\n{character_context or '暂无'}\n\n"
                     f"## 世界观设定\n{world_context or '暂无'}\n\n"
@@ -270,7 +277,7 @@ class OrchestratorAgent(BaseAgent):
                     "storylines": [],
                     "pacing": "normal",
                     "key_scenes": [],
-                    "ending_type": "cliffhanger",
+                    "ending_type": "natural_continuation",
                     "foreshadowings_to_address": [],
                     "suggested_chapter_words": target_chapter_words,
                     "climax_sequence": None,
@@ -303,8 +310,8 @@ class OrchestratorAgent(BaseAgent):
         """Build mode-specific output instructions for the Orchestrator prompt.
 
         Injects the relevant JSON schema fragments and output requirements
-        based on the project's narrative_mode. Returns empty string for
-        legacy projects (mode=None).
+        based on the project's narrative_mode. Empty string when the mode
+        is not configured.
         """
         if not mode:
             return ""

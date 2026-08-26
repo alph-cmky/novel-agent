@@ -99,6 +99,43 @@ class TestOrchestratorPromptHelpers:
         assert "篇幅：短篇" in prompt
         assert "神秘信物" in prompt
 
+    def test_analyze_uses_explicit_total_chapters_over_tail_slice(self):
+        """长篇只传最近 5 章 tail 时，已完成章节数用显式 total 而非 len()。"""
+        agent = OrchestratorAgent()
+        tail = [{"chapter_number": i} for i in range(96, 101)]
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=101,
+                    chapter_outline="大纲",
+                    previous_chapters=tail,
+                    total_chapters=100,
+                )
+            )
+        prompt = mocked.call_args.args[0][1]["content"]
+        assert "已完成章节数：100章" in prompt
+
+    def test_analyze_parse_failure_fallback_is_natural_continuation(self):
+        """Orchestrator 输出解析失败时的兜底不得回退到 cliffhanger（防 AI 网文味回流）。"""
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("not json at all", None)),
+        ):
+            result = asyncio.run(
+                agent.analyze(
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                )
+            )
+        assert result["chapter_strategy"]["ending_type"] == "natural_continuation"
+
     def test_mode_instruction_none(self):
         assert OrchestratorAgent._build_mode_instruction(None) == ""
 
