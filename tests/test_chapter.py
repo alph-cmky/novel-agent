@@ -414,3 +414,119 @@ class TestEvolutionContextMinimal:
         call_kwargs = mock_agent.return_value.enrich_plan.call_args.kwargs
         draft_preview = call_kwargs.get("draft_preview", "")
         assert len(draft_preview) <= 800
+
+
+class TestContextMinimality:
+    """Graph-level: verify agents receive minimal context, not full State.
+
+    Regression guard against re-introducing full-context leaks.
+    """
+
+    @staticmethod
+    def _editor_state(**overrides) -> dict:
+        state = {
+            "chapter_number": 1,
+            "draft_content": "正文内容" * 100,
+            "narrative_mode": None,
+            "context_packet": {
+                "character_context": "角色" * 5000,
+                "world_context": "设定" * 5000,
+                "recent_summary": "摘要" * 5000,
+                "unresolved_foreshadowings": [f"伏笔{i}" for i in range(20)],
+                "timeline_events": [{"e": f"事件{i}"} for i in range(30)],
+                "timeline_findings": [{"f": f"发现{i}"} for i in range(10)],
+            },
+        }
+        state.update(overrides)
+        return state
+
+    def test_editor_node_passes_style_report_and_minimal_context(self):
+        """Editor receives StyleReport + for_editor projection, not full packet."""
+        from novel_agent.graph.chapter import editor_node
+
+        captured: dict = {}
+
+        async def _mock_review(**kwargs):
+            captured.update(kwargs)
+            return {"overall_score": 80, "verdict": "pass"}, MagicMock()
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter.EditorAgent") as mock_editor_cls,
+        ):
+            mock_editor_cls.return_value.review = _mock_review
+            asyncio.run(editor_node(self._editor_state()))
+
+        # style_report must be present (deterministic, 0 LLM)
+        assert "style_report" in captured
+        assert captured["style_report"] is not None
+        assert "style_gate" in captured["style_report"]
+        assert "paragraph_structure" in captured["style_report"]
+
+        # context_packet must be the minimal for_editor projection
+        ctx = captured.get("context_packet") or {}
+        assert "world_context" not in ctx
+        assert "timeline_events" not in ctx
+        assert len(ctx.get("unresolved_foreshadowings", [])) <= 3
+
+    def test_editor_node_returns_style_report_in_state(self):
+        """editor_node output includes style_report for Evolution consumption."""
+        from novel_agent.graph.chapter import editor_node
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter.EditorAgent") as mock_editor_cls,
+        ):
+            mock_editor_cls.return_value.review = AsyncMock(
+                return_value=({"overall_score": 80, "verdict": "pass"}, MagicMock())
+            )
+            result = asyncio.run(editor_node(self._editor_state()))
+
+        assert "style_report" in result
+        assert result["style_report"]
+        assert "style_gate" in result["style_report"]
+
+    @staticmethod
+    def _continuity_state(**overrides) -> dict:
+        state = {
+            "chapter_number": 1,
+            "draft_content": "正文内容" * 100,
+            "narrative_mode": None,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+            "context_packet": {
+                "character_context": "角色" * 5000,
+                "world_context": "设定" * 5000,
+                "recent_summary": "摘要" * 5000,
+                "unresolved_foreshadowings": [f"伏笔{i}" for i in range(20)],
+                "timeline_events": [{"e": f"事件{i}"} for i in range(30)],
+                "timeline_findings": [{"f": f"发现{i}"} for i in range(10)],
+            },
+        }
+        state.update(overrides)
+        return state
+
+    def test_continuity_node_passes_minimal_context(self):
+        """Continuity receives for_continuity projection, not full packet."""
+        from novel_agent.graph.chapter import continuity_node
+
+        captured: dict = {}
+
+        async def _mock_audit(**kwargs):
+            captured.update(kwargs)
+            return {"overall_score": 90, "inconsistencies": []}, MagicMock()
+
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter._get_chapter_store"),
+            patch("novel_agent.graph.chapter.ContinuityAgent") as mock_cty_cls,
+        ):
+            mock_cty_cls.return_value.audit = _mock_audit
+            asyncio.run(continuity_node(self._continuity_state()))
+
+        ctx = captured.get("context_packet") or {}
+        # for_continuity keeps timeline_events but not world_context or recent_summary
+        assert "world_context" not in ctx
+        assert "recent_summary" not in ctx
+        assert len(ctx.get("timeline_events", [])) <= 10
+        assert len(ctx.get("unresolved_foreshadowings", [])) <= 8

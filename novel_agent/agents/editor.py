@@ -1,9 +1,14 @@
-"""Editor Agent — reviews chapter quality and detects AI writing patterns."""
+"""Editor Agent — reviews chapter quality using provided style evidence.
+
+The Editor no longer calls a detect_ai_flavor tool. The deterministic
+StyleAnalyzer runs in the graph node and its StyleReport is passed as
+context. The Editor focuses on literary judgment: characters, logic,
+rhythm, dialogue, semantic AI flavor.
+"""
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.schema.validator import OutputValidator
-from novel_agent.tools.detect_ai_flavor import DetectAiFlavorTool
 
 EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，负责把控正文质量，绝不给面子分，必须依据扣分阶梯真实客观打分。
 
@@ -29,8 +34,14 @@ EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，
 - **minor_fix**：存在局部小瑕疵或个别 AI 词，得分在 70-84 之间。
 - **rewrite**：总分 < 70，或存在严重篇幅缩水、重大逻辑崩溃。
 
-## 工具
-使用 detect_ai_flavor 工具对正文进行规则扫描。
+## 风格证据
+审查前，系统会提供确定性风格分析报告（StyleReport），包含：
+- 段落结构指标（碎片化评分、连续短段、单句段比例等）
+- AI 味证据（禁用词、陈词滥调、句式问题）
+- 句子节奏、对话占比、结尾分析
+
+这些是客观数据，作为评分参考。你的文学判断优先于数据指标——
+数据发现的结构异常（如连续短段过多）应体现在对应维度扣分中。
 
 ## 输出格式
 审查完成后，输出结构化 JSON 报告：
@@ -59,7 +70,6 @@ class EditorAgent(BaseAgent):
 
     def __init__(self, config: AgentConfig | None = None):
         super().__init__(config)
-        self.register_tool(DetectAiFlavorTool())
 
     @property
     def system_prompt(self) -> str:
@@ -70,8 +80,14 @@ class EditorAgent(BaseAgent):
         chapter_number: int,
         draft_content: str,
         narrative_mode: str | None = None,
+        style_report: dict | None = None,
+        context_packet: dict | None = None,
     ) -> tuple[dict, TraceStep]:
         """Review a chapter draft.
+
+        Args:
+            style_report: Deterministic StyleReport dict from StyleAnalyzer.
+            context_packet: Minimal context projection from ContextCompiler.
 
         Returns (report_dict, trace).
         """
@@ -79,17 +95,25 @@ class EditorAgent(BaseAgent):
         if narrative_mode:
             mode_hint = f"\n当前叙事模式：{narrative_mode}。请根据叙事模式调整评分标准。\n"
 
+        style_section = self._format_style_report(style_report) if style_report else ""
+        context_section = self._format_context(context_packet) if context_packet else ""
+
+        content_parts = [
+            f"请审查第{chapter_number}章的正文。",
+            mode_hint,
+        ]
+        if context_section:
+            content_parts.append(context_section)
+        if style_section:
+            content_parts.append(style_section)
+        content_parts.append(f"## 正文\n{draft_content}")
+        content_parts.append("给出完整的审查报告。只输出JSON，不要其他内容。")
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
-                "content": (
-                    f"请审查第{chapter_number}章的正文。\n"
-                    f"{mode_hint}\n"
-                    f"## 正文\n{draft_content}\n\n"
-                    f"先用 detect_ai_flavor 工具扫描正文，然后给出完整的审查报告。"
-                    f"只输出JSON，不要其他内容。"
-                ),
+                "content": "\n\n".join(content_parts),
             },
         ]
 
@@ -119,3 +143,65 @@ class EditorAgent(BaseAgent):
 
         report = OutputValidator.validate("editor", raw).to_dict()
         return report, trace
+
+    @staticmethod
+    def _format_style_report(report: dict) -> str:
+        """Format StyleReport dict into a prompt section for the Editor."""
+        parts = ["## 确定性风格分析（StyleReport）"]
+
+        gate = report.get("style_gate", "PASS")
+        parts.append(f"- 结构门禁: {gate}")
+
+        para = report.get("paragraph_structure") or {}
+        if para:
+            frag = para.get("fragmentation_score", "?")
+            short_ratio = para.get("short_narrative_ratio", 0)
+            single_ratio = para.get("single_sentence_narrative_ratio", 0)
+            max_consec = para.get("max_consecutive_short_narrative_paragraphs", 0)
+            para_issues = para.get("issues", [])
+            parts.append(
+                f"- 段落碎片化评分: {frag}/100, "
+                f"短叙述段比例: {short_ratio:.0%}, "
+                f"单句段比例: {single_ratio:.0%}, "
+                f"最长连续短段: {max_consec}"
+            )
+            if para_issues:
+                parts.append(f"- 段落结构问题: {'; '.join(para_issues)}")
+
+        issues = report.get("issues") or []
+        if issues:
+            parts.append(f"- AI味证据 ({len(issues)} 项):")
+            for i in issues[:8]:
+                if isinstance(i, dict):
+                    label = i.get("phrase") or i.get("pattern") or i.get("type", "?")
+                    parts.append(f"  · {label} (×{i.get('count', 1)})")
+
+        sent = report.get("sentence_rhythm") or {}
+        if sent and sent.get("uniform_sentences"):
+            parts.append(f"- 句子节奏: {sent.get('detail', '')}")
+
+        ending = report.get("ending_analysis") or {}
+        if ending.get("summary_ending"):
+            parts.append("- 结尾: 出现总结式结尾（应改为具体动作或画面）")
+        hook_ev = ending.get("hook_evidence") or []
+        if hook_ev:
+            parts.append(f"- 结尾悬念证据: {', '.join(hook_ev)}")
+
+        dialogue = report.get("dialogue_stats") or {}
+        if dialogue:
+            parts.append(f"- 对话占比: {dialogue.get('detail', '')}")
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_context(packet: dict) -> str:
+        """Format minimal context projection into a prompt section."""
+        parts = []
+        if packet.get("recent_summary"):
+            parts.append(f"## 前文提要\n{packet['recent_summary']}")
+        if packet.get("character_context"):
+            parts.append(f"## 相关角色\n{packet['character_context']}")
+        if packet.get("unresolved_foreshadowings"):
+            fs = packet["unresolved_foreshadowings"]
+            parts.append("## 待回收伏笔\n" + "\n".join(f"- {item}" for item in fs))
+        return "\n\n".join(parts) if parts else ""

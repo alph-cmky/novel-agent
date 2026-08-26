@@ -28,6 +28,8 @@ class NovelState(TypedDict, total=False):
     continuity_report: dict
     worldbuilding_report: dict
     orchestrator_strategy: dict
+    # Deterministic style analysis (0 LLM) — consumed by Editor and Evolution
+    style_report: dict
     skip_orchestrator: bool
     skip_reviews: bool
     skip_worldbuilding: bool

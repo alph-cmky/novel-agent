@@ -54,7 +54,11 @@ class ParagraphStructureReport(BaseModel):
 
 
 class StyleReport(BaseModel):
-    """Normalized style analysis result."""
+    """Unified style analysis result — single source of truth for Editor.
+
+    Sub-analyses are embedded as dicts so Editor sees the full evidence
+    without calling any tool.  All dimensions are deterministic (0 LLM).
+    """
 
     ai_flavor_score: float = Field(ge=0, le=100)
     paragraph_structure_score: float = Field(ge=0, le=100)
@@ -62,6 +66,10 @@ class StyleReport(BaseModel):
     dialogue_score: float = Field(ge=0, le=100)
     issues: list[StyleIssue] = Field(default_factory=list)
     paragraph_structure: dict | None = None
+    sentence_rhythm: dict | None = None
+    dialogue_stats: dict | None = None
+    ending_analysis: dict | None = None
+    style_gate: str = "PASS"
 
 
 # ── Dialogue detection ──────────────────────────────────
@@ -368,74 +376,21 @@ def style_gate(report: ParagraphStructureReport | dict) -> str:
 
 
 def detect_ai_flavor(text: str) -> dict:
-    """Run all AI flavor detection rules and return a report.
+    """Legacy entry point — thin wrapper around StyleAnalyzer.analyze().
 
-    AI flavor is evidence/warning — banned phrases, clichés, and sentence
-    patterns are recorded as issues. Paragraph structure is analyzed
-    separately via ParagraphStructureAnalyzer. Dialogue ratio is descriptive.
+    Kept for the offline eval script and existing tests. New code should
+    call ``StyleAnalyzer().analyze()`` directly and consume a ``StyleReport``.
     """
-    issues = []
-
-    for phrase in BANNED_CONNECTORS + BANNED_EMPHASIS:
-        count = text.count(phrase)
-        if count > 0:
-            issues.append(
-                {
-                    "type": "banned_phrase",
-                    "severity": "major",
-                    "phrase": phrase,
-                    "count": count,
-                }
-            )
-
-    for phrase in BANNED_CLICHES:
-        count = text.count(phrase)
-        if count > 0:
-            issues.append(
-                {
-                    "type": "cliche",
-                    "severity": "minor",
-                    "phrase": phrase,
-                    "count": count,
-                }
-            )
-
-    for pattern, label in BANNED_SENTENCE_PATTERNS:
-        matches = re.findall(pattern, text)
-        if matches:
-            issues.append(
-                {
-                    "type": "sentence_pattern",
-                    "severity": "minor",
-                    "pattern": label,
-                    "count": len(matches),
-                }
-            )
-
-    para_report = ParagraphStructureAnalyzer().analyze(text)
-    sent_check = check_sentence_variety(text)
-    dialogue_check = check_dialogue_ratio(text)
-    ending_check = check_ending(text)
-
-    base_score = 100
-    for issue in issues:
-        deduction = 10 if issue["severity"] == "major" else 3
-        base_score -= min(deduction * issue.get("count", 1), 30)
-    if sent_check.get("uniform_sentences"):
-        base_score -= 10
-    if ending_check.get("summary_ending"):
-        base_score -= 15
-
-    score = max(0, base_score)
-
+    report = StyleAnalyzer().analyze(text)
+    para = report.paragraph_structure or {}
     return {
-        "overall_score": score,
-        "issues": issues,
-        "paragraph_analysis": para_report.model_dump(),
-        "sentence_analysis": sent_check,
-        "dialogue_analysis": dialogue_check,
-        "ending_analysis": ending_check,
-        "total_issues": len(issues),
+        "overall_score": report.ai_flavor_score,
+        "issues": [i.model_dump() if isinstance(i, StyleIssue) else i for i in report.issues],
+        "paragraph_analysis": para,
+        "sentence_analysis": report.sentence_rhythm or {},
+        "dialogue_analysis": report.dialogue_stats or {},
+        "ending_analysis": report.ending_analysis or {},
+        "total_issues": len(report.issues),
     }
 
 
@@ -450,18 +405,78 @@ class StyleAnalyzer:
     """
 
     def analyze(self, text: str, profile: StyleProfile | None = None) -> StyleReport:
-        del profile
-        legacy = detect_ai_flavor(text)
-        para = legacy["paragraph_analysis"]
-        sentence = legacy["sentence_analysis"]
-        dialogue = legacy["dialogue_analysis"]
+        del profile  # reserved for future style-aware analysis
+
+        # ── AI flavor evidence ──
+        issues: list[StyleIssue] = []
+
+        for phrase in BANNED_CONNECTORS + BANNED_EMPHASIS:
+            count = text.count(phrase)
+            if count > 0:
+                issues.append(
+                    StyleIssue(
+                        type="banned_phrase",
+                        severity="major",
+                        phrase=phrase,
+                        count=count,
+                    )
+                )
+
+        for phrase in BANNED_CLICHES:
+            count = text.count(phrase)
+            if count > 0:
+                issues.append(
+                    StyleIssue(
+                        type="cliche",
+                        severity="minor",
+                        phrase=phrase,
+                        count=count,
+                    )
+                )
+
+        for pattern, label in BANNED_SENTENCE_PATTERNS:
+            matches = re.findall(pattern, text)
+            if matches:
+                issues.append(
+                    StyleIssue(
+                        type="sentence_pattern",
+                        severity="minor",
+                        pattern=label,
+                        count=len(matches),
+                    )
+                )
+
+        # ── Sub-analyses ──
+        para_report = ParagraphStructureAnalyzer().analyze(text)
+        sent_check = check_sentence_variety(text)
+        dialogue_check = check_dialogue_ratio(text)
+        ending_check = check_ending(text)
+
+        # ── Scores ──
+        base_score = 100
+        for issue in issues:
+            deduction = 10 if issue.severity == "major" else 3
+            base_score -= min(deduction * issue.count, 30)
+        if sent_check.get("uniform_sentences"):
+            base_score -= 10
+        if ending_check.get("summary_ending"):
+            base_score -= 15
+        ai_flavor_score = max(0, base_score)
+
+        para_dict = para_report.model_dump()
+        gate = style_gate(para_report)
+
         return StyleReport(
-            ai_flavor_score=legacy["overall_score"],
-            paragraph_structure_score=para.get("fragmentation_score", 100),
-            sentence_rhythm_score=60 if sentence.get("uniform_sentences") else 90,
-            dialogue_score=dialogue.get("dialogue_ratio", 0) * 100,
-            issues=legacy["issues"],
-            paragraph_structure=para,
+            ai_flavor_score=ai_flavor_score,
+            paragraph_structure_score=para_report.fragmentation_score,
+            sentence_rhythm_score=60 if sent_check.get("uniform_sentences") else 90,
+            dialogue_score=dialogue_check.get("dialogue_ratio", 0) * 100,
+            issues=issues,
+            paragraph_structure=para_dict,
+            sentence_rhythm=sent_check,
+            dialogue_stats=dialogue_check,
+            ending_analysis=ending_check,
+            style_gate=gate,
         )
 
     def legacy_report(self, text: str) -> dict:

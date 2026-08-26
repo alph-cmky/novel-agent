@@ -87,8 +87,14 @@ class ContinuityAgent(BaseAgent):
         chapter_number: int,
         draft_content: str,
         narrative_mode: str | None = None,
+        context_packet: dict | None = None,
     ) -> tuple[dict, TraceStep]:
         """Audit chapter for continuity issues.
+
+        Args:
+            context_packet: Minimal context projection from
+                ContextCompiler.for_continuity() — structured timeline events
+                and findings rather than full chapter history.
 
         Returns (audit_report, trace).
         """
@@ -104,16 +110,24 @@ class ContinuityAgent(BaseAgent):
             else "直接逐项比对正文与前文设定，给出审计报告。"
         )
 
+        context_section = ""
+        if context_packet:
+            context_section = self._format_context(context_packet)
+
+        content_parts = [
+            f"请审计第{chapter_number}章的设定一致性。",
+            mode_hint,
+        ]
+        if context_section:
+            content_parts.append(context_section)
+        content_parts.append(f"## 本章正文\n{draft_content}")
+        content_parts.append(f"{tool_hint}只输出JSON，不要其他内容。")
+
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
-                "content": (
-                    f"请审计第{chapter_number}章的设定一致性。\n"
-                    f"{mode_hint}\n"
-                    f"## 本章正文\n{draft_content}\n\n"
-                    f"{tool_hint}只输出JSON，不要其他内容。"
-                ),
+                "content": "\n\n".join(content_parts),
             },
         ]
 
@@ -149,3 +163,33 @@ class ContinuityAgent(BaseAgent):
                 return report, trace
 
         return {"unavailable": True, **defaults}, trace
+
+    @staticmethod
+    def _format_context(packet: dict) -> str:
+        """Format structured continuity context into a prompt section."""
+        parts = []
+        events = packet.get("timeline_events") or []
+        if events:
+            lines = ["## 已发生的关键事件"]
+            for ev in events[-10:]:
+                desc = ev.get("description") or ev.get("summary") or str(ev)
+                ch = ev.get("chapter_number", "?")
+                lines.append(f"- [第{ch}章] {desc}")
+            parts.append("\n".join(lines))
+
+        findings = packet.get("timeline_findings") or []
+        if findings:
+            lines = ["## 时间线警告"]
+            for f in findings[:5]:
+                lines.append(f"- {f.get('description', f) if isinstance(f, dict) else f}")
+            parts.append("\n".join(lines))
+
+        foreshadowings = packet.get("unresolved_foreshadowings") or []
+        if foreshadowings:
+            parts.append("## 待回收伏笔\n" + "\n".join(f"- {item}" for item in foreshadowings))
+
+        char_ctx = packet.get("character_context") or ""
+        if char_ctx:
+            parts.append(f"## 角色当前状态\n{char_ctx}")
+
+        return "\n\n".join(parts) if parts else ""

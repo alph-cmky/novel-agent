@@ -524,33 +524,65 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 
 
 async def editor_node(state: NovelState) -> dict:
-    """Editor Agent reviews the chapter."""
+    """Editor Agent reviews the chapter.
+
+    Runs deterministic StyleAnalyzer (0 LLM) before the Editor, so the
+    Editor receives structured style evidence as context instead of calling
+    a tool at runtime. Also applies ContextCompiler.for_editor() projection.
+    """
     editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
+
+    # Deterministic style analysis — 0 LLM, runs before Editor
+    draft = state.get("draft_content", "")
+    style_report_dict: dict = {}
+    if draft.strip():
+        from novel_agent.style.analyzer import StyleAnalyzer
+
+        style_report = StyleAnalyzer().analyze(draft)
+        style_report_dict = style_report.model_dump()
+
+    # Minimal context projection for Editor
+    full_packet = state.get("context_packet") or {}
+    editor_packet = ContextCompiler.for_editor(full_packet) if full_packet else None
+
     report, _ = await editor.review(
         chapter_number=state.get("chapter_number", 1),
-        draft_content=state.get("draft_content", ""),
+        draft_content=draft,
         narrative_mode=state.get("narrative_mode"),
+        style_report=style_report_dict or None,
+        context_packet=editor_packet,
     )
     if report.get("unavailable"):
         print("  [Editor] unavailable（空输出，审查维度跳过）")
-        return {"editor_report": report}
+        return {"editor_report": report, "style_report": style_report_dict}
     score = report.get("overall_score", 0)
-    print(f"  [Editor] {score}/100 — {report.get('verdict', '?')}")
-    return {"editor_report": report}
+    gate = style_report_dict.get("style_gate", "?")
+    print(f"  [Editor] {score}/100 — {report.get('verdict', '?')} (gate: {gate})")
+    return {"editor_report": report, "style_report": style_report_dict}
 
 
 async def continuity_node(state: NovelState) -> dict:
-    """Continuity Agent audits cross-chapter consistency."""
+    """Continuity Agent audits cross-chapter consistency.
+
+    Uses ContextCompiler.for_continuity() to pass structured timeline
+    events and findings rather than full chapter history.
+    """
     config = _config_for(TaskClass.REVIEW)
     _persist = state.get("persist_dir", "./novel-data")
     store = _get_chapter_store(_persist)
     project_id = state.get("project_id", "")
 
     auditor = ContinuityAgent(config=config, chapter_store=store, project_id=project_id)
+
+    # Minimal context projection for Continuity — structured data over full text
+    full_packet = state.get("context_packet") or {}
+    continuity_packet = ContextCompiler.for_continuity(full_packet) if full_packet else None
+
     report, _ = await auditor.audit(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
         narrative_mode=state.get("narrative_mode"),
+        context_packet=continuity_packet,
     )
     score = report.get("overall_score", 0)
     if report.get("unavailable"):

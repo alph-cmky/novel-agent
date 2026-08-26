@@ -1,6 +1,5 @@
 """Tests for style analysis — paragraph structure, AI flavor evidence, style gate."""
 
-import asyncio
 from pathlib import Path
 
 from novel_agent.style.analyzer import (
@@ -12,7 +11,6 @@ from novel_agent.style.analyzer import (
     detect_ai_flavor,
     style_gate,
 )
-from novel_agent.tools.detect_ai_flavor import DetectAiFlavorTool
 
 FIXTURES = Path(__file__).parent / "fixtures" / "style"
 
@@ -73,14 +71,23 @@ class TestBannedPhrases:
         assert report.dialogue_score > 0
         assert isinstance(report.issues, list)
         assert report.paragraph_structure is not None
+        assert report.sentence_rhythm is not None
+        assert report.dialogue_stats is not None
+        assert report.ending_analysis is not None
+        assert report.style_gate in ("PASS", "WARNING", "FAIL")
 
-    def test_style_tool_preserves_legacy_payload(self):
+    def test_legacy_detect_ai_flavor_matches_analyzer(self):
+        """detect_ai_flavor() is a thin wrapper around StyleAnalyzer.analyze()."""
         text = "此外，这个发现至关重要。"
-        direct = detect_ai_flavor(text)
-        result = asyncio.run(DetectAiFlavorTool().execute(text=text))
+        report = StyleAnalyzer().analyze(text)
+        legacy = detect_ai_flavor(text)
 
-        assert result.success is True
-        assert result.data == direct
+        assert legacy["overall_score"] == report.ai_flavor_score
+        assert len(legacy["issues"]) == len(report.issues)
+        assert legacy["paragraph_analysis"] == report.paragraph_structure
+        assert legacy["sentence_analysis"] == report.sentence_rhythm
+        assert legacy["dialogue_analysis"] == report.dialogue_stats
+        assert legacy["ending_analysis"] == report.ending_analysis
 
 
 class TestParagraphStructure:

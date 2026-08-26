@@ -264,7 +264,7 @@ novel_agent/
 │   ├── base.py          # BaseAgent（工具调用循环 + 调用元数据）
 │   ├── orchestrator.py  # 叙事策略 + 上下文组装
 │   ├── writer.py        # 章节创作（V2 默认 + search_context 工具）
-│   ├── editor.py        # 5 维审查 + DetectAiFlavorTool
+│   ├── editor.py        # 5 维审查 + StyleReport 证据接入
 │   ├── continuity.py    # 跨章节一致性审计
 │   ├── worldbuilding.py # 实体提取 + 冲突检测
 │   └── evolution_orchestrator.py # 元评估 + 改进计划（LLM 增强层）
