@@ -13,8 +13,8 @@ Baseline: `aef24209d8ff6a445359520cd89e2a79b8c1aabb`
 | `WRITER_SYSTEM_PROMPT` (V1) | `agents/writer.py` | system_prompt property | test_chapter.py | Only when prompt_profile!="v2" | V2 is default and only path | DELETE |
 | `writer_prompt_profile` | `graph/state.py`, `chapter.py:353` | chapter.py writer_node | test_chapter.py | Always "v2" | V1/V2 branch | DELETE |
 | `prompt_profile` param | `agents/writer.py` | WriterAgent constructor | test_chapter.py | — | V1/V2 selection | DELETE |
-| `primary_storyline` | `schema/models.py`, `orchestrator.py` | orchestrator defaults:284, prompt:63 | test_validator.py | Never read by code | Replaced by `storylines` | DELETE |
-| Editor legacy flat scores | `schema/models.py:109-112` | validator.py coercion:157-160 | test_validator.py | Never read in production | Replaced by `dimensions` | DELETE |
+| `primary_storyline` | `schema/models.py`, `orchestrator.py` | orchestrator defaults:284, prompt:63 | test_validator.py | Never read by code | Replaced by `storylines` | DELETE (Phase E) |
+| Editor legacy flat scores | `schema/models.py:109-112` | validator.py coercion:157-160 | test_validator.py | Never read in production | Replaced by `dimensions` | DELETE (Phase E) |
 | `_migrate()` | `storage/models.py` | `init_db()` | test_manager.py | Schema evolution | Pre-prod: CREATE TABLE has all cols | DELETE (Phase D) |
 | `rewrite_instructions` legacy path | `graph/chapter.py:371-377` | writer_node | — | Old feedback loop | Replaced by evolution_improvement_plan | DELETE (Phase B) |
 | `retry_count` in state | `graph/state.py` comment, `chapter.py:910`, `sse.py:94` | human_review_node, sse | — | Only displayed, not used for logic | Old linear retry | DELETE from state usage |

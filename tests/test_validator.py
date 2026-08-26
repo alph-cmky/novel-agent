@@ -15,7 +15,6 @@ class TestValidInput:
             "narrative_stage": "development",
             "stage_analysis": "middle arc",
             "chapter_strategy": {
-                "primary_storyline": "main plot",
                 "pacing": "fast",
                 "key_scenes": ["fight", "reveal"],
                 "ending_type": "cliffhanger",
@@ -53,10 +52,6 @@ class TestValidInput:
                 "sentence_pattern_issues": [],
                 "structural_issues": [],
             },
-            "rhythm_score": 80,
-            "dialogue_score": 85,
-            "logic_score": 90,
-            "writing_quality_score": 82,
         }
         result = OutputValidator.validate("editor", raw)
         assert result.valid is True

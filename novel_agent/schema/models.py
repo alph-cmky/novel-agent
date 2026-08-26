@@ -19,7 +19,6 @@ class ChapterStrategy(BaseModel):
     """
 
     # ── Original fields (GLOBAL) ──
-    primary_storyline: str = ""
     pacing: str = "normal"
     key_scenes: list[str] = Field(default_factory=list)
     ending_type: str = "cliffhanger"
@@ -39,7 +38,7 @@ class ChapterStrategy(BaseModel):
     time_structure: dict | None = None
     # CONDITIONAL: near ending
     ending_tone: dict | None = None
-    # GLOBAL: replaces primary_storyline for multi-line works
+    # GLOBAL: storylines for multi-line works
     storylines: list[dict] = Field(default_factory=list)
     storyline_intersection: dict | None = None
 
@@ -105,11 +104,6 @@ class EditorReport(BaseModel):
     issues: list[EditorIssue] = Field(default_factory=list)
     highlights: list[str] = Field(default_factory=list)
     ai_flavor: AIFlavorReport = Field(default_factory=AIFlavorReport)
-    # Legacy flat fields — retained for backward compat
-    rhythm_score: int = 0
-    dialogue_score: int = 0
-    logic_score: int = 0
-    writing_quality_score: int = 0
 
 
 # ── Continuity ────────────────────────────────────────

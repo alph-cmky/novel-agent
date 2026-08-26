@@ -154,10 +154,6 @@ class OutputValidator:
 
         int_paths = [
             "overall_score",
-            "rhythm_score",
-            "dialogue_score",
-            "logic_score",
-            "writing_quality_score",
             "dimensions.rhythm",
             "dimensions.ai_flavor",
             "dimensions.dialogue",
