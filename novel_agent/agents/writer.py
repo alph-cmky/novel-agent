@@ -7,40 +7,7 @@ from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.parser import strip_none
 from novel_agent.tools.search import SearchContextTool
 
-WRITER_SYSTEM_PROMPT = """你是一个顶级长篇网文作家，擅长创作极具张力、画面感强、情绪流与节奏明快的精彩正文。
-
-## 核心创作法则（网文黄金标准）
-
-1. **动作与画面推进（Show, Don't Tell）**：
-   - 拒绝抽象说明。不要写"他很震惊/愤怒"，写具体的生理反应与微动作（如"他手指猛地收紧，骨节泛白"、"茶杯在掌心生生捏出裂纹"）。
-   - 拒绝虚浮的形容词堆砌，多用强动词与生活化口语，提升阅读爽感。
-
-2. **对话张力**：
-   - 每一段对白都必须带有目的、潜台词或情绪交锋，严禁无营养的客套和问答。
-   - 角色说话必须符合其身份、地位与性格，杜绝所有角色千人一面的"书面播音腔"。
-
-3. **感官沉浸（五感细节）**：
-   - 每场戏至少融入 1~2 处精准的视觉（光影/色彩）、听觉（环境声/破空声）或触觉/嗅觉描写，营造身临其境的现场感。
-
-4. **结尾留白**：
-   - 禁止在章节末尾做道德总结、中心思想升华或大段哲学感慨。
-   - 章节结尾应留下可继续的叙事状态，不强制每章 cliffhanger。
-
-5. **硬性去 AI 味法则**：
-   - **绝对禁用词**：此外、不仅如此、更重要的是、至关重要、不可忽视、显而易见、总而言之、由此可见、基于以上。
-   - **绝对禁用套话**：禁止写"他的眼中闪过一丝..."、"嘴角勾起一抹弧度"、"深吸一口气，平复心情"、"这不仅是...更是..."。
-
-6. **篇幅与结构完整性**：
-   - 必须输出包含起承转合的完整正文章节（禁止概括性大纲、禁止只输出修改片段或省略号）。
-   - 充分展开场景与对话，严禁过度压缩剧情。
-
-## 策略指令解读
-主编（Orchestrator）在 prompt 中提供的叙事策略与关键场景必须严格覆盖并自然融入剧情。
-
-## 输出格式
-直接输出小说章节正文，不要输出任何前言、后记、写作说明或多余标题。每章2000-4000字。"""
-
-WRITER_SYSTEM_PROMPT_V2 = """你是长篇小说章节执行器。
+WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 
 你的首要目标是保持长篇叙事可靠推进，而不是堆砌辞藻：
 1. 不违反 Canon 事实、角色状态和时间线。
@@ -89,7 +56,6 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 3000,
         narrative_mode: str | None = None,
         narrative_perspective: str = "",
-        prompt_profile: str = "v2",
     ):
         super().__init__(config)
         self._chapter_store = chapter_store
@@ -97,13 +63,12 @@ class WriterAgent(BaseAgent):
         self._target_words = target_chapter_words
         self._narrative_mode = narrative_mode
         self._narrative_perspective = narrative_perspective
-        self._prompt_profile = prompt_profile
         if chapter_store and project_id:
             self.register_tool(SearchContextTool(chapter_store, project_id))
 
     @property
     def system_prompt(self) -> str:
-        prompt = WRITER_SYSTEM_PROMPT_V2 if self._prompt_profile == "v2" else WRITER_SYSTEM_PROMPT
+        prompt = WRITER_SYSTEM_PROMPT
         if self._target_words:
             prompt = prompt.replace(
                 "每章2000-4000字",
@@ -115,36 +80,28 @@ class WriterAgent(BaseAgent):
         self,
         chapter_number: int,
         outline: str,
-        character_context: str = "",
-        world_context: str = "",
-        recent_summary: str = "",
+        context_packet: dict | None = None,
         target_chapter_words: int = 0,
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
-        unresolved_foreshadowings: list[str] | None = None,
-        context_packet: dict | None = None,
-        timeline_events: list[dict] | None = None,
-        timeline_findings: list[dict] | None = None,
     ) -> tuple[str, TraceStep]:
         """Generate a chapter.
 
         Args:
             chapter_number: Current chapter number.
             outline: Chapter outline / plot points.
-            character_context: Relevant character info from memory.
-            world_context: Relevant worldbuilding info from memory.
-            recent_summary: Compressed summary of recent chapters.
+            context_packet: Projected context from ContextCompiler.for_writer().
             target_chapter_words: Override per-chapter word count (0 = use default).
-            rewrite_instructions: Specific guidance from Orchestrator for rewriting.
+            rewrite_instructions: Specific guidance from evolution or human feedback.
             orchestrator_strategy: Narrative strategy from Orchestrator (stage, pacing, etc.).
         """
-        if context_packet:
-            character_context = context_packet.get("character_context", "")
-            world_context = context_packet.get("world_context", "")
-            recent_summary = context_packet.get("recent_summary", "")
-            unresolved_foreshadowings = context_packet.get("unresolved_foreshadowings", [])
-            timeline_events = context_packet.get("timeline_events", [])
-            timeline_findings = context_packet.get("timeline_findings", [])
+        packet = context_packet or {}
+        character_context = packet.get("character_context", "")
+        world_context = packet.get("world_context", "")
+        recent_summary = packet.get("recent_summary", "")
+        unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
+        timeline_events = packet.get("timeline_events", [])
+        timeline_findings = packet.get("timeline_findings", [])
         messages = [{"role": "system", "content": self.system_prompt}]
 
         # Assemble context
@@ -197,28 +154,22 @@ class WriterAgent(BaseAgent):
         self,
         chapter_number: int,
         outline: str,
-        character_context: str = "",
-        world_context: str = "",
-        recent_summary: str = "",
+        context_packet: dict | None = None,
         target_chapter_words: int = 0,
         rewrite_instructions: str = "",
         orchestrator_strategy: dict | None = None,
-        unresolved_foreshadowings: list[str] | None = None,
-        context_packet: dict | None = None,
-        timeline_events: list[dict] | None = None,
-        timeline_findings: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Generate a chapter with streaming output. Yields text chunks.
 
         Unlike write(), this skips tool calling and streams the LLM response directly.
         """
-        if context_packet:
-            character_context = context_packet.get("character_context", "")
-            world_context = context_packet.get("world_context", "")
-            recent_summary = context_packet.get("recent_summary", "")
-            unresolved_foreshadowings = context_packet.get("unresolved_foreshadowings", [])
-            timeline_events = context_packet.get("timeline_events", [])
-            timeline_findings = context_packet.get("timeline_findings", [])
+        packet = context_packet or {}
+        character_context = packet.get("character_context", "")
+        world_context = packet.get("world_context", "")
+        recent_summary = packet.get("recent_summary", "")
+        unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
+        timeline_events = packet.get("timeline_events", [])
+        timeline_findings = packet.get("timeline_findings", [])
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
         if rewrite_instructions:
             context_parts.insert(0, f"## 重写指导（务必遵守）\n{rewrite_instructions}")
@@ -265,9 +216,8 @@ class WriterAgent(BaseAgent):
         current_content: str,
         chapter_number: int,
         chapter_outline: str,
-        character_context: str = "",
+        context_packet: dict | None = None,
         gap_words: int = 500,
-        unresolved_foreshadowings: list[str] | None = None,
     ) -> str:
         """Generate incremental content to extend a short chapter.
 
@@ -275,6 +225,9 @@ class WriterAgent(BaseAgent):
         Uses minimal context (ending + outline + character state), not full
         chapter context.
         """
+        packet = context_packet or {}
+        character_context = packet.get("character_context", "")
+        unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
         ending = current_content[-800:] if len(current_content) > 800 else current_content
 
         context_parts = [

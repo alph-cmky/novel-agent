@@ -194,17 +194,12 @@ class OrchestratorAgent(BaseAgent):
         chapter_number: int,
         chapter_outline: str,
         previous_chapters: list[dict],
-        character_context: str,
-        world_context: str,
         story_length: str = "long",
         target_chapter_words: int = 3000,
         narrative_mode: str | None = None,
         narrative_perspective: str = "",
         arc_summary: str = "",
-        unresolved_foreshadowings: list[str] | None = None,
         context_packet: dict | None = None,
-        timeline_events: list[dict] | None = None,
-        timeline_findings: list[dict] | None = None,
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
@@ -220,14 +215,13 @@ class OrchestratorAgent(BaseAgent):
             "medium": "中篇",
             "long": "长篇",
         }.get(story_length, story_length or "长篇")
-        if context_packet:
-            character_context = context_packet.get("character_context", character_context)
-            world_context = context_packet.get("world_context", world_context)
-            unresolved_foreshadowings = context_packet.get(
-                "unresolved_foreshadowings", unresolved_foreshadowings
-            )
-            timeline_events = context_packet.get("timeline_events", timeline_events)
-            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
+
+        packet = context_packet or {}
+        character_context = packet.get("character_context", "")
+        world_context = packet.get("world_context", "")
+        unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
+        timeline_events = packet.get("timeline_events", [])
+        timeline_findings = packet.get("timeline_findings", [])
         unresolved = unresolved_foreshadowings or []
         foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
         timeline_context = "\n".join(str(item) for item in (timeline_events or [])[-10:])

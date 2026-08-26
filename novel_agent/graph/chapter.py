@@ -4,9 +4,6 @@ Evolution enabled (default):
     Orchestrator → Evolution Subgraph [
         Writer → Editor → Continuity → EvolutionOrchestrator → [continue|select_best]
     ] → Worldbuilding → Human Review → [approved → END | rejected → evolution_writer]
-
-The workflow always uses the recursive self-evolution path; legacy checkpoint
-fields are read only where needed for persisted-state compatibility.
 """
 
 import asyncio
@@ -224,8 +221,6 @@ async def orchestrator_node(state: NovelState) -> dict:
 
     arc_summary = _build_arc_summary(previous_chapters)
 
-    recent_summary = state.get("recent_summary", "")
-
     # Load unresolved foreshadowings before planning so the same long-range
     # constraints reach both the orchestrator and the writer.
     unresolved: list[str] = []
@@ -242,21 +237,21 @@ async def orchestrator_node(state: NovelState) -> dict:
         except Exception as exc:
             print(f"  [Orchestrator] 加载伏笔失败，跳过: {exc}")
 
+    # Merge fresh foreshadowings into context_packet — single context carrier
+    full_packet = dict(state.get("context_packet") or {})
+    if unresolved:
+        full_packet["unresolved_foreshadowings"] = unresolved
+
     strategy = await orchestrator.analyze(
         chapter_number=state.get("chapter_number", 1),
         chapter_outline=state.get("chapter_outline", ""),
         previous_chapters=previous_chapters,
-        character_context=state.get("character_context", ""),
-        world_context=state.get("world_context", ""),
         story_length=story_length,
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
         arc_summary=arc_summary,
-        unresolved_foreshadowings=unresolved,
-        context_packet=state.get("context_packet"),
-        timeline_events=state.get("timeline_events", []),
-        timeline_findings=state.get("timeline_findings", []),
+        context_packet=full_packet,
     )
 
     stage = strategy.get("narrative_stage", "?")
@@ -264,16 +259,17 @@ async def orchestrator_node(state: NovelState) -> dict:
     prev_count = len(previous_chapters)
     print(f"  [Orchestrator] Stage: {stage}, Pacing: {pacing}, Prev: {prev_count}ch")
 
+    # Enrich context_packet with context_needed hints from the strategy
     context_needed = strategy.get("context_needed", {})
     extra_chars = ", ".join(context_needed.get("characters", []))
     extra_world = ", ".join(context_needed.get("world_elements", []))
 
-    char_ctx = state.get("character_context", "")
+    char_ctx = full_packet.get("character_context", "")
     if extra_chars:
         hint = f"[本章涉及角色: {extra_chars}]"
         char_ctx = f"{char_ctx}\n{hint}" if char_ctx else hint
 
-    world_ctx = state.get("world_context", "")
+    world_ctx = full_packet.get("world_context", "")
     if extra_world:
         hint = f"[本章涉及设定: {extra_world}]"
         world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
@@ -292,9 +288,15 @@ async def orchestrator_node(state: NovelState) -> dict:
         world_ctx = f"{world_ctx}\n{timeline_hint}" if world_ctx else timeline_hint
 
     recent_ref = context_needed.get("recent_reference", "")
+    recent_sum = full_packet.get("recent_summary", "")
     if recent_ref:
         ref_hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
-        recent_summary = f"{recent_summary}\n{ref_hint}" if recent_summary else ref_hint
+        recent_sum = f"{recent_sum}\n{ref_hint}" if recent_sum else ref_hint
+
+    # Merge enriched values back into context_packet
+    full_packet["character_context"] = char_ctx
+    full_packet["world_context"] = world_ctx
+    full_packet["recent_summary"] = recent_sum
 
     scene_plan = state.get("scene_plan", [])
     if state.get("scene_first"):
@@ -305,10 +307,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         )
     return {
         "orchestrator_strategy": strategy,
-        "character_context": char_ctx,
-        "world_context": world_ctx,
-        "recent_summary": recent_summary,
-        "unresolved_foreshadowings": unresolved,
+        "context_packet": full_packet,
         "scene_plan": scene_plan,
     }
 
@@ -316,8 +315,7 @@ async def orchestrator_node(state: NovelState) -> dict:
 async def writer_node(state: NovelState, config: RunnableConfig | None = None) -> dict:
     """Writer Agent generates (or rewrites) chapter content.
 
-    Consumes the evolution improvement plan and preserves legacy checkpoint
-    instructions when they are present.
+    Consumes the evolution improvement plan when present.
     """
     target_words = state.get("target_chapter_words", 3000)
     max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
@@ -338,31 +336,21 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
-        prompt_profile=state.get("writer_prompt_profile", "v2"),
     )
 
     stream_queue: asyncio.Queue | None = None
     if config and config.get("configurable"):
         stream_queue = config["configurable"].get("stream_queue")
 
-    # Determine rewrite instructions — evolution plan takes priority
+    # Evolution improvement plan drives rewrite instructions
     rewrite_text = ""
     constraints = {}
     evolution_version = state.get("evolution_version", 0)
 
     improvement_plan = state.get("evolution_improvement_plan") or {}
     if improvement_plan.get("primary_instruction"):
-        # Evolution mode: format improvement_plan into instructions
         rewrite_text = _format_improvement_plan(improvement_plan, evolution_version)
         constraints = improvement_plan.get("constraints", {})
-    else:
-        # Legacy mode: handle rewrite_instructions (str | dict)
-        raw_instructions = state.get("rewrite_instructions", "")
-        if isinstance(raw_instructions, dict):
-            rewrite_text = raw_instructions.get("instructions", "")
-            constraints = raw_instructions.get("constraints", {})
-        else:
-            rewrite_text = raw_instructions
 
     # Merge constraints.strategy_override into orchestrator_strategy
     strategy = state.get("orchestrator_strategy", {})
@@ -380,13 +368,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     write_args = dict(
         chapter_number=state.get("chapter_number", 1),
         outline=state.get("chapter_outline", ""),
-        character_context=state.get("character_context", ""),
-        world_context=state.get("world_context", ""),
-        recent_summary=state.get("recent_summary", ""),
-        unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
         context_packet=writer_packet,
-        timeline_events=state.get("timeline_events", []),
-        timeline_findings=state.get("timeline_findings", []),
         target_chapter_words=target_words,
         rewrite_instructions=rewrite_text,
         orchestrator_strategy=strategy,
@@ -395,7 +377,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     scene_drafts: list[str] = []
     scene_trace = None
     if state.get("scene_first") and state.get("scene_plan"):
-        scene_context = write_args["recent_summary"]
+        scene_context = (writer_packet or {}).get("recent_summary", "")
         for scene in state["scene_plan"]:
             scene_args = dict(write_args)
             scene_args["outline"] = (
@@ -403,8 +385,11 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
                 f"本场目标约 {scene['target_words']} 字，必须形成独立的动作和情绪推进。"
             )
             scene_args["target_chapter_words"] = scene["target_words"]
+            # Inject accumulated scene context into context_packet
             if scene_context:
-                scene_args["recent_summary"] = scene_context
+                scene_packet = dict(writer_packet or {})
+                scene_packet["recent_summary"] = scene_context
+                scene_args["context_packet"] = scene_packet
             if stream_queue is not None:
                 chunks: list[str] = []
                 async for chunk in writer.write_stream(**scene_args):
@@ -462,9 +447,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             current_content=content,
             chapter_number=state.get("chapter_number", 1),
             chapter_outline=state.get("chapter_outline", ""),
-            character_context=ext_context.get("character_context", ""),
+            context_packet=ext_context,
             gap_words=gap,
-            unresolved_foreshadowings=ext_context.get("unresolved_foreshadowings", []),
         )
         if extension.strip():
             content = content + "\n\n" + extension.strip()
@@ -895,7 +879,6 @@ def human_review_node(state: NovelState) -> dict:
             "continuity_issues": continuity_report.get("inconsistencies", [])[:10],
             "wb_new_entities": len(wb_report.get("new_entities", [])),
             "wb_conflicts": len(wb_report.get("conflicts", [])),
-            "retry_count": state.get("retry_count", 0),
             "evolution_rounds": evolution_rounds,
             "evolution_termination": evolution_termination,
         }

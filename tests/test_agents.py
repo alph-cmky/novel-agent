@@ -87,10 +87,12 @@ class TestOrchestratorPromptHelpers:
                     chapter_number=4,
                     chapter_outline="大纲",
                     previous_chapters=[],
-                    character_context="",
-                    world_context="",
                     story_length="short",
-                    unresolved_foreshadowings=["[第1章] 神秘信物"],
+                    context_packet={
+                        "character_context": "",
+                        "world_context": "",
+                        "unresolved_foreshadowings": ["[第1章] 神秘信物"],
+                    },
                 )
             )
         prompt = mocked.call_args.args[0][1]["content"]

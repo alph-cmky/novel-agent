@@ -185,7 +185,7 @@ class ContextCompiler:
         """Minimal context for Writer: chars + summary + foreshadowings + events.
 
         world_context is explicitly empty — Writer does not need full worldbuilding.
-        All keys are present so Writer.get() never falls back to legacy state.
+        All keys are present so Writer can read them without nil-checks.
         """
         char_budget = budget_chars // 3
         return {

@@ -119,7 +119,6 @@ class SaveDraftRequest(BaseModel):
 
 class CreateRunRequest(BaseModel):
     run_type: str = "draft"
-    workflow_version: str = "v2"
 
 
 class CreateVersionRequest(BaseModel):
@@ -289,7 +288,7 @@ async def create_writing_run(
     chapter_number: int,
     req: CreateRunRequest,
 ):
-    """Create a durable V2 run without starting the legacy graph yet."""
+    """Create a durable run without starting the graph yet."""
     mgr = _get_manager()
     if not mgr.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -298,7 +297,6 @@ async def create_writing_run(
             project_id,
             chapter_number,
             run_type=req.run_type,
-            workflow_version=req.workflow_version,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -644,16 +642,10 @@ async def write_chapter(project_id: str, chapter_number: int):
         "target_chapter_words": project.get("target_chapter_words", 3000),
         "narrative_mode": project.get("narrative_mode"),
         "narrative_perspective": project.get("narrative_perspective", ""),
-        "character_context": ctx.get("character_context", ""),
-        "world_context": ctx.get("world_context", ""),
-        "recent_summary": ctx.get("recent_summary", ""),
-        "unresolved_foreshadowings": ctx.get("unresolved_foreshadowings", []),
-        "context_packet_hash": ctx.get("context_packet_hash", ""),
         "context_packet": ctx.get("context_packet", {}),
         "scene_first": False,
         "existing_world_entities": mgr.get_all_world_entities(project_id),
         "persist_dir": persist_dir,
-        "retry_count": 0,
     }
 
     return StreamingResponse(

@@ -1,7 +1,6 @@
 """Shared state that flows through the chapter-writing StateGraph.
 
-v2: Evolution architecture. The old retry_count + linear feedback loop has been
-removed; its fields are retained only for backward-compatible checkpoint loading.
+v2: Recursive self-evolution architecture. No legacy retry/feedback fields.
 """
 
 from typing import TypedDict
@@ -36,15 +35,8 @@ class NovelState(TypedDict, total=False):
     review_interval: int
     skip_evolution_enrichment: bool
 
-    # ── Orchestrator 注入的上下文 ──
-    character_context: str
-    world_context: str
-    recent_summary: str
-    unresolved_foreshadowings: list[str]
-    context_packet_hash: str
+    # ── Agent 注入的上下文（单一载体）──
     context_packet: dict
-    timeline_events: list[dict]
-    timeline_findings: list[dict]
     scene_first: bool
     scene_plan: list[dict]
     scene_drafts: list[str]
@@ -75,7 +67,6 @@ class NovelState(TypedDict, total=False):
     quality_guard_report: dict
     quality_gate_report: dict
     deterministic_gate_first: bool
-    writer_prompt_profile: str
 
     # ── 存储路径 ──
     persist_dir: str

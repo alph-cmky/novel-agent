@@ -91,7 +91,6 @@ def _review_payload(values: dict, chapter_number: int) -> dict:
         "continuity_issues": ct.get("inconsistencies", [])[:10],
         "wb_new_entities": len(wb.get("new_entities", [])),
         "wb_conflicts": len(wb.get("conflicts", [])),
-        "retry_count": values.get("retry_count", 0),
         "evolution_rounds": len(values.get("evolution_history", [])),
         "evolution_termination": values.get("evolution_termination", ""),
     }
@@ -685,7 +684,7 @@ def _save_chapter_result(
                 version_id=version_record["id"] if version_record else None,
             )
         else:
-            # Legacy runs retain the old direct-write path during migration.
+            # Runs without a version record use direct-write persistence.
             mgr.save_world_entities(project_id, wb_report, chapter_number)
             mgr.save_world_relations(project_id, chapter_number, wb_report)
             _save_foreshadowings(mgr, project_id, chapter_number, wb_report)

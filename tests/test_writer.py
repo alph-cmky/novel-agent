@@ -27,50 +27,24 @@ class TestStripNone:
         assert strip_none(None) is None
 
 
-def test_writer_prompt_v2_prioritizes_canon_over_generic_style_rules():
-    prompt = WriterAgent(prompt_profile="v2").system_prompt
+def test_writer_prompt_prioritizes_canon_over_generic_style_rules():
+    prompt = WriterAgent().system_prompt
 
     assert "Canon / 已批准事实" in prompt
     assert "不强制每章反转或 cliffhanger" in prompt
     assert "对话比例服从场景目标" in prompt
 
 
-class TestPromptProfileDefault:
-    """P0: Writer 默认使用 V2，V1 仅在显式指定时才用。"""
+class TestWriterPrompt:
+    """Verify the single writer prompt has required content."""
 
-    def test_default_profile_is_v2(self):
-        """不传 prompt_profile 时默认 V2。"""
+    def test_prompt_has_canon_priority(self):
         prompt = WriterAgent().system_prompt
         assert "长篇小说章节执行器" in prompt
         assert "Canon / 已批准事实" in prompt
 
-    def test_explicit_v2_uses_v2(self):
-        prompt = WriterAgent(prompt_profile="v2").system_prompt
-        assert "长篇小说章节执行器" in prompt
-
-    def test_explicit_v1_uses_v1(self):
-        prompt = WriterAgent(prompt_profile="v1").system_prompt
-        assert "网文黄金标准" in prompt
-
-    def test_v1_no_global_dialogue_ratio(self):
-        """V1 不再包含全局对白 ≥ 40% 硬性规则。"""
-        prompt = WriterAgent(prompt_profile="v1").system_prompt
-        assert "对白占比 40%" not in prompt
-        assert "40%+" not in prompt
-
-    def test_v1_no_mechanical_sentence_alternation(self):
-        """V1 不再包含机械长短句交替规则。"""
-        prompt = WriterAgent(prompt_profile="v1").system_prompt
-        assert "长句与短句交错" not in prompt
-
-    def test_v1_no_forced_cliffhanger(self):
-        """V1 不再强制每章 cliffhanger。"""
-        prompt = WriterAgent(prompt_profile="v1").system_prompt
-        assert "戛然而止" not in prompt
-
-    def test_v2_has_paragraph_principles(self):
-        """V2 包含最少量段落原则。"""
-        prompt = WriterAgent(prompt_profile="v2").system_prompt
+    def test_prompt_has_paragraph_principles(self):
+        prompt = WriterAgent().system_prompt
         assert "自然段以叙事单元而非单句为边界" in prompt
         assert "短句不等于短段" in prompt
         assert "对白自然独立成段" in prompt
@@ -135,15 +109,17 @@ class TestWriteToolHint:
     def test_unresolved_foreshadowings_are_injected(self):
         user = self._capture_user_prompt(
             WriterAgent(),
-            unresolved_foreshadowings=["[第1章] 神秘信物"],
+            context_packet={
+                "unresolved_foreshadowings": ["[第1章] 神秘信物"],
+            },
         )
         assert "待回收伏笔" in user
         assert "神秘信物" in user
 
-    def test_context_packet_is_preferred_over_legacy_context_args(self):
+    def test_context_packet_character_is_injected(self):
+        """context_packet 中的 character_context 出现在 user prompt 中。"""
         user = self._capture_user_prompt(
             WriterAgent(),
-            character_context="旧角色",
             context_packet={
                 "character_context": "Packet 角色",
                 "world_context": "Packet 设定",
@@ -152,13 +128,13 @@ class TestWriteToolHint:
             },
         )
         assert "Packet 角色" in user
-        assert "旧角色" not in user
+        assert "Packet 设定" in user
+        assert "Packet 摘要" in user
 
-    def test_context_packet_world_context_empty_does_not_fallback(self):
-        """context_packet 的 world_context='' 时，Writer 不回退到 legacy world_context。"""
+    def test_context_packet_world_context_empty_does_not_inject(self):
+        """context_packet 的 world_context='' 时，Writer 不输出世界观段落。"""
         user = self._capture_user_prompt(
             WriterAgent(),
-            world_context="巨大世界观不该出现",
             context_packet={
                 "character_context": "角色",
                 "world_context": "",
@@ -166,7 +142,7 @@ class TestWriteToolHint:
                 "unresolved_foreshadowings": [],
             },
         )
-        assert "巨大世界观不该出现" not in user
+        assert "世界观设定" not in user
 
 
 class TestNarrativeExtension:
