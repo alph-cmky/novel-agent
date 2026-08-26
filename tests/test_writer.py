@@ -203,6 +203,20 @@ class TestWriterTargetWordsInjection:
         assert writer._target_words == 3000
 
 
+class TestEndingTypeNone:
+    """P0: ending_type=None → Writer 自然收束，不注入任何结尾指令。"""
+
+    def test_missing_ending_type_injects_no_ending_instruction(self):
+        writer = WriterAgent()
+        section = writer._format_global_section({"pacing": "normal"})
+        assert "结尾" not in section
+
+    def test_explicit_ending_type_injects_instruction(self):
+        writer = WriterAgent()
+        section = writer._format_global_section({"ending_type": "cliffhanger"})
+        assert "### 结尾: cliffhanger" in section
+
+
 class TestSearchOnDemand:
     """Phase B: search_context 按需调用，不再强制每次先检索（P0）。"""
 

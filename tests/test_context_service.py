@@ -43,6 +43,43 @@ def test_compile_uses_task_aware_retrieval_not_full_reads():
     manager.get_story_events.assert_not_called()
 
 
+def test_apply_context_needed_folds_orchestrator_demands_into_packet():
+    """context_needed 是 Orchestrator → ContextCompiler 需求声明，五种信号都落进 packet。"""
+    packet = {
+        "character_context": "- 甲: 主角",
+        "world_context": "- 北墙: 黑曜石",
+        "recent_summary": "第1章：甲出城",
+    }
+    enriched = ContextCompiler.apply_context_needed(
+        packet,
+        {
+            "characters": ["甲", "乙"],
+            "world_elements": ["北墙秘道"],
+            "perspective_specific": "乙不知道甲的身份",
+            "cross_timeline_references": ["三年前的坠崖"],
+            "recent_reference": "甲与乙的约定",
+        },
+    )
+
+    assert "[本章涉及角色: 甲, 乙]" in enriched["character_context"]
+    assert "[视角特定信息: 乙不知道甲的身份]" in enriched["character_context"]
+    assert "- 甲: 主角" in enriched["character_context"]
+    assert "[本章涉及设定: 北墙秘道]" in enriched["world_context"]
+    assert "[跨时间线参考: 三年前的坠崖]" in enriched["world_context"]
+    assert "[主编提示：本章需要回顾 — 甲与乙的约定]" in enriched["recent_summary"]
+    # 原 packet 不被原地修改
+    assert "[本章涉及角色" not in packet["character_context"]
+
+
+def test_apply_context_needed_empty_declaration_is_noop():
+    """空声明（无消费者需求）→ packet 原样返回，不注入占位噪声。"""
+    packet = {"character_context": "ctx", "recent_summary": "sum"}
+    enriched = ContextCompiler.apply_context_needed(packet, {})
+
+    assert enriched == packet
+    assert "暂无" not in enriched["character_context"]
+
+
 def test_context_packet_bounds_each_section():
     manager = MagicMock()
     manager.build_context.return_value = {

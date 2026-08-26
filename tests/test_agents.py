@@ -119,8 +119,8 @@ class TestOrchestratorPromptHelpers:
         prompt = mocked.call_args.args[0][1]["content"]
         assert "已完成章节数：100章" in prompt
 
-    def test_analyze_parse_failure_fallback_is_natural_continuation(self):
-        """Orchestrator 输出解析失败时的兜底不得回退到 cliffhanger（防 AI 网文味回流）。"""
+    def test_analyze_parse_failure_fallback_has_no_ending_type(self):
+        """解析失败兜底不得注入任何 ending_type（防 cliffhanger 网文味回流）。"""
         agent = OrchestratorAgent()
         with patch.object(
             agent,
@@ -134,7 +134,30 @@ class TestOrchestratorPromptHelpers:
                     previous_chapters=[],
                 )
             )
-        assert result["chapter_strategy"]["ending_type"] == "natural_continuation"
+        assert result["chapter_strategy"].get("ending_type") is None
+
+    def test_analyze_ending_type_omitted_does_not_default_to_cliffhanger(self):
+        """P0 回归：LLM 输出合法 JSON 但省略 ending_type → None，而非 cliffhanger。
+
+        parse_json_response 只在整体解析失败时才用 defaults；解析成功时
+        ending_type 缺失直接落到 Pydantic 默认值——该默认值必须是 None。
+        """
+        agent = OrchestratorAgent()
+        output = '{"narrative_stage": "development", "chapter_strategy": {"pacing": "fast"}}'
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=(output, None)),
+        ):
+            result = asyncio.run(
+                agent.analyze(
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                )
+            )
+        assert result["chapter_strategy"].get("ending_type") is None
+        assert result["chapter_strategy"]["pacing"] == "fast"
 
     def test_mode_instruction_none(self):
         assert OrchestratorAgent._build_mode_instruction(None) == ""

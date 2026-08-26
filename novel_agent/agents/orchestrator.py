@@ -38,7 +38,9 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 
 ## 输出字段分层（按需输出，不要每章输出全部字段）
 
-**每章必须输出**：storylines、pacing、ending_type、foreshadowings_to_address、suggested_chapter_words
+**每章必须输出**：storylines、pacing、foreshadowings_to_address、suggested_chapter_words
+
+**ending_type**：仅当本章确需特定结尾类型（如 cliffhanger、revelation）时输出；不输出则自然收束
 
 **仅 scene_first 拆场模式输出**：key_scenes（3-4 个分镜：场景名·地点·冲突核心·情绪落点）、scene_composition
 
@@ -70,7 +72,6 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
        "chapter_focus": "high|medium|low|background", "key_events": ["重要事件"], "status": "active|paused|resolved"}
     ],
     "pacing": "slow|normal|fast",
-    "ending_type": "cliffhanger|emotional_beat|revelation|...等10种类型",
     "foreshadowings_to_address": ["需要回收或强化的伏笔"],
     "suggested_chapter_words": 3000,
     "key_scenes": ["scene_first 模式必填：分镜场景"]
@@ -195,7 +196,6 @@ class OrchestratorAgent(BaseAgent):
                     "storylines": [],
                     "pacing": "normal",
                     "key_scenes": [],
-                    "ending_type": "natural_continuation",
                     "foreshadowings_to_address": [],
                     "suggested_chapter_words": target_chapter_words,
                     "climax_sequence": None,

@@ -21,7 +21,9 @@ class ChapterStrategy(BaseModel):
     # ── Original fields (GLOBAL) ──
     pacing: str = "normal"
     key_scenes: list[str] = Field(default_factory=list)
-    ending_type: str = "cliffhanger"
+    # None → Writer naturally closes the chapter; a cliffhanger bias must
+    # never be reintroduced through a Pydantic default.
+    ending_type: str | None = None
     foreshadowings_to_address: list[str] = Field(default_factory=list)
     suggested_chapter_words: int = 3000
 

@@ -209,44 +209,11 @@ async def orchestrator_node(state: NovelState) -> dict:
     prev_count = len(previous_chapters)
     print(f"  [Orchestrator] Stage: {stage}, Pacing: {pacing}, Prev: {prev_count}ch")
 
-    # Enrich context_packet with context_needed hints from the strategy
-    context_needed = strategy.get("context_needed", {})
-    extra_chars = ", ".join(context_needed.get("characters", []))
-    extra_world = ", ".join(context_needed.get("world_elements", []))
-
-    char_ctx = full_packet.get("character_context", "")
-    if extra_chars:
-        hint = f"[本章涉及角色: {extra_chars}]"
-        char_ctx = f"{char_ctx}\n{hint}" if char_ctx else hint
-
-    world_ctx = full_packet.get("world_context", "")
-    if extra_world:
-        hint = f"[本章涉及设定: {extra_world}]"
-        world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
-
-    persp_specific = context_needed.get("perspective_specific", "")
-    if persp_specific:
-        char_ctx = (
-            f"{char_ctx}\n[视角特定信息: {persp_specific}]"
-            if char_ctx
-            else f"[视角特定信息: {persp_specific}]"
-        )
-
-    cross_timeline = context_needed.get("cross_timeline_references", [])
-    if cross_timeline:
-        timeline_hint = f"[跨时间线参考: {', '.join(cross_timeline)}]"
-        world_ctx = f"{world_ctx}\n{timeline_hint}" if world_ctx else timeline_hint
-
-    recent_ref = context_needed.get("recent_reference", "")
-    recent_sum = full_packet.get("recent_summary", "")
-    if recent_ref:
-        ref_hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
-        recent_sum = f"{recent_sum}\n{ref_hint}" if recent_sum else ref_hint
-
-    # Merge enriched values back into context_packet
-    full_packet["character_context"] = char_ctx
-    full_packet["world_context"] = world_ctx
-    full_packet["recent_summary"] = recent_sum
+    # context_needed is the Orchestrator → ContextCompiler demand signal;
+    # ContextCompiler owns packet shaping, so enrichment lives there.
+    full_packet = ContextCompiler.apply_context_needed(
+        full_packet, strategy.get("context_needed", {})
+    )
 
     scene_plan = state.get("scene_plan", [])
     if state.get("scene_first"):

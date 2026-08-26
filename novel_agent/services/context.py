@@ -198,6 +198,60 @@ class ContextCompiler:
         }
 
     @staticmethod
+    def apply_context_needed(packet: dict, context_needed: dict) -> dict:
+        """Fold the Orchestrator's context declaration into the packet.
+
+        context_needed is the Orchestrator → ContextCompiler demand signal:
+        characters and world elements this chapter touches, POV-scoped
+        knowledge, cross-timeline references and recent plot points the
+        Writer must see. ContextCompiler owns packet shaping — hints are
+        merged here, once, and every downstream projection consumes the
+        enriched packet.
+        """
+        packet = dict(packet)
+        chars = ", ".join(context_needed.get("characters", []))
+        world = ", ".join(context_needed.get("world_elements", []))
+
+        char_ctx = packet.get("character_context", "")
+        if chars:
+            hint = f"[本章涉及角色: {chars}]"
+            char_ctx = f"{char_ctx}\n{hint}" if char_ctx else hint
+
+        world_ctx = packet.get("world_context", "")
+        if world:
+            hint = f"[本章涉及设定: {world}]"
+            world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
+
+        persp_specific = context_needed.get("perspective_specific", "")
+        if persp_specific:
+            char_ctx = (
+                f"{char_ctx}\n[视角特定信息: {persp_specific}]"
+                if char_ctx
+                else f"[视角特定信息: {persp_specific}]"
+            )
+
+        cross_timeline = context_needed.get("cross_timeline_references", [])
+        if cross_timeline:
+            hint = f"[跨时间线参考: {', '.join(cross_timeline)}]"
+            world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
+
+        recent_ref = context_needed.get("recent_reference", "")
+        recent_sum = packet.get("recent_summary", "")
+        if recent_ref:
+            hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
+            recent_sum = f"{recent_sum}\n{hint}" if recent_sum else hint
+
+        # Write back only what a demand signal touched — an empty declaration
+        # must not inject new keys (or placeholder noise) into the packet.
+        if chars or persp_specific:
+            packet["character_context"] = char_ctx
+        if world or cross_timeline:
+            packet["world_context"] = world_ctx
+        if recent_ref:
+            packet["recent_summary"] = recent_sum
+        return packet
+
+    @staticmethod
     def context_metrics(context: dict, budget_tokens: int = 3500) -> dict:
         """Code-level statistics for logging/debugging. No LLM call.
 
