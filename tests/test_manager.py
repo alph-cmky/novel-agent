@@ -154,6 +154,47 @@ class TestChapterCRUD:
         assert mgr.count_chapters(pid, before=7) == 4
         assert mgr.count_chapters(pid) == 5
 
+    def test_get_relevant_foreshadowings_ranks_and_filters(self, tmp_path):
+        """Phase C: relevance 查询排除 resolved，按 risk → 紧迫度排序，LIMIT 生效。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.add_foreshadowing(pid, "已解决", planted_chapter=1, risk_level="high")
+        mgr.update_foreshadowing_status(pid, "已解决", planted_chapter=1, status="resolved")
+        mgr.add_foreshadowing(pid, "远期低危", planted_chapter=1, risk_level="low")
+        mgr.add_foreshadowing(
+            pid, "近章高危", planted_chapter=2, expected_resolve_chapter=5, risk_level="high"
+        )
+        mgr.add_foreshadowing(
+            pid, "近章中危", planted_chapter=2, expected_resolve_chapter=5, risk_level="medium"
+        )
+        mgr.add_foreshadowing(
+            pid, "另一高危", planted_chapter=3, expected_resolve_chapter=9, risk_level="high"
+        )
+
+        relevant = mgr.get_relevant_foreshadowings(pid, current_chapter=5)
+
+        descriptions = [f["description"] for f in relevant]
+        assert "已解决" not in descriptions  # resolved 伏笔不进入上下文
+        assert descriptions[0] == "近章高危"  # high risk + 距回收章最近
+        assert descriptions.index("近章高危") < descriptions.index("近章中危")
+        assert len(mgr.get_relevant_foreshadowings(pid, 5, limit=1)) == 1
+
+    def test_get_relevant_story_events_windowed_ascending(self, tmp_path):
+        """Phase C: story_events 只取章节窗口内的行，升序返回，排除当前章。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_story_events(pid, 1, [{"action": "第1章事件", "subject": "甲"}])
+        mgr.save_story_events(pid, 9, [{"action": "第9章事件", "subject": "乙"}])
+        mgr.save_story_events(pid, 10, [{"action": "当前章事件", "subject": "丙"}])
+
+        events = mgr.get_relevant_story_events(pid, current_chapter=10, window=5)
+
+        chapters = [e["chapter_number"] for e in events]
+        assert 1 not in chapters  # 超出窗口的历史不加载
+        assert 10 not in chapters  # 当前章（重写场景的旧事件）不加载
+        assert chapters == [9]
+        assert events[0]["action"] == "第9章事件"
+
     def test_v2_run_lock_and_immutable_versions(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")

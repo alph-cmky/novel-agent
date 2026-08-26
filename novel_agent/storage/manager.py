@@ -1668,6 +1668,55 @@ class ProjectManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_relevant_foreshadowings(
+        self,
+        project_id: str,
+        current_chapter: int,
+        limit: int = 25,
+    ) -> list[dict]:
+        """Unresolved foreshadowings ranked by deterministic relevance.
+
+        Priority: risk level → urgency (distance to expected resolution) →
+        planting recency. SQL-side filter + rank, so long projects never read
+        the full foreshadowings table into the context packet.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM foreshadowings WHERE project_id = ? "
+                "AND status IN ('open', 'planted', 'hinted', 'advanced') "
+                "ORDER BY "
+                "CASE risk_level WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, "
+                "CASE WHEN expected_resolve_chapter IS NOT NULL "
+                "     THEN ABS(expected_resolve_chapter - ?) ELSE 99999 END, "
+                "planted_chapter DESC, created_at DESC "
+                "LIMIT ?",
+                (project_id, current_chapter, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_relevant_story_events(
+        self,
+        project_id: str,
+        current_chapter: int,
+        window: int = 30,
+        limit: int = 90,
+    ) -> list[dict]:
+        """Events from the recent chapter window, ascending order.
+
+        Bounded SQL read (chapters within ``window`` back, LIMIT rows) instead
+        of the full story_events table. Distant history (e.g. a death planted
+        100 chapters ago) is intentionally out of the v1 window.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM story_events WHERE project_id = ? "
+                "AND chapter_number >= ? AND chapter_number < ? "
+                "ORDER BY chapter_number DESC, created_at DESC LIMIT ?",
+                (project_id, max(current_chapter - window, 0), current_chapter, limit),
+            ).fetchall()
+        rows.reverse()
+        return [dict(r) for r in rows]
+
     # ── Project helpers ───────────────────────────────
 
     def get_chapter_count(self, project_id: str) -> int:

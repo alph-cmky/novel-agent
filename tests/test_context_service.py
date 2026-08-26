@@ -10,8 +10,8 @@ def test_context_packet_single_contract():
         "world_context": "- 北墙: 黑曜石",
         "recent_summary": "第1章：主角出城",
     }
-    manager.get_story_events.return_value = []
-    manager.get_foreshadowings.return_value = [
+    manager.get_relevant_story_events.return_value = []
+    manager.get_relevant_foreshadowings.return_value = [
         {"description": "神秘信物", "planted_chapter": 1, "status": "open"},
         {"description": "已解决", "planted_chapter": 1, "status": "resolved"},
     ]
@@ -28,6 +28,21 @@ def test_context_packet_single_contract():
     assert "token_budget" not in state["context_packet"]
 
 
+def test_compile_uses_task_aware_retrieval_not_full_reads():
+    """Phase C: compile 走 relevance 查询，禁止全表读取 foreshadowings/story_events。"""
+    manager = MagicMock()
+    manager.build_context.return_value = {}
+    manager.get_relevant_foreshadowings.return_value = []
+    manager.get_relevant_story_events.return_value = []
+
+    ContextCompiler(manager).compile("p", 5)
+
+    manager.get_relevant_foreshadowings.assert_called_once_with("p", 5)
+    manager.get_relevant_story_events.assert_called_once_with("p", 5)
+    manager.get_foreshadowings.assert_not_called()
+    manager.get_story_events.assert_not_called()
+
+
 def test_context_packet_bounds_each_section():
     manager = MagicMock()
     manager.build_context.return_value = {
@@ -36,8 +51,8 @@ def test_context_packet_bounds_each_section():
         "recent_summary": "摘要" * 1000,
     }
     manager.get_all_world_entities.return_value = []
-    manager.get_foreshadowings.return_value = []
-    manager.get_story_events.return_value = []
+    manager.get_relevant_foreshadowings.return_value = []
+    manager.get_relevant_story_events.return_value = []
 
     packet = ContextCompiler(manager, max_context_chars=300).compile("p", 1)
 

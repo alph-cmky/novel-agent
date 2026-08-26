@@ -157,10 +157,13 @@ async def orchestrator_node(state: NovelState) -> dict:
             total_chapters = mgr.count_chapters(project_id, before=state.get("chapter_number", 1))
             # Load unresolved foreshadowings before planning so the same
             # long-range constraints reach both the orchestrator and the writer.
-            all_fs = mgr.get_foreshadowings(project_id)
-            open_fs = [f for f in all_fs if f.get("status") in ("open", "planted")]
+            relevant_fs = mgr.get_relevant_foreshadowings(
+                project_id,
+                state.get("chapter_number", 1),
+            )
             unresolved = [
-                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}" for f in open_fs
+                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
+                for f in relevant_fs
             ]
             if unresolved:
                 print(f"  [Orchestrator] {len(unresolved)} unresolved foreshadowings")
