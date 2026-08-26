@@ -7,7 +7,7 @@ from novel_agent.schema.models import (
     OrchestratorReport,
     WorldbuildingReport,
 )
-from novel_agent.schema.parser import parse_json_response, strip_none
+from novel_agent.schema.parser import ParseStats, parse_json_response, strip_none
 from novel_agent.schema.validator import OutputValidator, ValidationResult, parse_validated
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "WorldbuildingReport",
     "OutputValidator",
     "ValidationResult",
+    "ParseStats",
     "parse_json_response",
     "strip_none",
     "parse_validated",
