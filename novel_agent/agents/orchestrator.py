@@ -26,7 +26,6 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 
 ## 通用规则
 
-- storylines 每条含 id、name、role（primary/secondary/tertiary）、progress、chapter_focus（high/medium/low/background）、key_events、status（active/paused/resolved）
 - suggested_chapter_words 在目标字数 ±20% 内
 - 只输出JSON，不要其他内容
 """
@@ -135,6 +134,14 @@ class OrchestratorAgent(BaseAgent):
 
         # Skip-when-empty: absent sections stay absent, no placeholder noise.
         summary_section = f"## 前情摘要\n{recent_summary}\n\n" if recent_summary else ""
+        characters_section = f"## 已有角色\n{character_context}\n\n" if character_context else ""
+        world_section = f"## 世界观设定\n{world_context}\n\n" if world_context else ""
+        chapters_section = f"## 已有章节\n{recent_titles}\n\n" if recent_titles else ""
+        foreshadow_section = (
+            f"## 待回收伏笔\n{foreshadowing_context}\n\n" if foreshadowing_context else ""
+        )
+        events_section = f"## 关键事件\n{timeline_context}\n\n" if timeline_context else ""
+        warnings_section = f"## 时间线警告\n{timeline_warnings}\n\n" if timeline_warnings else ""
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
@@ -155,14 +162,14 @@ class OrchestratorAgent(BaseAgent):
                     f"- 目标每章字数：{target_chapter_words}字\n"
                     f"- 已完成章节数：{total}章\n\n"
                     f"## 本章大纲\n{chapter_outline}\n\n"
-                    f"## 已有角色\n{character_context or '暂无'}\n\n"
-                    f"## 世界观设定\n{world_context or '暂无'}\n\n"
-                    f"## 已有章节\n{recent_titles or '无'}\n\n"
+                    f"{characters_section}"
+                    f"{world_section}"
+                    f"{chapters_section}"
                     f"{summary_section}"
                     f"{arc_summary}\n\n"
-                    f"## 待回收伏笔\n{foreshadowing_context or '暂无'}\n\n"
-                    f"## 关键事件\n{timeline_context or '暂无'}\n\n"
-                    f"## 时间线警告\n{timeline_warnings or '暂无'}\n\n"
+                    f"{foreshadow_section}"
+                    f"{events_section}"
+                    f"{warnings_section}"
                 ),
             },
         ]
@@ -220,19 +227,11 @@ class OrchestratorAgent(BaseAgent):
 
         base = f"当前叙事模式：{mode}\n"
         if mode in ("unit_arc", "hybrid"):
-            return (
-                f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n"
-                f"{UNIT_ARC_SCHEMA}\n"
-                "其余可选字段按需输出，无内容省略。\n"
-            )
+            return f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n{UNIT_ARC_SCHEMA}\n"
         if mode in ("multi_perspective", "ensemble"):
-            return (
-                f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n"
-                f"{POV_CONFIG_SCHEMA}\n"
-                "其余可选字段按需输出，无内容省略。\n"
-            )
-        # linear and other modes: only the always-required fields.
-        return base + "本章只需输出必输字段与确有内容的可选字段，不要输出空的可选字段。\n"
+            return f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n{POV_CONFIG_SCHEMA}\n"
+        # linear and other modes: no conditional fields, just the mode itself.
+        return base
 
     @staticmethod
     def _build_scene_instruction(scene_first: bool) -> str:
