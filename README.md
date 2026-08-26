@@ -290,8 +290,8 @@ novel_agent/
 │   └── validator.py     # OutputValidator（类型强制 + 默认值兜底）
 ├── model_router.py      # 模型路由（双模型、运行时读环境变量）
 ├── observability/        # LangFuse 全链路追踪（未配置则 no-op）
-├── tools/               # Agent 工具（search_context / detect_ai_flavor / check_continuity）
-├── style/               # AI 味检测引擎（禁用句式 + 启发式检查）
+├── tools/               # Agent 工具（search_context / check_continuity）
+├── style/               # 确定性风格分析（StyleAnalyzer + ParagraphStructureAnalyzer）
 ├── api/                 # FastAPI REST + SSE
 │   ├── routes.py        # REST API（项目 CRUD、大纲、导出）
 │   ├── sse.py           # SSE 流式写作 + Session 管理

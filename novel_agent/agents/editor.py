@@ -1,9 +1,8 @@
 """Editor Agent — reviews chapter quality using provided style evidence.
 
-The Editor no longer calls a detect_ai_flavor tool. The deterministic
-StyleAnalyzer runs in the graph node and its StyleReport is passed as
-context. The Editor focuses on literary judgment: characters, logic,
-rhythm, dialogue, semantic AI flavor.
+The deterministic StyleAnalyzer runs in the graph node and its StyleReport
+is passed as context. The Editor focuses on literary judgment: characters,
+logic, rhythm, dialogue, semantic AI flavor.
 """
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep

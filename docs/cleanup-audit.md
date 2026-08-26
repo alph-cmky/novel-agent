@@ -18,11 +18,11 @@ Baseline: `aef24209d8ff6a445359520cd89e2a79b8c1aabb`
 | `_migrate()` | `storage/models.py` | `init_db()` | test_manager.py | Schema evolution | Pre-prod: CREATE TABLE has all cols | DELETE (Phase D) |
 | `rewrite_instructions` legacy path | `graph/chapter.py:371-377` | writer_node | — | Old feedback loop | Replaced by evolution_improvement_plan | DELETE (Phase B) |
 | `retry_count` in state | `graph/state.py` comment, `chapter.py:910`, `sse.py:94` | human_review_node, sse | — | Only displayed, not used for logic | Old linear retry | DELETE from state usage |
-| `style/ai_flavor.py` | — | — | — | Already deleted (only .pyc remains) | Old style tool | CONFIRM DELETE |
-| `tools/detect_ai_flavor.py` | — | — | — | Already deleted (only .pyc remains) | Old style tool | CONFIRM DELETE |
-| `tools/style.py` | — | — | — | Already deleted (only .pyc remains) | Old style tool | CONFIRM DELETE |
-| `context/compiler.py` | — | — | — | Already deleted (only .pyc remains) | Old context compiler | CONFIRM DELETE |
-| `routing/` dir | — | — | — | Empty (only __pycache__) | Unused | DELETE |
+| `style/ai_flavor.py` | — | — | — | Already deleted | Old style tool | CONFIRMED (Phase F) |
+| `tools/detect_ai_flavor.py` | — | — | — | Already deleted | Old style tool | CONFIRMED (Phase F) |
+| `tools/style.py` | — | — | — | Already deleted | Old style tool | CONFIRMED (Phase F) |
+| `context/compiler.py` | — | — | — | Already deleted | Old context compiler | CONFIRMED (Phase F) |
+| `routing/` dir | — | — | — | Already deleted | Unused | CONFIRMED (Phase F) |
 | Writer individual context params | `agents/writer.py` write/write_stream | chapter.py writer_node | — | Overridden by context_packet | ContextCompiler projections exist | CONSOLIDATE |
 | Orchestrator context params | `agents/orchestrator.py` analyze | chapter.py orchestrator_node | — | Overridden by context_packet | ContextCompiler exists | CONSOLIDATE |
 | `context_packet` in State | `graph/state.py:45` | Multiple nodes | — | Stored in state, rebuildable | Derived from ContextCompiler | CONSOLIDATE (evaluate removal) |
