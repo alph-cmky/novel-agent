@@ -41,7 +41,7 @@ def test_schema_creates_all_tables(tmp_path):
 
 
 def test_init_db_idempotent(tmp_path):
-    """第二次 init 不报错（IF NOT EXISTS + _migrate 幂等）。"""
+    """第二次 init 不报错（IF NOT EXISTS 幂等）。"""
     db = tmp_path / "novel.db"
     conn1 = init_db(db)
     conn1.close()

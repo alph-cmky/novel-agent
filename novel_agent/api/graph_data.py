@@ -10,7 +10,7 @@ ENTITY_SHAPES = {
     "location": "diamond",
     "item": "rectangle",
     "faction": "hexagon",
-    "organization": "hexagon",  # legacy alias
+    "organization": "hexagon",  # alias for faction
     "rule": "round-rectangle",
     "event": "triangle",
     "unknown": "ellipse",
@@ -22,7 +22,7 @@ ENTITY_COLORS = {
     "location": "#67c23a",
     "item": "#e6a23c",
     "faction": "#7b4dd3",
-    "organization": "#7b4dd3",  # legacy alias
+    "organization": "#7b4dd3",  # alias for faction
     "rule": "#e040fb",
     "event": "#f56c6c",
     "unknown": "#909399",
@@ -46,10 +46,6 @@ def build_graph_data(
     """
     entities = mgr.get_all_world_entities(project_id)
     relations = mgr.get_all_world_relations(project_id)
-    if not relations:
-        # 首次访问：从旧 worldbuilding_report 回填边（幂等）
-        mgr.backfill_world_relations(project_id)
-        relations = mgr.get_all_world_relations(project_id)
     chapters = mgr.get_chapter_worldbuilding(project_id)
 
     # Filter by chapter if specified

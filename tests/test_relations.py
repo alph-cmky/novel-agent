@@ -104,39 +104,3 @@ def test_get_all_world_relations_orders_by_first_appearance(manager, project_id)
 
     rows = manager.get_all_world_relations(project_id)
     assert [r["first_appearance_chapter"] for r in rows] == [1, 3]
-
-
-def test_backfill_world_relations_from_existing_reports(manager, project_id):
-    report = _report(
-        [
-            _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-        ]
-    )
-    # Simulate a legacy chapter whose report was already persisted to chapters table
-    manager.save_chapter(project_id=project_id, chapter_number=1, draft_content="")
-    manager.update_chapter_worldbuilding(project_id, 1, report)
-
-    assert manager.get_all_world_relations(project_id) == []
-    manager.backfill_world_relations(project_id)
-
-    rows = manager.get_all_world_relations(project_id)
-    assert len(rows) == 1
-    assert rows[0]["source"] == "Alice"
-    assert rows[0]["target"] == "Bob"
-    assert rows[0]["relation_type"] == "friend"
-    assert rows[0]["first_appearance_chapter"] == 1
-
-
-def test_backfill_world_relations_is_idempotent(manager, project_id):
-    report = _report(
-        [
-            _entity("Alice", [{"target": "Bob", "relation": "friend"}]),
-        ]
-    )
-    manager.save_chapter(project_id=project_id, chapter_number=1, draft_content="")
-    manager.update_chapter_worldbuilding(project_id, 1, report)
-
-    manager.backfill_world_relations(project_id)
-    manager.backfill_world_relations(project_id)
-
-    assert len(manager.get_all_world_relations(project_id)) == 1

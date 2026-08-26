@@ -4,14 +4,12 @@
 用 tmp_path 隔离 SQLite，mock ChapterStore 避免真实 ChromaDB 落盘。
 """
 
-import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from novel_agent.schema.enums import ChapterStatus, RunStatus
 from novel_agent.storage.manager import ProjectManager
-from novel_agent.storage.models import init_db
 
 
 def _make_manager(tmp_path, chapter_store=None) -> ProjectManager:
@@ -21,37 +19,6 @@ def _make_manager(tmp_path, chapter_store=None) -> ProjectManager:
 
 
 class TestProjectCRUD:
-    def test_old_database_migrates_scene_manifest_column(self, tmp_path):
-        db_path = tmp_path / "novel.db"
-        conn = sqlite3.connect(db_path)
-        conn.executescript(
-            """
-            CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-            CREATE TABLE chapters (
-                id TEXT PRIMARY KEY,
-                project_id TEXT,
-                chapter_number INTEGER,
-                status TEXT
-            );
-            CREATE TABLE chapter_versions (
-                id TEXT PRIMARY KEY,
-                project_id TEXT,
-                chapter_number INTEGER,
-                content TEXT,
-                content_hash TEXT,
-                version_number INTEGER,
-                status TEXT
-            );
-            """
-        )
-        conn.commit()
-        conn.close()
-
-        migrated = init_db(db_path)
-        columns = {row["name"] for row in migrated.execute("PRAGMA table_info(chapter_versions)")}
-        assert "scene_manifest" in columns
-        migrated.close()
-
     def test_commit_is_idempotent_and_emits_outbox_event(self, tmp_path):
         store = MagicMock()
         mgr = _make_manager(tmp_path, chapter_store=store)

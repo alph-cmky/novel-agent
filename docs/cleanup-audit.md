@@ -15,8 +15,8 @@ Baseline: `aef24209d8ff6a445359520cd89e2a79b8c1aabb`
 | `prompt_profile` param | `agents/writer.py` | WriterAgent constructor | test_chapter.py | — | V1/V2 selection | DELETE |
 | `primary_storyline` | `schema/models.py`, `orchestrator.py` | orchestrator defaults:284, prompt:63 | test_validator.py | Never read by code | Replaced by `storylines` | DELETE |
 | Editor legacy flat scores | `schema/models.py:109-112` | validator.py coercion:157-160 | test_validator.py | Never read in production | Replaced by `dimensions` | DELETE |
-| `_migrate()` | `storage/models.py` | `init_db()` | test_manager.py | Schema evolution | Pre-prod: CREATE TABLE has all cols | DELETE |
-| `rewrite_instructions` legacy path | `graph/chapter.py:371-377` | writer_node | — | Old feedback loop | Replaced by evolution_improvement_plan | DELETE |
+| `_migrate()` | `storage/models.py` | `init_db()` | test_manager.py | Schema evolution | Pre-prod: CREATE TABLE has all cols | DELETE (Phase D) |
+| `rewrite_instructions` legacy path | `graph/chapter.py:371-377` | writer_node | — | Old feedback loop | Replaced by evolution_improvement_plan | DELETE (Phase B) |
 | `retry_count` in state | `graph/state.py` comment, `chapter.py:910`, `sse.py:94` | human_review_node, sse | — | Only displayed, not used for logic | Old linear retry | DELETE from state usage |
 | `style/ai_flavor.py` | — | — | — | Already deleted (only .pyc remains) | Old style tool | CONFIRM DELETE |
 | `tools/detect_ai_flavor.py` | — | — | — | Already deleted (only .pyc remains) | Old style tool | CONFIRM DELETE |
@@ -29,7 +29,8 @@ Baseline: `aef24209d8ff6a445359520cd89e2a79b8c1aabb`
 | `character_context` etc. in State | `graph/state.py:40-43` | orchestrator_node, writer_node, routes | — | Derived from context_packet | Derived state | CONSOLIDATE |
 | `scene_drafts` in State | `graph/state.py:50` | writer_node, quality_gate | — | Only current node | Temporary | KEEP (needed for quality gate) |
 | `style_report` in State | `graph/state.py:32` | editor_node, evolution | — | Recomputed each time | Derived | KEEP (needed by evolution) |
-| `backfill_world_relations` | `storage/manager.py:1511` | graph_data.py:51 | — | Current feature | Not legacy | KEEP |
+| `backfill_world_relations` | `storage/manager.py` | graph_data.py | test_relations.py | Legacy backfill | Pre-prod: no old data to backfill | DELETE (Phase D) |
+| `get_chapter_reports` | `storage/manager.py:1270` | — | — | Unused | No callers | DELETE (Phase D) |
 | `organization` alias in graph_data | `api/graph_data.py:13,25` | — | — | Entity type display | Not legacy API | KEEP |
 | `ContextCompiler` projections | `services/context.py` | chapter.py, routes.py | test_context_service.py | Current context system | Current contract | KEEP |
 | `StyleAnalyzer` | `style/analyzer.py` | editor_node | test_ai_flavor.py | Current style system | Current contract | KEEP |

@@ -17,66 +17,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
-    _migrate(conn)
     conn.commit()
     return conn
-
-
-def _migrate(conn: sqlite3.Connection):
-    """Add columns that may be missing from older databases."""
-    existing_projects = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
-    project_migrations = [
-        ("story_length", "TEXT NOT NULL DEFAULT 'long'"),
-        ("target_chapter_words", "INTEGER NOT NULL DEFAULT 3000"),
-        ("world_setting", "TEXT NOT NULL DEFAULT ''"),
-        ("narrative_mode", "TEXT"),  # NULL = legacy project
-        ("narrative_perspective", "TEXT NOT NULL DEFAULT ''"),
-    ]
-    for col_name, col_def in project_migrations:
-        if col_name not in existing_projects:
-            conn.execute(f"ALTER TABLE projects ADD COLUMN {col_name} {col_def}")
-
-    existing_chapters = {row["name"] for row in conn.execute("PRAGMA table_info(chapters)")}
-    chapter_migrations = [
-        ("worldbuilding_report", "TEXT NOT NULL DEFAULT '{}'"),
-        ("version", "INTEGER NOT NULL DEFAULT 0"),
-        ("evolution_summary", "TEXT NOT NULL DEFAULT '{}'"),
-        ("current_version_id", "TEXT"),
-        ("approved_version_id", "TEXT"),
-    ]
-    for col_name, col_def in chapter_migrations:
-        if col_name not in existing_chapters:
-            conn.execute(f"ALTER TABLE chapters ADD COLUMN {col_name} {col_def}")
-
-    existing_versions = {row["name"] for row in conn.execute("PRAGMA table_info(chapter_versions)")}
-    if "scene_manifest" not in existing_versions:
-        conn.execute(
-            "ALTER TABLE chapter_versions ADD COLUMN scene_manifest TEXT NOT NULL DEFAULT '[]'"
-        )
-
-    existing_runs = {row["name"] for row in conn.execute("PRAGMA table_info(writing_runs)")}
-    if "input_snapshot_id" not in existing_runs:
-        conn.execute("ALTER TABLE writing_runs ADD COLUMN input_snapshot_id TEXT")
-
-    existing_outbox = {row["name"] for row in conn.execute("PRAGMA table_info(outbox_events)")}
-    for col_name, col_def in (
-        ("lease_owner", "TEXT"),
-        ("lease_expires_at", "TEXT"),
-    ):
-        if col_name not in existing_outbox:
-            conn.execute(f"ALTER TABLE outbox_events ADD COLUMN {col_name} {col_def}")
-
-    existing_fs = {row["name"] for row in conn.execute("PRAGMA table_info(foreshadowings)")}
-    foreshadowing_migrations = [
-        ("risk_level", "TEXT NOT NULL DEFAULT 'medium'"),
-        ("action_needed", "TEXT NOT NULL DEFAULT 'maintain'"),
-        ("reader_knows", "INTEGER NOT NULL DEFAULT 0"),
-        ("characters_aware", "TEXT NOT NULL DEFAULT '[]'"),
-        ("characters_unaware", "TEXT NOT NULL DEFAULT '[]'"),
-    ]
-    for col_name, col_def in foreshadowing_migrations:
-        if col_name not in existing_fs:
-            conn.execute(f"ALTER TABLE foreshadowings ADD COLUMN {col_name} {col_def}")
 
 
 _SCHEMA = """
@@ -109,6 +51,8 @@ CREATE TABLE IF NOT EXISTS chapters (
     -- 进化元数据 (v2)
     version INTEGER NOT NULL DEFAULT 0,
     evolution_summary TEXT NOT NULL DEFAULT '{}',
+    current_version_id TEXT,
+    approved_version_id TEXT,
 
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),

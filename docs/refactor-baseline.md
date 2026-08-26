@@ -137,17 +137,15 @@ novel-agent serve [--host HOST] [--port PORT] [--reload]
 novel-agent export [-p PROJECT] [-f md|txt] [-o OUTPUT] [--dir DIR]
 ```
 
-## 10. SQLite Migration/Schema Status
+## 10. SQLite Schema Status
 
 SQLite schema is defined in `novel_agent/storage/models.py` and initialized by
-`init_db`. Existing-column migrations are applied conditionally for project,
-chapter, chapter-version, writing-run, outbox, and foreshadowing columns.
-There is no separate numbered migration framework or schema version table.
-Tables currently created include `projects`, `chapters`, `writing_runs`,
-`canon_snapshots`, `chapter_versions`, `canon_proposals`, `outbox_events`,
-`story_events`, `world_entities`, `world_relations`, `foreshadowings`, and
-`outlines`. No SQLite schema or checkpoint format changes are part of this
-baseline.
+`init_db`. All columns are declared in the `CREATE TABLE` statements directly —
+no migration or backfill logic. Tables currently created include `projects`,
+`chapters`, `writing_runs`, `canon_snapshots`, `chapter_versions`,
+`canon_proposals`, `outbox_events`, `story_events`, `world_entities`,
+`world_relations`, `foreshadowings`, and `outlines`. No SQLite schema or
+checkpoint format changes are part of this baseline.
 
 ## BASELINE FAILURES
 

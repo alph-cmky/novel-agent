@@ -1267,20 +1267,6 @@ class ProjectManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_chapter_reports(self, project_id: str) -> list[dict]:
-        """Lightweight fetch of chapter_number + reports only (no draft_content).
-
-        Used by the orchestrator to summarize past chapter performance without
-        pulling 正文全文 into memory.
-        """
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT chapter_number, editor_report, continuity_report FROM chapters "
-                "WHERE project_id = ? ORDER BY chapter_number",
-                (project_id,),
-            ).fetchall()
-        return [dict(r) for r in rows]
-
     def build_context(
         self,
         project_id: str,
@@ -1507,20 +1493,6 @@ class ProjectManager:
                 (project_id,),
             ).fetchall()
         return [dict(r) for r in rows]
-
-    def backfill_world_relations(self, project_id: str) -> int:
-        """Backfill edges from existing chapters' worldbuilding_report (idempotent)."""
-        import json
-
-        chapters = self.get_chapter_worldbuilding(project_id)
-        total = 0
-        for ch in chapters:
-            try:
-                wb = json.loads(ch.get("worldbuilding_report", "{}") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                wb = {}
-            total += self.save_world_relations(project_id, ch["chapter_number"], wb)
-        return total
 
     # ── Outline ───────────────────────────────────────
 
