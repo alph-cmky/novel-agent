@@ -154,6 +154,20 @@ class TestWriteToolHint:
         assert "Packet 角色" in user
         assert "旧角色" not in user
 
+    def test_context_packet_world_context_empty_does_not_fallback(self):
+        """context_packet 的 world_context='' 时，Writer 不回退到 legacy world_context。"""
+        user = self._capture_user_prompt(
+            WriterAgent(),
+            world_context="巨大世界观不该出现",
+            context_packet={
+                "character_context": "角色",
+                "world_context": "",
+                "recent_summary": "",
+                "unresolved_foreshadowings": [],
+            },
+        )
+        assert "巨大世界观不该出现" not in user
+
 
 class TestNarrativeExtension:
     """Phase 1: Narrative Extension — 增量续写，不是 compensation 全文重写。"""

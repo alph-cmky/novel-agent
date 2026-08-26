@@ -469,13 +469,14 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             f"  [Writer] 篇幅不足 ({content_units}/{target_words})，"
             f"触发 Narrative Extension (+{gap})..."
         )
+        ext_context = ContextCompiler.for_extension(full_packet) if full_packet else {}
         extension = await writer.narrative_extension(
             current_content=content,
             chapter_number=state.get("chapter_number", 1),
             chapter_outline=state.get("chapter_outline", ""),
-            character_context=state.get("character_context", ""),
+            character_context=ext_context.get("character_context", ""),
             gap_words=gap,
-            unresolved_foreshadowings=state.get("unresolved_foreshadowings", []),
+            unresolved_foreshadowings=ext_context.get("unresolved_foreshadowings", []),
         )
         if extension.strip():
             content = content + "\n\n" + extension.strip()
@@ -496,6 +497,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     )
     if extension_failed:
         quality_gate_report["extension_failed"] = True
+        quality_gate_report["violations"].append("length_target_unmet")
+        quality_gate_report["passed"] = False
     story_checker = QualityService.check_story_integrity(
         content,
         scene_plan=state.get("scene_plan", []),
@@ -595,10 +598,11 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         # Rule-based improvement plan for v0
         rule_plan = build_improvement_plan_rule(current_scores, delta=None, config=evo_config)
 
-        # LLM enrichment (optional — fails gracefully to rule_plan)
+        # LLM enrichment — only when rule plan lacks primary_instruction
         plan = rule_plan
         profile = ExecutionProfile.from_state(state)
-        if state.get("evolution_max_rounds", 5) > 0 and profile.should_enrich_evolution():
+        rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
+        if not rule_has_instruction and profile.should_enrich_evolution():
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -607,7 +611,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
                     delta=None,
                     rule_plan=rule_plan,
                     history=[],
-                    draft_preview=state.get("draft_content", ""),
+                    draft_preview=(state.get("draft_content") or "")[:800],
                 )
                 if enriched and enriched.get("primary_instruction"):
                     plan = enriched
@@ -693,23 +697,25 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     # 2. Rule layer: improvement plan
     rule_plan = build_improvement_plan_rule(current_scores, delta, evo_config)
 
-    # 3. LLM enrichment (only if continuing)
+    # 3. LLM enrichment — only when rule plan lacks primary_instruction
     plan = rule_plan
     if not termination and ExecutionProfile.from_state(state).should_enrich_evolution():
-        try:
-            agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
-            enriched = await agent.enrich_plan(
-                current_version=version,
-                current_scores=current_scores,
-                delta=delta,
-                rule_plan=rule_plan,
-                history=state["evolution_history"],
-                draft_preview=state.get("draft_content", ""),
-            )
-            if enriched and enriched.get("primary_instruction"):
-                plan = enriched
-        except Exception:
-            pass
+        rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
+        if not rule_has_instruction:
+            try:
+                agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
+                enriched = await agent.enrich_plan(
+                    current_version=version,
+                    current_scores=current_scores,
+                    delta=delta,
+                    rule_plan=rule_plan,
+                    history=state["evolution_history"],
+                    draft_preview=(state.get("draft_content") or "")[:800],
+                )
+                if enriched and enriched.get("primary_instruction"):
+                    plan = enriched
+            except Exception:
+                pass
 
     # 4. Build history entry
     new_entry = {

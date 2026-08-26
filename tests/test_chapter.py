@@ -303,13 +303,16 @@ class TestNarrativeExtension:
         assert "不该出现" not in result["draft_content"]
 
     def test_extension_still_short_sets_failed(self):
-        """Extension 后仍不足 → extension_failed = True。"""
+        """Extension 后仍不足 → extension_failed + passed=False + violation。"""
         result = self._run_writer_with_mocks(
             write_content="短" * 1000,
             extension_content="续" * 500,
             target_words=3000,
         )
-        assert result["quality_gate_report"].get("extension_failed") is True
+        gate = result["quality_gate_report"]
+        assert gate.get("extension_failed") is True
+        assert gate["passed"] is False
+        assert "length_target_unmet" in gate["violations"]
 
     def test_extension_success_no_failed_flag(self):
         """Extension 后达标 → 不设 extension_failed。"""
@@ -339,3 +342,75 @@ class TestNarrativeExtension:
             chapter_outline="大纲",
         )
         assert "minimum_length" in report["violations"]
+
+
+class TestEvolutionContextMinimal:
+    """Task 4: evolution enrichment 默认不调用 + 不传完整 draft。"""
+
+    @staticmethod
+    def _run_evo_first_round(state_extra: dict | None = None) -> dict:
+        """Run evolution_orchestrator_node first-round branch."""
+        state = {
+            "evolution_round": 0,
+            "evolution_version": 0,
+            "evolution_history": [],
+            "editor_report": {"overall_score": 70, "dimensions": {}},
+            "continuity_report": {"overall_score": 70},
+            "evolution_max_rounds": 5,
+        }
+        if state_extra:
+            state.update(state_extra)
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=None),
+            patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent,
+        ):
+            mock_agent.return_value.enrich_plan = AsyncMock(return_value=None)
+            result = asyncio.run(evolution_orchestrator_node(state))
+        return result, mock_agent
+
+    def test_first_round_enrichment_not_called_when_rule_plan_has_instruction(self):
+        """规则计划有 primary_instruction 时不调用 LLM enrichment。"""
+        result, mock_agent = self._run_evo_first_round()
+        mock_agent.return_value.enrich_plan.assert_not_called()
+
+    def test_first_round_enrichment_called_when_rule_plan_empty(self):
+        """规则计划缺 primary_instruction 时才调用 LLM enrichment。"""
+        from unittest.mock import patch as _patch
+
+        with _patch(
+            "novel_agent.graph.chapter.build_improvement_plan_rule",
+            return_value={"primary_instruction": "", "focus_dimensions": []},
+        ):
+            result, mock_agent = self._run_evo_first_round({"skip_evolution_enrichment": False})
+        mock_agent.return_value.enrich_plan.assert_called_once()
+
+    @staticmethod
+    def test_enrichment_draft_preview_capped():
+        """enrich_plan 收到的 draft_preview 不超过 800 字。"""
+        from unittest.mock import patch as _patch
+
+        long_draft = "草" * 5000
+        with _patch(
+            "novel_agent.graph.chapter.build_improvement_plan_rule",
+            return_value={"primary_instruction": "", "focus_dimensions": []},
+        ):
+            state = {
+                "evolution_round": 0,
+                "evolution_version": 0,
+                "evolution_history": [],
+                "editor_report": {"overall_score": 70, "dimensions": {}},
+                "continuity_report": {"overall_score": 70},
+                "evolution_max_rounds": 5,
+                "draft_content": long_draft,
+                "skip_evolution_enrichment": False,
+            }
+            with (
+                patch("novel_agent.graph.chapter._config_for", return_value=None),
+                patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent,
+            ):
+                mock_agent.return_value.enrich_plan = AsyncMock(return_value=None)
+                asyncio.run(evolution_orchestrator_node(state))
+
+        call_kwargs = mock_agent.return_value.enrich_plan.call_args.kwargs
+        draft_preview = call_kwargs.get("draft_preview", "")
+        assert len(draft_preview) <= 800

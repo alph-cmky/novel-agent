@@ -31,6 +31,8 @@ class StyleReport(BaseModel):
     sentence_rhythm_score: float = Field(ge=0, le=100)
     dialogue_score: float = Field(ge=0, le=100)
     issues: list[StyleIssue] = Field(default_factory=list)
+    # Reserved for future ParagraphStructureAnalyzer — not populated yet.
+    paragraph_structure: dict | None = None
 
 
 # ── Banned phrases ────────────────────────────────────

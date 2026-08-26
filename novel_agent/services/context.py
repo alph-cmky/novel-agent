@@ -182,16 +182,35 @@ class ContextCompiler:
 
     @staticmethod
     def for_writer(packet: dict, budget_chars: int = 5000) -> dict:
-        """Minimal context for Writer: chars + summary + foreshadowings + events."""
+        """Minimal context for Writer: chars + summary + foreshadowings + events.
+
+        world_context is explicitly empty — Writer does not need full worldbuilding.
+        All keys are present so Writer.get() never falls back to legacy state.
+        """
         char_budget = budget_chars // 3
         return {
             "character_context": ContextCompiler.bound(
                 packet.get("character_context", ""), char_budget
             ),
+            "world_context": "",
             "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), char_budget),
             "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:5],
             "timeline_events": (packet.get("timeline_events") or [])[-5:],
             "timeline_findings": (packet.get("timeline_findings") or [])[:3],
+        }
+
+    @staticmethod
+    def for_extension(packet: dict, budget_chars: int = 1500) -> dict:
+        """Minimal context for Narrative Extension: active chars + top foreshadowings only.
+
+        No world_context, no recent_summary, no timeline — only what the
+        continuation needs to stay on-plot.
+        """
+        return {
+            "character_context": ContextCompiler.bound(
+                packet.get("character_context", ""), budget_chars
+            ),
+            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:3],
         }
 
     @staticmethod
@@ -237,14 +256,18 @@ class ContextCompiler:
         }
 
     @staticmethod
-    def context_metrics(context: dict, budget_chars: int = 5000) -> dict:
-        """Code-level statistics for logging/debugging. No LLM call."""
+    def context_metrics(context: dict, budget_tokens: int = 3500) -> dict:
+        """Code-level statistics for logging/debugging. No LLM call.
+
+        All values are approximate — do not use for billing. ``budget_tokens``
+        is the target ceiling for this task's context.
+        """
         text = json.dumps(context, ensure_ascii=False, default=str)
         chars = len(text)
         tokens = estimate_tokens(text)
         return {
             "context_chars": chars,
             "estimated_tokens": tokens,
-            "budget_chars": budget_chars,
-            "utilization": round(tokens / max(estimate_tokens("字" * budget_chars), 1), 2),
+            "budget_tokens": budget_tokens,
+            "utilization": round(tokens / max(budget_tokens, 1), 2),
         }

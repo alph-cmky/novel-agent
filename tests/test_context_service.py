@@ -92,10 +92,24 @@ class TestTaskAwareProjections:
             "timeline_findings": [{"finding": f"发现{i}"} for i in range(10)],
         }
 
-    def test_for_writer_drops_world_context(self):
-        """Writer projection 不包含 world_context。"""
+    def test_for_writer_world_context_is_empty_string(self):
+        """Writer projection 显式返回 world_context='' 防止 Writer fallback。"""
         projected = ContextCompiler.for_writer(self._big_packet())
-        assert "world_context" not in projected
+        assert "world_context" in projected
+        assert projected["world_context"] == ""
+
+    def test_for_writer_all_keys_present(self):
+        """所有 6 个 key 都存在，Writer.get() 不回退到旧 State。"""
+        projected = ContextCompiler.for_writer(self._big_packet())
+        for key in (
+            "character_context",
+            "world_context",
+            "recent_summary",
+            "unresolved_foreshadowings",
+            "timeline_events",
+            "timeline_findings",
+        ):
+            assert key in projected, f"missing key: {key}"
 
     def test_for_writer_caps_character_context(self):
         projected = ContextCompiler.for_writer(self._big_packet(), budget_chars=3000)
@@ -135,10 +149,10 @@ class TestTaskAwareProjections:
 
     def test_context_metrics_returns_chars_tokens_utilization(self):
         ctx = {"character_context": "角色" * 100}
-        metrics = ContextCompiler.context_metrics(ctx, budget_chars=5000)
+        metrics = ContextCompiler.context_metrics(ctx, budget_tokens=3500)
         assert "context_chars" in metrics
         assert "estimated_tokens" in metrics
-        assert "budget_chars" in metrics
+        assert "budget_tokens" in metrics
         assert "utilization" in metrics
         assert metrics["context_chars"] > 0
         assert metrics["estimated_tokens"] > 0
@@ -148,3 +162,29 @@ class TestTaskAwareProjections:
 
     def test_estimate_tokens_empty(self):
         assert estimate_tokens("") == 0
+
+    def test_for_extension_only_keeps_chars_and_foreshadowings(self):
+        """Extension projection 只返回 character_context + 3 条伏笔。"""
+        projected = ContextCompiler.for_extension(self._big_packet())
+        assert "character_context" in projected
+        assert "unresolved_foreshadowings" in projected
+        assert len(projected["unresolved_foreshadowings"]) == 3
+        assert "world_context" not in projected
+        assert "recent_summary" not in projected
+        assert "timeline_events" not in projected
+
+    def test_for_evolution_has_no_draft_or_world(self):
+        """Evolution projection 不含正文、world_context、character_context。"""
+        projected = ContextCompiler.for_evolution(
+            current_scores={"editor_overall": 80},
+            previous_scores={"editor_overall": 70},
+            delta={"trend": "improving"},
+            guard_report={"violations": ["length_target_unmet"]},
+            improvement_plan={"primary_instruction": "改进"},
+        )
+        assert "current_scores" in projected
+        assert "delta" in projected
+        assert "guard_violations" in projected
+        assert "character_context" not in projected
+        assert "world_context" not in projected
+        assert "draft_content" not in projected

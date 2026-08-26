@@ -139,14 +139,12 @@ class WriterAgent(BaseAgent):
             orchestrator_strategy: Narrative strategy from Orchestrator (stage, pacing, etc.).
         """
         if context_packet:
-            character_context = context_packet.get("character_context", character_context)
-            world_context = context_packet.get("world_context", world_context)
-            recent_summary = context_packet.get("recent_summary", recent_summary)
-            unresolved_foreshadowings = context_packet.get(
-                "unresolved_foreshadowings", unresolved_foreshadowings
-            )
-            timeline_events = context_packet.get("timeline_events", timeline_events)
-            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
+            character_context = context_packet.get("character_context", "")
+            world_context = context_packet.get("world_context", "")
+            recent_summary = context_packet.get("recent_summary", "")
+            unresolved_foreshadowings = context_packet.get("unresolved_foreshadowings", [])
+            timeline_events = context_packet.get("timeline_events", [])
+            timeline_findings = context_packet.get("timeline_findings", [])
         messages = [{"role": "system", "content": self.system_prompt}]
 
         # Assemble context
@@ -215,14 +213,12 @@ class WriterAgent(BaseAgent):
         Unlike write(), this skips tool calling and streams the LLM response directly.
         """
         if context_packet:
-            character_context = context_packet.get("character_context", character_context)
-            world_context = context_packet.get("world_context", world_context)
-            recent_summary = context_packet.get("recent_summary", recent_summary)
-            unresolved_foreshadowings = context_packet.get(
-                "unresolved_foreshadowings", unresolved_foreshadowings
-            )
-            timeline_events = context_packet.get("timeline_events", timeline_events)
-            timeline_findings = context_packet.get("timeline_findings", timeline_findings)
+            character_context = context_packet.get("character_context", "")
+            world_context = context_packet.get("world_context", "")
+            recent_summary = context_packet.get("recent_summary", "")
+            unresolved_foreshadowings = context_packet.get("unresolved_foreshadowings", [])
+            timeline_events = context_packet.get("timeline_events", [])
+            timeline_findings = context_packet.get("timeline_findings", [])
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
         if rewrite_instructions:
             context_parts.insert(0, f"## 重写指导（务必遵守）\n{rewrite_instructions}")
