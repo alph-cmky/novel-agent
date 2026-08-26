@@ -195,6 +195,45 @@ class TestChapterCRUD:
         assert chapters == [9]
         assert events[0]["action"] == "第9章事件"
 
+    def test_get_relevant_world_entities_name_match(self, tmp_path):
+        """Phase L: 超过 limit 的大项目只返回正文点名的实体。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        for i in range(65):
+            mgr.save_world_entities(
+                pid, {"new_entities": [{"entity_type": "character", "name": f"路人{i}"}]}, 1
+            )
+        mgr.save_world_entities(
+            pid, {"new_entities": [{"entity_type": "character", "name": "洛千秋"}]}, 2
+        )
+
+        draft = "洛千秋走进酒馆，没有和任何人说话。"
+        relevant = mgr.get_relevant_world_entities(pid, draft)
+
+        assert [e["name"] for e in relevant] == ["洛千秋"]
+
+    def test_get_relevant_world_entities_small_project_passthrough(self, tmp_path):
+        """Phase L: 小项目（≤limit）全量透传，无需过滤。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_world_entities(pid, {"new_entities": [{"entity_type": "item", "name": "禁物"}]}, 1)
+
+        assert len(mgr.get_relevant_world_entities(pid, "无关正文")) == 1
+
+    def test_build_context_reads_bounded_window(self, tmp_path):
+        """Phase L: build_context 只读最近 N 章，SQL 侧切片而非全表加载。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        for n in range(1, 6):
+            mgr.save_chapter(pid, n, draft_content=f"第{n}章正文")
+
+        ctx = mgr.build_context(pid, chapter_number=6, max_recent_chapters=3)
+
+        assert "第3章" in ctx["recent_summary"]
+        assert "第5章" in ctx["recent_summary"]
+        assert "第1章" not in ctx["recent_summary"]
+        assert "第2章" not in ctx["recent_summary"]
+
     def test_v2_run_lock_and_immutable_versions(self, tmp_path):
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")

@@ -1304,8 +1304,17 @@ class ProjectManager:
         max_recent_chapters: int = 3,
     ) -> dict[str, str]:
         """Build context for writing a chapter: recent summary + character/world info."""
-        chapters = self.get_all_chapters(project_id)
-        recent = [c for c in chapters if c["chapter_number"] < chapter_number]
+        # SQL-bounded window read — get_all_chapters would load every draft
+        # in the project just to keep the last few summaries.
+        recent = list(
+            reversed(
+                self.get_recent_chapters(
+                    project_id,
+                    before=chapter_number,
+                    limit=max_recent_chapters,
+                )
+            )
+        )
 
         # Recent summary from last N chapters
         recent_summary_parts = []
@@ -1394,6 +1403,31 @@ class ProjectManager:
                 (project_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_relevant_world_entities(
+        self,
+        project_id: str,
+        draft_text: str,
+        limit: int = 60,
+    ) -> list[dict]:
+        """Entities referenced by name in the draft — conflict candidates.
+
+        Worldbuilding conflict detection only needs entities the current
+        chapter actually touches; sending the full entity table into the
+        extraction prompt grows unbounded on long projects. Small projects
+        (within ``limit``) pass through unchanged.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM world_entities WHERE project_id = ? "
+                "ORDER BY first_appearance_chapter, name",
+                (project_id,),
+            ).fetchall()
+        entities = [dict(r) for r in rows]
+        if len(entities) <= limit:
+            return entities
+        mentioned = [e for e in entities if e.get("name") and e["name"] in draft_text]
+        return mentioned[:limit]
 
     def save_world_entities(
         self,

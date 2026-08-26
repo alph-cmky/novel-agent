@@ -69,9 +69,7 @@ class ContextCompiler:
             )
             # Task-aware retrieval: bounded, relevance-ranked reads —
             # no full foreshadowings/story_events table scan.
-            foreshadowings = self.manager.get_relevant_foreshadowings(
-                project_id, chapter_number
-            )
+            foreshadowings = self.manager.get_relevant_foreshadowings(project_id, chapter_number)
             events = self.manager.get_relevant_story_events(project_id, chapter_number)
         timeline_findings = ContinuityService.check_timeline(
             events,
