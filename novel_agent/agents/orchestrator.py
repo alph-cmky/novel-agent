@@ -6,7 +6,6 @@ conditional edges in graph/chapter.py.
 """
 
 from novel_agent.agents.base import AgentConfig, BaseAgent
-from novel_agent.memory.compressor import ContextCompressor
 from novel_agent.schema.validator import parse_validated
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书的创作方向和节奏。
@@ -183,14 +182,8 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 class OrchestratorAgent(BaseAgent):
     name = "orchestrator"
 
-    def __init__(
-        self,
-        config: AgentConfig | None = None,
-        compressor: ContextCompressor | None = None,
-    ):
+    def __init__(self, config: AgentConfig | None = None):
         super().__init__(config)
-        self._compressor = compressor or ContextCompressor()
-        self._story_arc: list[dict] = []  # Chapter-by-chapter narrative tracking
 
     @property
     def system_prompt(self) -> str:
@@ -311,15 +304,6 @@ class OrchestratorAgent(BaseAgent):
             },
         )
 
-        # Track in story arc
-        self._story_arc.append(
-            {
-                "chapter": chapter_number,
-                "stage": result.get("narrative_stage", "?"),
-                "strategy": result.get("chapter_strategy", {}),
-            }
-        )
-
         return result
 
     @staticmethod
@@ -416,7 +400,3 @@ class OrchestratorAgent(BaseAgent):
         }
 
         return hints.get(perspective, "")
-
-    def get_arc_summary(self) -> list[dict]:
-        """Return the story arc tracking data."""
-        return self._story_arc

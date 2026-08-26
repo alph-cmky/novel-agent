@@ -224,19 +224,7 @@ async def orchestrator_node(state: NovelState) -> dict:
 
     arc_summary = _build_arc_summary(previous_chapters)
 
-    context_for_compression = {
-        "chapters": "\n".join(c.get("draft_content", "") for c in previous_chapters),
-        "character_context": state.get("character_context", ""),
-        "world_context": state.get("world_context", ""),
-    }
-    if orchestrator._compressor.should_compress(context_for_compression):
-        compressed = await orchestrator._compressor.compress(previous_chapters)
-        recent_summary = compressed.get("recent_summary", "")
-        critical = compressed.get("critical_snippets", "")
-        if critical:
-            recent_summary = f"{recent_summary}\n\n## 关键长期事实\n{critical}"
-    else:
-        recent_summary = state.get("recent_summary", "")
+    recent_summary = state.get("recent_summary", "")
 
     # Load unresolved foreshadowings before planning so the same long-range
     # constraints reach both the orchestrator and the writer.

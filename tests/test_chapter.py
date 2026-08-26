@@ -157,8 +157,6 @@ class TestWriterPromptProfileInGraph:
     def test_orchestrator_does_not_pass_prompt_profile(self):
         """orchestrator_node 不再向 analyze() 传 prompt_profile（修复 TypeError）。"""
         mock_orch = MagicMock()
-        mock_orch._compressor = MagicMock()
-        mock_orch._compressor.should_compress = MagicMock(return_value=False)
         mock_orch.analyze = AsyncMock(return_value={})
         with patch("novel_agent.graph.chapter.OrchestratorAgent", return_value=mock_orch):
             asyncio.run(orchestrator_node(self._orch_state()))
