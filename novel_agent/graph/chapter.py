@@ -199,7 +199,9 @@ async def orchestrator_node(state: NovelState) -> dict:
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
         arc_summary=arc_summary,
-        context_packet=full_packet,
+        # Orchestrator plans on a minimal projection; the full packet is
+        # reserved for the Writer after context_needed enrichment.
+        context_packet=ContextCompiler.for_orchestrator(full_packet),
         total_chapters=total_chapters,
         scene_first=bool(state.get("scene_first")),
     )

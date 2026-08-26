@@ -43,6 +43,43 @@ def test_compile_uses_task_aware_retrieval_not_full_reads():
     manager.get_story_events.assert_not_called()
 
 
+def test_for_orchestrator_bounds_world_context_not_full_dump():
+    """Phase 2: Orchestrator 规划不吃全量世界观——world_context 硬性 1/4 预算。"""
+    packet = {
+        "character_context": "甲: 主角",
+        "world_context": "设定" * 4000,
+        "recent_summary": "前情",
+        "unresolved_foreshadowings": [],
+        "timeline_events": [],
+        "timeline_findings": [],
+    }
+
+    projected = ContextCompiler.for_orchestrator(packet, budget_chars=4000)
+
+    assert len(projected["world_context"]) <= 4000 // 4 + 30  # bound + compact marker
+    assert len(projected["character_context"]) <= 4000 // 2 + 30
+    assert projected["recent_summary"] == "前情"
+
+
+def test_for_orchestrator_keeps_planning_inputs_capped():
+    """Phase 2: 规划输入（前情摘要/伏笔/事件）保留但封顶。"""
+    packet = {
+        "character_context": "甲",
+        "recent_summary": "第1章：出城",
+        "unresolved_foreshadowings": [f"伏笔{i}" for i in range(30)],
+        "timeline_events": [{"event": f"事件{i}"} for i in range(30)],
+        "timeline_findings": [f"警告{i}" for i in range(30)],
+    }
+
+    projected = ContextCompiler.for_orchestrator(packet)
+
+    assert len(projected["unresolved_foreshadowings"]) == 10
+    assert len(projected["timeline_events"]) == 8
+    assert len(projected["timeline_findings"]) == 5
+    assert projected["timeline_events"][-1] == {"event": "事件29"}
+    assert projected["recent_summary"] == "第1章：出城"
+
+
 def test_apply_context_needed_folds_orchestrator_demands_into_packet():
     """context_needed 是 Orchestrator → ContextCompiler 需求声明，五种信号都落进 packet。"""
     packet = {

@@ -461,6 +461,42 @@ class TestContextMinimality:
         state.update(overrides)
         return state
 
+    def test_orchestrator_node_plans_on_minimal_projection(self):
+        """Phase 2: Orchestrator 收 for_orchestrator 投影，world_context 有界。"""
+        from novel_agent.graph.chapter import orchestrator_node
+
+        captured: dict = {}
+
+        async def _mock_analyze(**kwargs):
+            captured.update(kwargs)
+            return {"narrative_stage": "development", "chapter_strategy": {}}
+
+        state = {
+            "chapter_number": 2,
+            "chapter_outline": "大纲",
+            "context_packet": {
+                "character_context": "角色" * 5000,
+                "world_context": "设定" * 5000,
+                "recent_summary": "摘要" * 5000,
+                "unresolved_foreshadowings": [f"伏笔{i}" for i in range(20)],
+                "timeline_events": [{"e": f"事件{i}"} for i in range(30)],
+                "timeline_findings": [{"f": f"发现{i}"} for i in range(10)],
+            },
+        }
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter.OrchestratorAgent") as mock_cls,
+        ):
+            mock_cls.return_value.analyze = _mock_analyze
+            asyncio.run(orchestrator_node(state))
+
+        packet = captured["context_packet"]
+        # for_orchestrator: world 1/4 预算、伏笔 ≤10、事件 ≤8
+        assert len(packet["world_context"]) <= 4000 // 4 + 30
+        assert len(packet["character_context"]) <= 4000 // 2 + 30
+        assert len(packet["unresolved_foreshadowings"]) <= 10
+        assert len(packet["timeline_events"]) <= 8
+
     def test_editor_node_passes_style_report_and_minimal_context(self):
         """Editor receives StyleReport + for_editor projection, not full packet."""
         from novel_agent.graph.chapter import editor_node

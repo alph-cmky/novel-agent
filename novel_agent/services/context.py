@@ -123,6 +123,30 @@ class ContextCompiler:
     # ── Task-aware projections ────────────────────────────
 
     @staticmethod
+    def for_orchestrator(packet: dict, budget_chars: int = 4000) -> dict:
+        """Minimal context for Orchestrator planning.
+
+        Planning needs storyline inputs: recent summaries, active characters,
+        open foreshadowings and recent timeline facts. Full worldbuilding is
+        not required to decide strategy — a tight excerpt keeps the plan
+        consistent with canon at a fraction of the size (≈2-4K tokens).
+        """
+        return {
+            "character_context": ContextCompiler.bound(
+                packet.get("character_context", ""), budget_chars // 2
+            ),
+            "world_context": ContextCompiler.bound(
+                packet.get("world_context", ""), budget_chars // 4
+            ),
+            "recent_summary": ContextCompiler.bound(
+                packet.get("recent_summary", ""), budget_chars // 2
+            ),
+            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:10],
+            "timeline_events": (packet.get("timeline_events") or [])[-8:],
+            "timeline_findings": (packet.get("timeline_findings") or [])[:5],
+        }
+
+    @staticmethod
     def for_writer(packet: dict, budget_chars: int = 5000) -> dict:
         """Minimal context for Writer: chars + summary + foreshadowings + events.
 

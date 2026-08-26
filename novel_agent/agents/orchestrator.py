@@ -142,6 +142,7 @@ class OrchestratorAgent(BaseAgent):
         packet = context_packet or {}
         character_context = packet.get("character_context", "")
         world_context = packet.get("world_context", "")
+        recent_summary = packet.get("recent_summary", "")
         unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
         timeline_events = packet.get("timeline_events", [])
         timeline_findings = packet.get("timeline_findings", [])
@@ -149,6 +150,9 @@ class OrchestratorAgent(BaseAgent):
         foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
         timeline_context = "\n".join(str(item) for item in (timeline_events or [])[-10:])
         timeline_warnings = "\n".join(str(item) for item in (timeline_findings or [])[:10])
+
+        # Skip-when-empty: absent sections stay absent, no placeholder noise.
+        summary_section = f"## 前情摘要\n{recent_summary}\n\n" if recent_summary else ""
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
@@ -171,6 +175,7 @@ class OrchestratorAgent(BaseAgent):
                     f"## 已有角色\n{character_context or '暂无'}\n\n"
                     f"## 世界观设定\n{world_context or '暂无'}\n\n"
                     f"## 已有章节\n{recent_titles or '无'}\n\n"
+                    f"{summary_section}"
                     f"{arc_summary}\n\n"
                     f"## 待回收伏笔\n{foreshadowing_context or '暂无'}\n\n"
                     f"## 关键事件\n{timeline_context or '暂无'}\n\n"

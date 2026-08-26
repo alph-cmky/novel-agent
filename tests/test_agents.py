@@ -119,6 +119,44 @@ class TestOrchestratorPromptHelpers:
         prompt = mocked.call_args.args[0][1]["content"]
         assert "已完成章节数：100章" in prompt
 
+    def test_analyze_consumes_recent_summary_from_packet(self):
+        """Phase 2: packet 的 recent_summary（前情摘要）进入 Orchestrator prompt。"""
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=3,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                    context_packet={"recent_summary": "第2章末：主角识破陷阱"},
+                )
+            )
+        prompt = mocked.call_args.args[0][1]["content"]
+        assert "## 前情摘要" in prompt
+        assert "第2章末：主角识破陷阱" in prompt
+
+    def test_analyze_empty_summary_omits_section(self):
+        """Phase 2: 无前情摘要时整节省略，不出现空占位。"""
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                )
+            )
+        prompt = mocked.call_args.args[0][1]["content"]
+        assert "## 前情摘要" not in prompt
+
     def test_analyze_parse_failure_fallback_has_no_ending_type(self):
         """解析失败兜底不得注入任何 ending_type（防 cliffhanger 网文味回流）。"""
         agent = OrchestratorAgent()
