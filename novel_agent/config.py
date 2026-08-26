@@ -15,6 +15,13 @@ NARRATIVE_PACING = (
 )
 TYPICAL_CHAPTERS = "100章以上"
 
+# ── Style analysis thresholds ──────────────────────────
+# Paragraph structure — configurable, not scattered as magic numbers.
+SHORT_NARRATIVE_PARAGRAPH_THRESHOLD = 40
+SINGLE_SENTENCE_RATIO_THRESHOLD = 0.30
+SHORT_NARRATIVE_RATIO_THRESHOLD = 0.40
+MAX_CONSECUTIVE_SHORT_PARAGRAPHS = 3
+
 
 def env_bool(name: str, default: bool = False) -> bool:
     """将环境变量解析为布尔。接受 1/true/yes/on（大小写不敏感）。"""

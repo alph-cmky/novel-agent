@@ -1,16 +1,24 @@
-"""Tests for AI flavor detection rules and the unified analyzer boundary."""
+"""Tests for style analysis — paragraph structure, AI flavor evidence, style gate."""
 
 import asyncio
+from pathlib import Path
 
 from novel_agent.style.analyzer import (
+    ParagraphStructureAnalyzer,
     StyleAnalyzer,
     check_dialogue_ratio,
     check_ending,
-    check_paragraph_lengths,
     check_sentence_variety,
     detect_ai_flavor,
+    style_gate,
 )
 from novel_agent.tools.detect_ai_flavor import DetectAiFlavorTool
+
+FIXTURES = Path(__file__).parent / "fixtures" / "style"
+
+
+def _fixture(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
 
 
 class TestBannedPhrases:
@@ -64,6 +72,7 @@ class TestBannedPhrases:
         assert 0 <= report.sentence_rhythm_score <= 100
         assert report.dialogue_score > 0
         assert isinstance(report.issues, list)
+        assert report.paragraph_structure is not None
 
     def test_style_tool_preserves_legacy_payload(self):
         text = "此外，这个发现至关重要。"
@@ -74,35 +83,100 @@ class TestBannedPhrases:
         assert result.data == direct
 
 
-class TestParagraphLengths:
-    def test_uniform_paragraphs_detected(self):
-        # Four paragraphs with nearly identical lengths
-        text = "\n".join(["A" * 100 for _ in range(10)])
-        result = check_paragraph_lengths(text)
-        assert result["uniform_paragraphs"] is True
+class TestParagraphStructure:
+    def test_fragmented_text_has_low_score(self):
+        text = _fixture("fragmented.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.fragmentation_score < 60
+        assert report.max_consecutive_short_narrative_paragraphs >= 4
+        assert report.short_narrative_ratio > 0.4
 
-    def test_varied_paragraphs_pass(self):
-        text = "\n".join(
-            [
-                "A" * 20,
-                "B" * 200,
-                "C" * 50,
-                "D" * 120,
-                "E" * 80,
-            ]
+    def test_natural_text_has_high_score(self):
+        text = _fixture("natural.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.fragmentation_score >= 70
+        assert report.max_consecutive_short_narrative_paragraphs <= 2
+
+    def test_dialogue_heavy_not_flagged_as_fragmented(self):
+        text = _fixture("dialogue_heavy.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        # Fragmentation score should remain healthy — short narrative beats
+        # between dialogue are natural, not fragmentation.
+        assert report.fragmentation_score >= 60
+        assert report.dialogue_paragraph_count >= 5
+        # Pure dialogue paragraphs must be excluded from narrative metrics.
+        assert report.max_consecutive_short_narrative_paragraphs <= 2
+
+    def test_action_scene_short_paragraphs_not_over_penalized(self):
+        text = _fixture("action_scene.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.fragmentation_score >= 30
+        assert report.narrative_paragraph_count > 0
+
+    def test_mixed_scene_balanced(self):
+        text = _fixture("mixed_scene.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.fragmentation_score >= 50
+        assert report.mixed_paragraph_count > 0
+
+    def test_empty_text(self):
+        report = ParagraphStructureAnalyzer().analyze("")
+        assert report.paragraph_count == 0
+        assert report.fragmentation_score == 100
+
+    def test_single_sentence_detection(self):
+        text = "他转过身。\n这是一个比较长的叙述段落，包含了更多内容来避免被判定为短段。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.single_sentence_narrative_ratio > 0
+
+    def test_pure_dialogue_not_counted_as_short_narrative(self):
+        text = (
+            '"走。"\n"好。"\n"来。"\n"行。"\n'
+            "这是最后一个足够长的叙述段落，用来确保前面那些纯对白不被计入短叙述段比例，"
+            "这一段的长度超过了四十个字符的阈值。"
         )
-        result = check_paragraph_lengths(text)
-        assert result["uniform_paragraphs"] is False
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.dialogue_paragraph_count == 4
+        assert report.narrative_paragraph_count == 1
+        assert report.short_narrative_ratio == 0
 
-    def test_few_paragraphs_not_analyzed(self):
-        text = "A\nB"
-        result = check_paragraph_lengths(text)
-        assert "段落太少" in result["detail"]
+    def test_consecutive_short_narrative(self):
+        text = "他抬头。\n雨停了。\n街道很安静。\n远处有人走来。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.max_consecutive_short_narrative_paragraphs == 4
+
+    def test_scene_boundary_not_phantom_paragraph(self):
+        text = (
+            "第一段场景内容很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长。\n\n"
+            "第二段场景内容也很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长。"
+        )
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.paragraph_count == 2
+        assert report.short_narrative_ratio == 0
+
+    def test_chinese_curly_quotes(self):
+        text = "\u201c你好。\u201d林风说道。这里有一些叙述内容。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.mixed_paragraph_count == 1
+
+    def test_corner_brackets(self):
+        text = "「你好。」林风说道。这里有一些叙述内容。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.mixed_paragraph_count == 1
+
+    def test_white_corner_brackets(self):
+        text = "『你好。』林风说道。这里有一些叙述内容。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.mixed_paragraph_count == 1
+
+    def test_nested_quotes(self):
+        text = "\u201c他说：\u2018走。\u2019\u201d"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.dialogue_paragraph_count == 1
 
 
 class TestSentenceVariety:
     def test_consecutive_same_length_detected(self):
-        # 5 sentences with very similar lengths
         text = (
             "这是一个十五字句子啊啊啊啊。"
             "这也是十五字句子呢呢呢。"
@@ -128,30 +202,28 @@ class TestSentenceVariety:
 
 
 class TestDialogueRatio:
-    def test_high_dialogue_passes(self):
-        # Heavy dialogue, minimal narration
+    def test_high_dialogue_detected(self):
         dialogue_heavy = (
             '"你来了。" "来了。" "东西呢？" "在这。" '
             '"不可能。" "你自己看。" "真的是它。" "我早就知道。" '
             '"接下来怎么办？" "等。" "等什么？" "等他出现。"'
         )
         result = check_dialogue_ratio(dialogue_heavy)
-        assert result["ok"] is True
         assert result["dialogue_ratio"] >= 0.40
+        assert "ok" not in result
 
-    def test_low_dialogue_flags(self):
+    def test_low_dialogue_detected(self):
         text = "纯叙述内容没有任何对话标记。" * 20
         result = check_dialogue_ratio(text)
-        assert result["ok"] is False
         assert result["dialogue_ratio"] < 0.40
+        assert "ok" not in result
 
     def test_chinese_quotes_detected(self):
         text = "「你好。」林风说道。这里有一些叙述内容。" * 10
         result = check_dialogue_ratio(text)
         assert result["dialogue_ratio"] > 0
 
-    def test_double_angle_quotes_detected(self):
-        # 『』（双直角引号）是修复点：右引号原误写成『，无法闭合匹配。
+    def test_white_corner_quotes_detected(self):
         text = "『你来了。』林风说道。这里有一些叙述内容。" * 10
         result = check_dialogue_ratio(text)
         assert result["dialogue_ratio"] > 0
@@ -167,12 +239,66 @@ class TestEnding:
         result = check_ending(text)
         assert result["summary_ending"] is True
 
-    def test_hook_ending_detected(self):
+    def test_hook_evidence_recorded_not_rewarded(self):
         text = "前面内容\n" * 10 + "就在这时，门外突然传来一声巨响。"
         result = check_ending(text)
-        assert result["has_hook"] is True
+        assert "hook_evidence" in result
+        assert len(result["hook_evidence"]) > 0
+        assert "has_hook" not in result
 
     def test_neutral_ending(self):
         text = "前面内容\n" * 10 + "他转身离开了房间。"
         result = check_ending(text)
         assert not result["summary_ending"]
+        assert result["hook_evidence"] == []
+
+
+class TestStyleGate:
+    def _report(self, **kwargs):
+        from novel_agent.style.analyzer import ParagraphStructureReport
+
+        defaults = dict(
+            paragraph_count=10,
+            narrative_paragraph_count=8,
+            dialogue_paragraph_count=2,
+            mixed_paragraph_count=0,
+            median_narrative_paragraph_length=100,
+            short_narrative_ratio=0.1,
+            single_sentence_narrative_ratio=0.1,
+            max_consecutive_short_narrative_paragraphs=1,
+            fragmentation_score=90,
+            issues=[],
+        )
+        defaults.update(kwargs)
+        return ParagraphStructureReport(**defaults)
+
+    def test_pass_on_natural(self):
+        assert style_gate(self._report()) == "PASS"
+
+    def test_warning_on_moderate_short_ratio(self):
+        assert style_gate(self._report(short_narrative_ratio=0.45)) == "WARNING"
+
+    def test_fail_on_extreme_short_ratio(self):
+        assert style_gate(self._report(short_narrative_ratio=0.65)) == "FAIL"
+
+    def test_warning_on_consecutive_shorts(self):
+        assert style_gate(self._report(max_consecutive_short_narrative_paragraphs=4)) == "WARNING"
+
+    def test_fail_on_extreme_consecutive_shorts(self):
+        assert style_gate(self._report(max_consecutive_short_narrative_paragraphs=6)) == "FAIL"
+
+    def test_warning_on_single_sentence_ratio(self):
+        assert style_gate(self._report(single_sentence_narrative_ratio=0.35)) == "WARNING"
+
+    def test_fail_on_extreme_single_sentence_ratio(self):
+        assert style_gate(self._report(single_sentence_narrative_ratio=0.55)) == "FAIL"
+
+    def test_fragmented_fixture_fails(self):
+        text = _fixture("fragmented.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert style_gate(report) in ("WARNING", "FAIL")
+
+    def test_natural_fixture_passes(self):
+        text = _fixture("natural.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert style_gate(report) == "PASS"
