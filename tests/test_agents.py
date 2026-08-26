@@ -152,6 +152,54 @@ class TestOrchestratorPromptHelpers:
         text = OrchestratorAgent._build_mode_instruction("linear")
         assert "linear" in text
 
+    def test_mode_instructions_never_require_all_optional_fields(self):
+        """Phase D: 模式指令不得要求输出全部可选字段（每章全字段 = token 浪费）。"""
+        for mode in ("linear", "unit_arc", "hybrid", "multi_perspective", "ensemble"):
+            text = OrchestratorAgent._build_mode_instruction(mode)
+            assert "同时输出完整" not in text, f"{mode} still demands all fields"
+
+    def test_scene_instruction_prunes_key_scenes_when_not_scene_first(self):
+        """Phase D: 整章模式明确不要求 key_scenes/scene_composition。"""
+        plain = OrchestratorAgent._build_scene_instruction(scene_first=False)
+        scene = OrchestratorAgent._build_scene_instruction(scene_first=True)
+        assert "不需要输出 key_scenes" in plain
+        assert "必须将本章拆解为 3-4 个分镜场景" in scene
+        assert "scene_composition" in scene
+
+    def test_analyze_scene_first_reaches_user_prompt(self):
+        """analyze(scene_first=True) 将拆场要求注入 user prompt。"""
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                    scene_first=True,
+                )
+            )
+        user = mocked.call_args.args[0][1]["content"]
+        assert "scene_first 拆场模式" in user
+
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(
+                agent.analyze(
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    previous_chapters=[],
+                )
+            )
+        user = mocked.call_args.args[0][1]["content"]
+        assert "整章生成模式" in user
+
     def test_perspective_hint_first_person(self):
         text = OrchestratorAgent._build_perspective_hint("first_person")
         assert "第一人称" in text

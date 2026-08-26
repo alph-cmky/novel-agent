@@ -192,6 +192,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         arc_summary=arc_summary,
         context_packet=full_packet,
         total_chapters=total_chapters,
+        scene_first=bool(state.get("scene_first")),
     )
 
     stage = strategy.get("narrative_stage", "?")
