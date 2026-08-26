@@ -349,18 +349,31 @@ def style_gate(report: ParagraphStructureReport | dict) -> str:
 
     Returns PASS / WARNING / FAIL based on structural anomalies.
     Does NOT judge literary quality — that is the Editor's job.
+
+    Dialogue-driven scenes are exempt from short/single-sentence ratio
+    checks: short narrative beats between dialogue lines are natural
+    rhythm, not fragmentation. Consecutive-run checks still apply.
     """
     if isinstance(report, dict):
         report = ParagraphStructureReport(**report)
 
+    dialogue_driven = (
+        report.dialogue_paragraph_count >= 3
+        and report.dialogue_paragraph_count >= report.paragraph_count * 0.4
+    )
+
     if report.max_consecutive_short_narrative_paragraphs > MAX_CONSECUTIVE_SHORT_PARAGRAPHS + 2:
         return "FAIL"
-    if report.short_narrative_ratio > SHORT_NARRATIVE_RATIO_THRESHOLD + 0.2:
+    if not dialogue_driven and report.short_narrative_ratio > SHORT_NARRATIVE_RATIO_THRESHOLD + 0.2:
         return "FAIL"
-    if report.single_sentence_narrative_ratio > SINGLE_SENTENCE_RATIO_THRESHOLD + 0.2:
+    if not dialogue_driven and report.single_sentence_narrative_ratio > (
+        SINGLE_SENTENCE_RATIO_THRESHOLD + 0.2
+    ):
         return "FAIL"
     if report.max_consecutive_short_narrative_paragraphs > MAX_CONSECUTIVE_SHORT_PARAGRAPHS:
         return "WARNING"
+    if dialogue_driven:
+        return "PASS"
     if report.short_narrative_ratio > SHORT_NARRATIVE_RATIO_THRESHOLD:
         return "WARNING"
     if report.single_sentence_narrative_ratio > SINGLE_SENTENCE_RATIO_THRESHOLD:
