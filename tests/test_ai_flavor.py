@@ -8,7 +8,6 @@ from novel_agent.style.analyzer import (
     check_dialogue_ratio,
     check_ending,
     check_sentence_variety,
-    detect_ai_flavor,
     style_gate,
 )
 
@@ -22,22 +21,22 @@ def _fixture(name: str) -> str:
 class TestBannedPhrases:
     def test_detects_banned_connectors(self):
         text = "此外，这是一个问题。不仅如此，还有更多。"
-        report = detect_ai_flavor(text)
-        phrases = [i["phrase"] for i in report["issues"]]
+        report = StyleAnalyzer().analyze(text)
+        phrases = [i.phrase for i in report.issues if hasattr(i, "phrase")]
         assert "此外" in phrases
         assert "不仅如此" in phrases
 
     def test_detects_banned_emphasis(self):
         text = "这个发现至关重要，不可忽视。"
-        report = detect_ai_flavor(text)
-        phrases = [i["phrase"] for i in report["issues"]]
+        report = StyleAnalyzer().analyze(text)
+        phrases = [i.phrase for i in report.issues if hasattr(i, "phrase")]
         assert "至关重要" in phrases
         assert "不可忽视" in phrases
 
     def test_detects_cliches(self):
         text = "他的眼中闪过一丝惊讶，她的嘴角微微上扬。"
-        report = detect_ai_flavor(text)
-        cliches = [i["phrase"] for i in report["issues"] if i["type"] == "cliche"]
+        report = StyleAnalyzer().analyze(text)
+        cliches = [i.phrase for i in report.issues if hasattr(i, "phrase") and i.type == "cliche"]
         assert "他的眼中闪过一丝" in cliches
 
     def test_clean_text_scores_high(self):
@@ -49,8 +48,8 @@ class TestBannedPhrases:
             '"自己看。"\n'
             "王胖子接过去，插进电脑。屏幕亮起来的瞬间，他的脸色变了。\n"
         )
-        report = detect_ai_flavor(text)
-        assert report["overall_score"] >= 80
+        report = StyleAnalyzer().analyze(text)
+        assert report.ai_flavor_score >= 80
 
     def test_multiple_issues_reduce_score(self):
         text = (
@@ -58,9 +57,9 @@ class TestBannedPhrases:
             "我们必须深入探讨这个问题的本质。他的眼中闪过一丝疑惑，"
             "她的嘴角微微上扬。综上所述，这一切都具有重要的现实意义。"
         )
-        report = detect_ai_flavor(text)
-        assert report["overall_score"] < 80
-        assert report["total_issues"] > 0
+        report = StyleAnalyzer().analyze(text)
+        assert report.ai_flavor_score < 80
+        assert len(report.issues) > 0
 
     def test_style_analyzer_returns_normalized_report(self):
         report = StyleAnalyzer().analyze('"你好。"林风转身。')
@@ -75,19 +74,6 @@ class TestBannedPhrases:
         assert report.dialogue_stats is not None
         assert report.ending_analysis is not None
         assert report.style_gate in ("PASS", "WARNING", "FAIL")
-
-    def test_legacy_detect_ai_flavor_matches_analyzer(self):
-        """detect_ai_flavor() is a thin wrapper around StyleAnalyzer.analyze()."""
-        text = "此外，这个发现至关重要。"
-        report = StyleAnalyzer().analyze(text)
-        legacy = detect_ai_flavor(text)
-
-        assert legacy["overall_score"] == report.ai_flavor_score
-        assert len(legacy["issues"]) == len(report.issues)
-        assert legacy["paragraph_analysis"] == report.paragraph_structure
-        assert legacy["sentence_analysis"] == report.sentence_rhythm
-        assert legacy["dialogue_analysis"] == report.dialogue_stats
-        assert legacy["ending_analysis"] == report.ending_analysis
 
 
 class TestParagraphStructure:

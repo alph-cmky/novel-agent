@@ -1,14 +1,14 @@
 """Offline benchmark for AI-flavor rule discrimination.
 
-Runs the deterministic detect_ai_flavor rules over curated samples and reports:
-- mean_ai / mean_human: average overall_score for each group
+Runs the deterministic StyleAnalyzer rules over curated samples and reports:
+- mean_ai / mean_human: average ai_flavor_score for each group
 - separation: (mean_human - mean_ai) / 100
 - true_positive_rate / false_positive_rate: binary classification at score < 60
 
 Pure rule layer — zero LLM cost. Used as a sanity gate before LLM 横评.
 """
 
-from novel_agent.style.analyzer import detect_ai_flavor
+from novel_agent.style.analyzer import StyleAnalyzer
 
 
 def load_samples(path: str) -> tuple[list[str], list[str]]:
@@ -20,8 +20,9 @@ def load_samples(path: str) -> tuple[list[str], list[str]]:
 
 class AiFlavorOfflineBenchmark:
     def run(self, ai_samples: list[str], human_samples: list[str]) -> dict:
-        ai_scores = [detect_ai_flavor(t)["overall_score"] for t in ai_samples]
-        human_scores = [detect_ai_flavor(t)["overall_score"] for t in human_samples]
+        analyzer = StyleAnalyzer()
+        ai_scores = [analyzer.analyze(t).ai_flavor_score for t in ai_samples]
+        human_scores = [analyzer.analyze(t).ai_flavor_score for t in human_samples]
         mean_ai = sum(ai_scores) / len(ai_scores)
         mean_human = sum(human_scores) / len(human_scores)
         # 分离度：按 60 分阈值做二分类（<60 判为 AI），算 TPR/FPR

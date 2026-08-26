@@ -46,7 +46,7 @@ Orchestrator → Evolution Subgraph [
 
 - **Orchestrator**: 叙事阶段分析 + 篇幅感知策略 + 上下文组装
 - **Writer**: 动态字数目标 + 去 AI 味写作规则 + search_context 工具 + 接收结构化 improvement_plan
-- **Editor**: 5 维度审查 + detect_ai_flavor 工具
+- **Editor**: 5 维度审查 + 接收 StyleReport（deterministic StyleAnalyzer 0 LLM）
 - **Continuity**: 3 维度一致性审计 + check_continuity 工具
 - **EvolutionOrchestrator**: 元评估器 — 版本对比 + Delta 分析 + 终止判断 + 改进计划生成（规则层 + LLM 增强）
 - **EvolutionSelectBest**: 选择最优版本，一次性写 DB

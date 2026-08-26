@@ -375,25 +375,6 @@ def style_gate(report: ParagraphStructureReport | dict) -> str:
 # ── Main detection ────────────────────────────────────
 
 
-def detect_ai_flavor(text: str) -> dict:
-    """Legacy entry point — thin wrapper around StyleAnalyzer.analyze().
-
-    Kept for the offline eval script and existing tests. New code should
-    call ``StyleAnalyzer().analyze()`` directly and consume a ``StyleReport``.
-    """
-    report = StyleAnalyzer().analyze(text)
-    para = report.paragraph_structure or {}
-    return {
-        "overall_score": report.ai_flavor_score,
-        "issues": [i.model_dump() if isinstance(i, StyleIssue) else i for i in report.issues],
-        "paragraph_analysis": para,
-        "sentence_analysis": report.sentence_rhythm or {},
-        "dialogue_analysis": report.dialogue_stats or {},
-        "ending_analysis": report.ending_analysis or {},
-        "total_issues": len(report.issues),
-    }
-
-
 class StyleAnalyzer:
     """Single entry point for deterministic style analysis.
 
@@ -478,7 +459,3 @@ class StyleAnalyzer:
             ending_analysis=ending_check,
             style_gate=gate,
         )
-
-    def legacy_report(self, text: str) -> dict:
-        """Return the legacy detect_ai_flavor payload without changing its contract."""
-        return detect_ai_flavor(text)
