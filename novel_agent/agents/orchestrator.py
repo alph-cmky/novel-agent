@@ -10,86 +10,68 @@ from novel_agent.schema.validator import parse_validated
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书的创作方向和节奏。
 
-## 你的职责
+## 职责
 
-### 1. 叙事阶段分析
-判断当前故事处于哪个阶段，据此调整创作策略：
-- **intro（开篇）**：建立主角形象，展示金手指，埋下核心冲突
-- **development（发展）**：推进故事线，扩展世界观，发展角色关系
-- **climax（高潮）**：核心冲突爆发，关键抉择，情绪高点
-- **resolution（收尾）**：回收伏笔，角色弧线完成，留有余味
-- **unit_arc（单元剧）**：独立单元剧情，主线松散串联
-- **mini_climax（小高潮）**：长高潮阶段的内部起伏波峰
-- **transition（过渡）**：阶段之间的衔接章节
+1. **叙事阶段分析**：判断当前阶段并调整策略——intro 建立主角形象与核心冲突；development 推进故事线、扩展世界观；climax 核心冲突爆发；resolution 回收伏笔、收束弧线；unit_arc 独立单元剧情；mini_climax 长高潮阶段的内部波峰；transition 阶段衔接。
+2. **篇幅调整**：短篇快速推进、3-5 章内到达 climax；中篇各阶段均衡展开、climax 在总进度 60-70% 处；长篇 intro 充分铺垫、多线并进、伏笔长线回收。
+3. **模式感知**：按用户消息的模式指令调整输出——模式决定额外字段及其 schema，均以用户消息为准。
 
-### 2. 篇幅调整
-根据用户选择的篇幅调整节奏：
-- **短篇**：快速推进，跳过intro直接进入development，3-5章内到达climax
-- **中篇**：平衡发展，各阶段充分展开，climax在总进度60-70%处
-- **长篇**：渐进展开，intro充分铺垫，development多线并进，伏笔长线回收
+## 输出契约
 
-### 3. 叙事模式感知
-根据项目的 narrative_mode 调整输出：
-- **linear（线性）**：按单一主线推进，storylines 中 role=primary 的一条
-- **unit_arc（单元剧）**：输出 unit_arc 字段，主线在单元之间松散串联
-- **hybrid（混合）**：单元剧情 + 主线推进，同时输出 storylines 和 unit_arc
-- **multi_perspective（多视角）**：输出 pov_config 字段，指定每章的 POV 角色
-- **ensemble（群像）**：多线并行，pov_config 标记聚焦角色，storylines 管理各线进度
+- 每章必输：narrative_stage、stage_analysis、chapter_strategy（storylines、pacing、foreshadowings_to_address、suggested_chapter_words）、context_needed
+- ending_type：仅当本章确需特定结尾类型（如 cliffhanger）时输出，省略即自然收束
+- key_scenes / scene_composition / unit_arc / pov_config：仅当用户消息的拆场或模式指令要求时输出
+- 其余可选字段仅在确有内容时输出，无内容省略：
+  time_structure（非线性叙事）、climax_sequence（climax 阶段）、stage_boundary（阶段边界章）、ending_tone（接近书末/卷末）、storyline_intersection（多线交汇章）、character_arcs（角色里程碑）、character_emotional_state（出场角色显著情绪变化）、tension_profile（紧张度明显起伏）、foreshadowing_management（仅高风险或临近回收的伏笔）
 
-## 输出字段分层（按需输出，不要每章输出全部字段）
+## 通用规则
 
-**每章必须输出**：storylines、pacing、foreshadowings_to_address、suggested_chapter_words
-
-**ending_type**：仅当本章确需特定结尾类型（如 cliffhanger、revelation）时输出；不输出则自然收束
-
-**仅 scene_first 拆场模式输出**：key_scenes（3-4 个分镜：场景名·地点·冲突核心·情绪落点）、scene_composition
-
-**仅对应叙事模式输出**（见用户消息中的模式指令）：unit_arc（unit_arc/hybrid 模式）、pov_config（multi_perspective/ensemble 模式）
-
-**可选字段**（仅在确有内容时输出，无内容省略或置 null）：
-- time_structure {mode(linear|flashback|parallel|non_linear), current_timeline, flashback_trigger, time_gap, synchronization_points}：非线性叙事时
-- climax_sequence {current_mini_climax, total_mini_climaxes, mini_climax_type, previous_resolution}：climax 阶段 + 长篇
-- stage_boundary {is_boundary, boundary_type(world_switch|time_jump|conflict_escalation|resolution_start), previous_stage_duration, estimated_next_stage_duration}：阶段边界章
-- ending_tone {type, ambiguity_level(high|medium|low), reader_satisfaction, setup_for_next}：接近全书或大卷结尾
-- storyline_intersection {has_intersection, intersection_type(crossover|parallel|contrast), intersection_description}：多线交汇章
-- character_arcs [{character_name, arc_stage(growth|fall|redemption|flat|corruption), arc_progress, current_state, recent_milestone, next_milestone}]：角色里程碑事件
-- character_emotional_state {角色名: {mood, trigger, intensity}}：出场角色显著情绪变化
-- tension_profile {chapter_tension(1-10), overall_trend(rising|falling|holding|peak|valley), recent_chapters_tension[], emotional_tone, variety_check}：紧张度明显起伏
-- foreshadowing_management [{description, chapters_outstanding, risk_level(low|medium|high), action_needed(tease|advance|resolve|maintain), reader_knows, characters_aware[], characters_unaware[]}]：仅高风险或临近回收的伏笔
-- unit_arc {unit_number, unit_title, unit_type(case_of_the_week|training_arc|filler|character_spotlight), mainline_progress, unit_resolution(resolved|unresolved|cliffhanger), carry_over_elements[]}：unit_arc/hybrid 模式必输
-- pov_config {current_pov, pov_shift, access_level(surface|moderate|deep), knowledge_gap}：multi_perspective/ensemble 模式必输
-- scene_composition {primary_scene_type(action|dialogue|introspection|description|transition|mixed), scene_breakdown, recent_dominance, diversity_warning}：scene_first 模式必输
-
-## 输出格式
-
-```json
-{
-  "narrative_stage": "intro|development|climax|resolution|unit_arc|mini_climax|transition",
-  "stage_analysis": "当前阶段的简短分析",
-  "chapter_strategy": {
-    "storylines": [
-      {"id": "线ID", "name": "线名", "role": "primary|secondary|tertiary", "progress": "60%",
-       "chapter_focus": "high|medium|low|background", "key_events": ["重要事件"], "status": "active|paused|resolved"}
-    ],
-    "pacing": "slow|normal|fast",
-    "foreshadowings_to_address": ["需要回收或强化的伏笔"],
-    "suggested_chapter_words": 3000,
-    "key_scenes": ["scene_first 模式必填：分镜场景"]
-  },
-  "context_needed": {
-    "characters": ["本章涉及的已有角色"],
-    "world_elements": ["本章涉及的世界观设定"],
-    "recent_reference": "需要回顾的前文内容描述",
-    "cross_timeline_references": [],
-    "perspective_specific": ""
-  }
-}
-```
-
-chapter_strategy 其余字段（unit_arc / pov_config / time_structure / climax_sequence / stage_boundary / ending_tone / storyline_intersection / character_arcs / character_emotional_state / tension_profile / foreshadowing_management / scene_composition）按上方分层要求按需输出。
-
-只输出JSON。
+- storylines 每条含 id、name、role（primary/secondary/tertiary）、progress、chapter_focus（high/medium/low/background）、key_events、status（active/paused/resolved）
+- suggested_chapter_words 在目标字数 ±20% 内
+- 只输出JSON，不要其他内容
 """
+
+# Conditional schemas — appear exactly once, in the user prompt, and only
+# for the mode / scene_first flag the current chapter actually uses.
+BASE_OUTPUT_SCHEMA = (
+    "输出 schema（本章必输字段）：\n"
+    "{\n"
+    '  "narrative_stage": "intro|development|climax|resolution|unit_arc|mini_climax|transition",\n'
+    '  "stage_analysis": "当前阶段简短分析",\n'
+    '  "chapter_strategy": {\n'
+    '    "storylines": [{"id": "线ID", "name": "线名", "role": "primary|secondary|tertiary", '
+    '"progress": "60%", "chapter_focus": "high|medium|low|background", "key_events": ["重要事件"], '
+    '"status": "active|paused|resolved"}],\n'
+    '    "pacing": "slow|normal|fast",\n'
+    '    "foreshadowings_to_address": ["需要回收或强化的伏笔"],\n'
+    '    "suggested_chapter_words": 3000\n'
+    "  },\n"
+    '  "context_needed": {"characters": ["本章涉及的已有角色"], '
+    '"world_elements": ["本章涉及的世界观设定"], "recent_reference": "需要回顾的前文内容", '
+    '"cross_timeline_references": [], "perspective_specific": ""}\n'
+    "}\n"
+)
+
+UNIT_ARC_SCHEMA = (
+    '  "unit_arc": {"unit_number": 1, "unit_title": "单元名", '
+    '"unit_type": "case_of_the_week|training_arc|filler|character_spotlight", '
+    '"mainline_progress": "主线推进", "unit_resolution": "resolved|unresolved|cliffhanger", '
+    '"carry_over_elements": []}'
+)
+
+POV_CONFIG_SCHEMA = (
+    '  "pov_config": {"current_pov": "POV角色", "pov_shift": "视角变化", '
+    '"access_level": "surface|moderate|deep", "knowledge_gap": "视角信息差"}'
+)
+
+KEY_SCENES_SCHEMA = '  "key_scenes": ["场景名·地点·冲突核心·情绪落点", ...]  // 3-4 个分镜'
+
+SCENE_COMPOSITION_SCHEMA = (
+    '  "scene_composition": {"primary_scene_type": '
+    '"action|dialogue|introspection|description|transition|mixed", '
+    '"scene_breakdown": "场景构成", "recent_dominance": "近章主导类型", '
+    '"diversity_warning": "同质化警告"}'
+)
 
 
 class OrchestratorAgent(BaseAgent):
@@ -167,6 +149,7 @@ class OrchestratorAgent(BaseAgent):
                     f"{mode_instruction}\n"
                     f"{persp_hint}"
                     f"{scene_instruction}"
+                    f"{BASE_OUTPUT_SCHEMA}\n"
                     f"## 篇幅信息\n"
                     f"- 篇幅：{length_label}\n"
                     f"- 目标每章字数：{target_chapter_words}字\n"
@@ -180,7 +163,6 @@ class OrchestratorAgent(BaseAgent):
                     f"## 待回收伏笔\n{foreshadowing_context or '暂无'}\n\n"
                     f"## 关键事件\n{timeline_context or '暂无'}\n\n"
                     f"## 时间线警告\n{timeline_warnings or '暂无'}\n\n"
-                    f"只输出JSON。"
                 ),
             },
         ]
@@ -230,34 +212,40 @@ class OrchestratorAgent(BaseAgent):
 
     @staticmethod
     def _build_mode_instruction(mode: str | None) -> str:
-        """Build mode-specific output instructions for the Orchestrator prompt.
+        """Mode-aware conditional schema — lives in the user prompt only.
 
-        Field structures live once in the system prompt; the mode instruction
-        only names the fields this mode must emit. Empty string when the mode
-        is not configured.
+        The system prompt carries generic output rules; each mode's field
+        structure appears exactly once, here, and only for the active mode.
+        Empty string when the mode is not configured.
         """
         if not mode:
             return ""
 
         base = f"当前叙事模式：{mode}\n"
-        required = {
-            "unit_arc": "unit_arc",
-            "hybrid": "unit_arc",
-            "multi_perspective": "pov_config",
-            "ensemble": "pov_config",
-        }.get(mode)
-        if required:
-            return f"{base}本章必须输出 {required} 字段（结构见系统提示），其余可选字段按需输出，无内容省略。\n"
+        if mode in ("unit_arc", "hybrid"):
+            return (
+                f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n"
+                f"{UNIT_ARC_SCHEMA}\n"
+                "其余可选字段按需输出，无内容省略。\n"
+            )
+        if mode in ("multi_perspective", "ensemble"):
+            return (
+                f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n"
+                f"{POV_CONFIG_SCHEMA}\n"
+                "其余可选字段按需输出，无内容省略。\n"
+            )
         # linear and other modes: only the always-required fields.
         return base + "本章只需输出必输字段与确有内容的可选字段，不要输出空的可选字段。\n"
 
     @staticmethod
     def _build_scene_instruction(scene_first: bool) -> str:
-        """Dynamic key_scenes requirement — only meaningful for scene_first runs."""
+        """Scene-first conditional schema — user prompt only."""
         if scene_first:
             return (
-                "本章为 scene_first 拆场模式：必须将本章拆解为 3-4 个分镜场景"
-                "输出 key_scenes，并输出 scene_composition。\n"
+                "本章为 scene_first 拆场模式：必须将本章拆解为 3-4 个分镜场景，"
+                "chapter_strategy 额外输出（结构如下）：\n"
+                f"{KEY_SCENES_SCHEMA}\n"
+                f"{SCENE_COMPOSITION_SCHEMA}\n"
             )
         return (
             "本章为整章生成模式：不需要输出 key_scenes 与 scene_composition，"

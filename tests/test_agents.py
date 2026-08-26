@@ -203,18 +203,23 @@ class TestOrchestratorPromptHelpers:
     def test_mode_instruction_unit_arc(self):
         text = OrchestratorAgent._build_mode_instruction("unit_arc")
         assert "unit_arc" in text
-        assert "必须输出 unit_arc 字段" in text
-        # Phase E: 结构参考统一放 system prompt，模式指令不再重复 JSON 片段
-        assert "unit_number" not in text
+        assert "必须额外输出" in text
+        # Phase 4: 条件 schema 只在 user prompt 出现一次——结构随模式指令注入
+        assert "unit_number" in text
+        assert "unit_resolution" in text
 
     def test_mode_instruction_multi_perspective(self):
         text = OrchestratorAgent._build_mode_instruction("multi_perspective")
         assert "pov_config" in text
-        assert "必须输出 pov_config 字段" in text
+        assert "必须额外输出" in text
+        assert "current_pov" in text
 
     def test_mode_instruction_linear_default(self):
         text = OrchestratorAgent._build_mode_instruction("linear")
         assert "linear" in text
+        # linear 无条件字段：模式指令不带任何 schema 结构
+        assert "unit_number" not in text
+        assert "current_pov" not in text
 
     def test_mode_instructions_never_require_all_optional_fields(self):
         """Phase D: 模式指令不得要求输出全部可选字段（每章全字段 = token 浪费）。"""
@@ -229,6 +234,10 @@ class TestOrchestratorPromptHelpers:
         assert "不需要输出 key_scenes" in plain
         assert "必须将本章拆解为 3-4 个分镜场景" in scene
         assert "scene_composition" in scene
+        # Phase 4: 拆场 schema 结构只在 scene_first 指令中出现
+        assert "场景名·地点·冲突核心·情绪落点" in scene
+        assert "primary_scene_type" in scene
+        assert "场景名·地点" not in plain
 
     def test_analyze_scene_first_reaches_user_prompt(self):
         """analyze(scene_first=True) 将拆场要求注入 user prompt。"""
@@ -271,6 +280,70 @@ class TestOrchestratorPromptHelpers:
     def test_perspective_hint_unknown_or_empty(self):
         assert OrchestratorAgent._build_perspective_hint("") == ""
         assert OrchestratorAgent._build_perspective_hint("bogus") == ""
+
+
+class TestModeAwarePrompt:
+    """Phase 4: System = 通用规则；User = 当前模式条件 schema，两边不复制。
+
+    测内容出现/缺席，不测字符数（Prompt 长度只作为 benchmark metric）。
+    """
+
+    @staticmethod
+    def _capture_prompt(**kwargs) -> tuple[str, str]:
+        agent = OrchestratorAgent()
+        with patch.object(
+            agent,
+            "run_with_tools",
+            new=AsyncMock(return_value=("{}", None)),
+        ) as mocked:
+            asyncio.run(agent.analyze(chapter_number=1, chapter_outline="大纲", **kwargs))
+        messages = mocked.call_args.args[0]
+        return messages[0]["content"], messages[1]["content"]
+
+    def test_linear_prompt_is_minimal(self):
+        """linear + 整章模式：user prompt 不含任何条件 schema 结构。"""
+        system, user = self._capture_prompt(narrative_mode="linear", previous_chapters=[])
+        for fragment in ("unit_number", "current_pov", "场景名·地点", "primary_scene_type"):
+            assert fragment not in user, f"linear prompt carries {fragment}"
+
+    def test_scene_first_prompt_includes_scene_schema(self):
+        _, user = self._capture_prompt(previous_chapters=[], scene_first=True)
+        assert "场景名·地点·冲突核心·情绪落点" in user
+        assert "primary_scene_type" in user
+
+    def test_unit_arc_prompt_includes_unit_arc_schema(self):
+        _, user = self._capture_prompt(previous_chapters=[], narrative_mode="unit_arc")
+        assert "unit_number" in user
+        assert "unit_resolution" in user
+        assert "current_pov" not in user
+
+    def test_multi_perspective_prompt_includes_pov_schema(self):
+        _, user = self._capture_prompt(previous_chapters=[], narrative_mode="multi_perspective")
+        assert "current_pov" in user
+        assert "knowledge_gap" in user
+        assert "unit_number" not in user
+
+    def test_conditional_schemas_not_duplicated_in_system_prompt(self):
+        """禁止 Schema 复制：条件字段结构只出现在 user prompt 一侧。"""
+        system, _ = self._capture_prompt(
+            previous_chapters=[], narrative_mode="unit_arc", scene_first=True
+        )
+        for fragment in (
+            "unit_number",
+            "current_pov",
+            "primary_scene_type",
+            "场景名·地点·冲突核心·情绪落点",
+        ):
+            assert fragment not in system, f"system prompt duplicates {fragment}"
+
+    def test_system_prompt_keeps_output_contract_rules(self):
+        """语义压缩后仍保留核心契约：必输字段、ending_type 规则、JSON 规则。"""
+        system = OrchestratorAgent().system_prompt
+        assert "narrative_stage" in system
+        assert "storylines" in system
+        assert "ending_type" in system
+        assert "只输出JSON" in system
+        assert "context_needed" in system
 
 
 class TestWorldbuildingExtract:
