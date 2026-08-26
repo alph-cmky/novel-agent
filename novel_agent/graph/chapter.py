@@ -386,6 +386,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
             chapter_outline=state.get("chapter_outline", ""),
             context_packet=ext_context,
             gap_words=gap,
+            target_words=target_words,
         )
         if extension.strip():
             content = content + "\n\n" + extension.strip()

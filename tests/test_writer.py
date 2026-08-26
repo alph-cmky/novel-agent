@@ -145,6 +145,89 @@ class TestWriteToolHint:
         assert "世界观设定" not in user
 
 
+class TestWriterTargetWordsInjection:
+    """Phase A: target words 必须真正进入 system prompt。
+
+    旧实现 replace("每章2000-4000字", ...) 的目标字符串在 prompt 中已不存在，
+    导致 target_chapter_words 从未到达 LLM（P0 bug）。
+    """
+
+    def test_constructor_target_3000_in_prompt(self):
+        writer = WriterAgent(target_chapter_words=3000)
+        assert "目标篇幅：3000 字左右" in writer.system_prompt
+
+    def test_constructor_target_5000_in_prompt(self):
+        writer = WriterAgent(target_chapter_words=5000)
+        assert "目标篇幅：5000 字左右" in writer.system_prompt
+
+    def test_per_call_override_reaches_system_prompt(self):
+        """write(target_chapter_words=5000) 覆盖构造默认并进入 system prompt。"""
+        writer = WriterAgent(target_chapter_words=3000)
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
+        ) as mocked:
+            asyncio.run(
+                writer.write(chapter_number=1, outline="大纲", target_chapter_words=5000)
+            )
+        system = mocked.call_args.args[0][0]["content"]
+        assert "目标篇幅：5000 字左右" in system
+        assert "3000" not in system
+
+    def test_write_uses_constructor_target_without_override(self):
+        writer = WriterAgent(target_chapter_words=4200)
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
+        ) as mocked:
+            asyncio.run(writer.write(chapter_number=1, outline="大纲"))
+        system = mocked.call_args.args[0][0]["content"]
+        assert "目标篇幅：4200 字左右" in system
+
+    def test_extension_does_not_pollute_writer_target_state(self):
+        """Extension 用篇幅状态块告知 current/target/remaining，不改 Writer target state。"""
+        writer = WriterAgent(target_chapter_words=3000)
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("续写", None))
+        ) as mocked:
+            asyncio.run(
+                writer.narrative_extension(
+                    current_content="正文" * 700,
+                    chapter_number=1,
+                    chapter_outline="大纲",
+                    gap_words=1600,
+                    target_words=3000,
+                )
+            )
+        system = mocked.call_args.args[0][0]["content"]
+        user = mocked.call_args.args[0][1]["content"]
+        assert "目标篇幅：3000 字左右" in system
+        assert "本章目标 3000 字" in user
+        assert "还需续写约 1600 字" in user
+        assert writer._target_words == 3000
+
+
+class TestSearchOnDemand:
+    """Phase B: search_context 按需调用，不再强制每次先检索（P0）。"""
+
+    def test_hint_does_not_force_search(self):
+        writer = WriterAgent()
+        writer.register_tool(_FakeTool())
+        hint = writer._build_tool_hint()
+        assert "请先使用" not in hint
+        assert "不要重复检索" in hint
+        assert "才使用 search_context" in hint
+
+    def test_write_prompt_has_on_demand_search_guidance(self):
+        writer = WriterAgent()
+        writer.register_tool(_FakeTool())
+        with patch.object(
+            writer, "run_with_tools", new=AsyncMock(return_value=("正文", None))
+        ) as mocked:
+            asyncio.run(writer.write(chapter_number=1, outline="大纲"))
+        user = mocked.call_args.args[0][1]["content"]
+        assert "请先使用 search_context" not in user
+        assert "才使用 search_context" in user
+
+
 class TestNarrativeExtension:
     """Phase 1: Narrative Extension — 增量续写，不是 compensation 全文重写。"""
 

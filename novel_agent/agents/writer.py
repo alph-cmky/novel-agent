@@ -33,7 +33,7 @@ WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 - 不重复已经完成的剧情推进，不让已确认死亡或离场的角色无理由出现。
 - 不强制每章反转或 cliffhanger，但必须留下可继续的叙事状态。
 - 只输出章节正文，不输出分析、评分、解释、标题或元信息。
-- 充分展开本章关键场景，目标篇幅以本章任务为准。
+- 充分展开本章关键场景，目标篇幅：__TARGET_WORDS__ 字左右。
 
 ## 段落原则
 
@@ -76,13 +76,31 @@ class WriterAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
-        prompt = WRITER_SYSTEM_PROMPT
-        if self._target_words:
-            prompt = prompt.replace(
-                "每章2000-4000字",
-                f"每章{self._target_words}字左右",
-            )
-        return prompt
+        return self._build_system_prompt()
+
+    def _build_system_prompt(self, override_words: int = 0) -> str:
+        """Render the system prompt with an explicit target-words template.
+
+        The old approach replaced a literal sentence that no longer existed in
+        the prompt, so target words silently never reached the LLM.
+        """
+        words = override_words or self._target_words or 3000
+        return WRITER_SYSTEM_PROMPT.replace("__TARGET_WORDS__", str(words))
+
+    def _build_tool_hint(self) -> str:
+        """Search-tool guidance: on-demand retrieval, never a forced pre-step.
+
+        Forcing a search every chapter wasted LLM rounds re-fetching facts the
+        context packet already provides.
+        """
+        if not self._tools:
+            # 评测/无项目库场景：模型无法调用工具，直接输出正文。
+            return "直接输出章节正文，不要加任何说明。"
+        return (
+            "上下文中已提供的信息不要重复检索。"
+            "只有在需要确认未提供的角色、事件、地点、伏笔或较早章节的历史事实时，"
+            "才使用 search_context 工具检索；确认后继续完成本章正文。"
+        )
 
     async def write(
         self,
@@ -112,7 +130,9 @@ class WriterAgent(BaseAgent):
         unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
         timeline_events = packet.get("timeline_events", [])
         timeline_findings = packet.get("timeline_findings", [])
-        messages = [{"role": "system", "content": self.system_prompt}]
+        messages = [
+            {"role": "system", "content": self._build_system_prompt(target_chapter_words)}
+        ]
 
         # Assemble context
         context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
@@ -139,14 +159,7 @@ class WriterAgent(BaseAgent):
         if timeline_findings:
             context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
 
-        # 仅当 search_context 工具已注册（project_id 非空）才提示使用工具；
-        # 否则（评测/无项目库场景）模型无法调用工具，会输出 <search_context> 文本
-        # 标签并提前终止，产出空正文。
-        tool_hint = (
-            "创作前请先使用 search_context 工具检索关键信息。"
-            if self._tools
-            else "直接输出章节正文，不要加任何说明。"
-        )
+        tool_hint = self._build_tool_hint()
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"
             + "\n\n".join(context_parts)
@@ -213,7 +226,7 @@ class WriterAgent(BaseAgent):
         )
 
         messages = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": self._build_system_prompt(target_chapter_words)},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -231,6 +244,7 @@ class WriterAgent(BaseAgent):
         chapter_outline: str,
         context_packet: dict | None = None,
         gap_words: int = 500,
+        target_words: int = 0,
     ) -> str:
         """Generate incremental content to extend a short chapter.
 
@@ -242,11 +256,15 @@ class WriterAgent(BaseAgent):
         character_context = packet.get("character_context", "")
         unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
         ending = current_content[-800:] if len(current_content) > 800 else current_content
+        current_words = len(current_content)
 
         context_parts = [
             f"## 本章大纲\n{chapter_outline}",
             f"## 当前正文结尾\n{ending}",
-            f"## 需要续写约 {gap_words} 字",
+            (
+                f"## 篇幅状态\n当前约 {current_words} 字 / 本章目标 {target_words} 字"
+                f" / 还需续写约 {gap_words} 字"
+            ),
         ]
         if character_context:
             context_parts.append(f"## 当前角色\n{character_context}")
