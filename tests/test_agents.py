@@ -142,11 +142,14 @@ class TestOrchestratorPromptHelpers:
     def test_mode_instruction_unit_arc(self):
         text = OrchestratorAgent._build_mode_instruction("unit_arc")
         assert "unit_arc" in text
-        assert "unit_number" in text
+        assert "必须输出 unit_arc 字段" in text
+        # Phase E: 结构参考统一放 system prompt，模式指令不再重复 JSON 片段
+        assert "unit_number" not in text
 
     def test_mode_instruction_multi_perspective(self):
         text = OrchestratorAgent._build_mode_instruction("multi_perspective")
         assert "pov_config" in text
+        assert "必须输出 pov_config 字段" in text
 
     def test_mode_instruction_linear_default(self):
         text = OrchestratorAgent._build_mode_instruction("linear")

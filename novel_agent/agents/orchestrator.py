@@ -40,24 +40,23 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 
 **每章必须输出**：storylines、pacing、ending_type、foreshadowings_to_address、suggested_chapter_words
 
-**仅 scene_first 拆场模式输出**：
-- key_scenes：将本章拆解为 3-4 个分镜场景（场景名·地点·冲突核心·情绪落点）
-- scene_composition：场景类型构成
+**仅 scene_first 拆场模式输出**：key_scenes（3-4 个分镜：场景名·地点·冲突核心·情绪落点）、scene_composition
 
-**仅对应叙事模式输出**（见用户消息中的模式指令）：
-- unit_arc（unit_arc / hybrid 模式）
-- pov_config（multi_perspective / ensemble 模式）
+**仅对应叙事模式输出**（见用户消息中的模式指令）：unit_arc（unit_arc/hybrid 模式）、pov_config（multi_perspective/ensemble 模式）
 
-**按需输出**（仅在确有内容时输出，无内容省略或置 null）：
-- time_structure：非线性叙事（flashback/parallel/non_linear）需要时
-- climax_sequence：climax 阶段 + 长篇
-- stage_boundary：阶段边界章（世界切换/时间跳跃/冲突升级）
-- ending_tone：接近全书或大卷结尾
-- storyline_intersection：多线交汇章
-- character_arcs：角色里程碑事件（重大转折）
-- character_emotional_state：出场角色有显著情绪变化时（键为角色名，值含 mood/trigger/intensity）
-- tension_profile：紧张度明显起伏时（chapter_tension/overall_trend/emotional_tone）
-- foreshadowing_management：仅高风险或临近回收的伏笔（risk_level/chapters_outstanding/action_needed）
+**可选字段**（仅在确有内容时输出，无内容省略或置 null）：
+- time_structure {mode(linear|flashback|parallel|non_linear), current_timeline, flashback_trigger, time_gap, synchronization_points}：非线性叙事时
+- climax_sequence {current_mini_climax, total_mini_climaxes, mini_climax_type, previous_resolution}：climax 阶段 + 长篇
+- stage_boundary {is_boundary, boundary_type(world_switch|time_jump|conflict_escalation|resolution_start), previous_stage_duration, estimated_next_stage_duration}：阶段边界章
+- ending_tone {type, ambiguity_level(high|medium|low), reader_satisfaction, setup_for_next}：接近全书或大卷结尾
+- storyline_intersection {has_intersection, intersection_type(crossover|parallel|contrast), intersection_description}：多线交汇章
+- character_arcs [{character_name, arc_stage(growth|fall|redemption|flat|corruption), arc_progress, current_state, recent_milestone, next_milestone}]：角色里程碑事件
+- character_emotional_state {角色名: {mood, trigger, intensity}}：出场角色显著情绪变化
+- tension_profile {chapter_tension(1-10), overall_trend(rising|falling|holding|peak|valley), recent_chapters_tension[], emotional_tone, variety_check}：紧张度明显起伏
+- foreshadowing_management [{description, chapters_outstanding, risk_level(low|medium|high), action_needed(tease|advance|resolve|maintain), reader_knows, characters_aware[], characters_unaware[]}]：仅高风险或临近回收的伏笔
+- unit_arc {unit_number, unit_title, unit_type(case_of_the_week|training_arc|filler|character_spotlight), mainline_progress, unit_resolution(resolved|unresolved|cliffhanger), carry_over_elements[]}：unit_arc/hybrid 模式必输
+- pov_config {current_pov, pov_shift, access_level(surface|moderate|deep), knowledge_gap}：multi_perspective/ensemble 模式必输
+- scene_composition {primary_scene_type(action|dialogue|introspection|description|transition|mixed), scene_breakdown, recent_dominance, diversity_warning}：scene_first 模式必输
 
 ## 输出格式
 
@@ -67,22 +66,14 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
   "stage_analysis": "当前阶段的简短分析",
   "chapter_strategy": {
     "storylines": [
-      {
-        "id": "故事线ID",
-        "name": "故事线名称",
-        "role": "primary|secondary|tertiary",
-        "progress": "60%",
-        "chapter_focus": "high|medium|low|background",
-        "key_events": ["重要事件"],
-        "status": "active|paused|resolved"
-      }
+      {"id": "线ID", "name": "线名", "role": "primary|secondary|tertiary", "progress": "60%",
+       "chapter_focus": "high|medium|low|background", "key_events": ["重要事件"], "status": "active|paused|resolved"}
     ],
     "pacing": "slow|normal|fast",
-    "ending_type": "cliffhanger|emotional_beat|revelation|...等（10种类型）",
+    "ending_type": "cliffhanger|emotional_beat|revelation|...等10种类型",
     "foreshadowings_to_address": ["需要回收或强化的伏笔"],
     "suggested_chapter_words": 3000,
-    "key_scenes": ["scene_first 模式必填：分镜场景"],
-    "可选字段按需补充": "unit_arc / pov_config / time_structure / climax_sequence / stage_boundary / ending_tone / storyline_intersection / character_arcs / character_emotional_state / tension_profile / foreshadowing_management / scene_composition"
+    "key_scenes": ["scene_first 模式必填：分镜场景"]
   },
   "context_needed": {
     "characters": ["本章涉及的已有角色"],
@@ -94,18 +85,7 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 }
 ```
 
-### 可选字段结构参考
-
-- unit_arc: {unit_number, unit_title, unit_type(case_of_the_week|training_arc|filler|character_spotlight), mainline_progress, unit_resolution(resolved|unresolved|cliffhanger), carry_over_elements[]}
-- pov_config: {current_pov, pov_shift, access_level(surface|moderate|deep), knowledge_gap}
-- time_structure: {mode(linear|flashback|parallel|non_linear), current_timeline, flashback_trigger, time_gap, synchronization_points}
-- climax_sequence: {current_mini_climax, total_mini_climaxes, mini_climax_type, previous_resolution}
-- stage_boundary: {is_boundary, boundary_type(world_switch|time_jump|conflict_escalation|resolution_start), previous_stage_duration, estimated_next_stage_duration}
-- ending_tone: {type, ambiguity_level(high|medium|low), reader_satisfaction, setup_for_next}
-- storyline_intersection: {has_intersection, intersection_type(crossover|parallel|contrast), intersection_description}
-- character_arcs: [{character_name, arc_stage(growth|fall|redemption|flat|corruption), arc_progress, current_state, recent_milestone, next_milestone}]
-- tension_profile: {chapter_tension(1-10), overall_trend(rising|falling|holding|peak|valley), recent_chapters_tension[], emotional_tone, variety_check}
-- foreshadowing_management: [{description, introduced_chapter, chapters_outstanding, risk_level(low|medium|high), action_needed(tease|advance|resolve|maintain), reader_knows, characters_aware[], characters_unaware[]}]
+chapter_strategy 其余字段（unit_arc / pov_config / time_structure / climax_sequence / stage_boundary / ending_tone / storyline_intersection / character_arcs / character_emotional_state / tension_profile / foreshadowing_management / scene_composition）按上方分层要求按需输出。
 
 只输出JSON。
 """
@@ -247,41 +227,22 @@ class OrchestratorAgent(BaseAgent):
     def _build_mode_instruction(mode: str | None) -> str:
         """Build mode-specific output instructions for the Orchestrator prompt.
 
-        Only injects the schema fragment for fields this mode actually
-        requires — never asks the LLM to emit every optional field.
-        Empty string when the mode is not configured.
+        Field structures live once in the system prompt; the mode instruction
+        only names the fields this mode must emit. Empty string when the mode
+        is not configured.
         """
         if not mode:
             return ""
 
         base = f"当前叙事模式：{mode}\n"
-
-        if mode in ("unit_arc", "hybrid"):
-            return base + (
-                "本章必须输出 unit_arc 字段：\n"
-                '  "unit_arc": {\n'
-                '    "unit_number": <int>,\n'
-                '    "unit_title": "<string>",\n'
-                '    "unit_type": "case_of_the_week|training_arc|filler|character_spotlight",\n'
-                '    "mainline_progress": "<百分比>",\n'
-                '    "unit_resolution": "resolved|unresolved|cliffhanger",\n'
-                '    "carry_over_elements": ["<跨单元线索>"]\n'
-                "  }\n"
-                "其余可选字段仍按需输出，无内容省略。\n"
-            )
-
-        if mode in ("multi_perspective", "ensemble"):
-            return base + (
-                "本章必须输出 pov_config 字段：\n"
-                '  "pov_config": {\n'
-                '    "current_pov": "<角色名>",\n'
-                '    "pov_shift": <bool>,\n'
-                '    "access_level": "surface|moderate|deep",\n'
-                '    "knowledge_gap": "<该角色不知道的关键信息>"\n'
-                "  }\n"
-                "其余可选字段仍按需输出，无内容省略。\n"
-            )
-
+        required = {
+            "unit_arc": "unit_arc",
+            "hybrid": "unit_arc",
+            "multi_perspective": "pov_config",
+            "ensemble": "pov_config",
+        }.get(mode)
+        if required:
+            return f"{base}本章必须输出 {required} 字段（结构见系统提示），其余可选字段按需输出，无内容省略。\n"
         # linear and other modes: only the always-required fields.
         return base + "本章只需输出必输字段与确有内容的可选字段，不要输出空的可选字段。\n"
 
