@@ -43,6 +43,38 @@ QUALITY_DIMENSIONS = EDITOR_DIMENSIONS + (
     "outline_adherence",
 )
 
+# Dimensions measurable by deterministic StyleAnalyzer — revisions scoped to
+# these need no LLM review at all (Writer → StyleAnalyzer → Evolution).
+STYLE_DIMENSIONS = frozenset({"rhythm", "ai_flavor"})
+
+# Revision-scope keywords that imply canon/world changes → Worldbuilding rerun.
+WORLD_SCOPE_KEYWORDS = ("世界观", "设定", "实体", "伏笔", "地点", "组织", "阵营", "宗门")
+
+
+def required_reviewers(improvement_plan: dict) -> dict[str, bool]:
+    """Deterministic routing from the revision scope to required reviewers.
+
+    improvement_plan → changed dimensions → required reviewers. No LLM router.
+
+    - No focus info at all (fresh chapter, human rejection, unknown plan) →
+      conservative: run everything.
+    - All focus dimensions style-measurable → skip Editor/Continuity/Worldbuilding.
+    - Otherwise Editor + Continuity always; Worldbuilding only when the plan
+      mentions world/entity scope. Ambiguity resolves to running Worldbuilding
+      (one saved LLM call is never worth a Canon error).
+    """
+    plan = improvement_plan or {}
+    focus = [d for d in (plan.get("focus_dimensions") or []) if isinstance(d, str) and d.strip()]
+    if not focus:
+        return {"editor": True, "continuity": True, "worldbuilding": True}
+    if all(d in STYLE_DIMENSIONS for d in focus):
+        return {"editor": False, "continuity": False, "worldbuilding": False}
+
+    instruction = str(plan.get("primary_instruction") or "")
+    non_editor_dim = any(d not in EDITOR_DIMENSIONS for d in focus)
+    world_scope = non_editor_dim or any(k in instruction for k in WORLD_SCOPE_KEYWORDS)
+    return {"editor": True, "continuity": True, "worldbuilding": bool(world_scope)}
+
 
 # ── Score helpers ───────────────────────────────────────
 

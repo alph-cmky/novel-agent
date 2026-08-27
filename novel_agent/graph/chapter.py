@@ -48,6 +48,7 @@ from novel_agent.services.evolution import (
     editor_overall,
     extract_scores,
     is_better_candidate,
+    required_reviewers,
 )
 from novel_agent.services.quality import QualityService
 from novel_agent.style.analyzer import StyleAnalyzer
@@ -924,7 +925,9 @@ def route_after_evolution(
     return "evolution_writer"
 
 
-def route_after_writer(state: NovelState) -> Literal["evolution_editor", "worldbuilding"]:
+def route_after_writer(
+    state: NovelState,
+) -> Literal["evolution_editor", "worldbuilding", "evolution_orchestrator"]:
     """Run expensive reviews only when the deterministic gate needs them."""
     gate = state.get("quality_gate_report") or {}
     if state.get("deterministic_gate_first") and gate.get("passed"):
@@ -932,7 +935,41 @@ def route_after_writer(state: NovelState) -> Literal["evolution_editor", "worldb
     chapter_number = state.get("chapter_number", 1)
     if not ExecutionProfile.from_state(state).should_review(chapter_number):
         return "worldbuilding"
+    # Evolution revision scope: a style-only plan skips all LLM reviewers —
+    # Writer → StyleAnalyzer (already ran in writer_node) → Evolution.
+    if state.get("evolution_improvement_plan"):
+        if not required_reviewers(state["evolution_improvement_plan"])["editor"]:
+            return "evolution_orchestrator"
     return "evolution_editor"
+
+
+def _reviewers_for(state: NovelState) -> dict[str, bool]:
+    """Reviewer map for this round; no active plan means full review."""
+    plan = state.get("evolution_improvement_plan")
+    if not plan:
+        return {"editor": True, "continuity": True, "worldbuilding": True}
+    return required_reviewers(plan)
+
+
+def route_after_editor(
+    state: NovelState,
+) -> Literal["evolution_continuity", "evolution_worldbuilding", "evolution_orchestrator"]:
+    """Skip reviewers outside the current revision scope."""
+    reviewers = _reviewers_for(state)
+    if reviewers["continuity"]:
+        return "evolution_continuity"
+    if reviewers["worldbuilding"]:
+        return "evolution_worldbuilding"
+    return "evolution_orchestrator"
+
+
+def route_after_continuity(
+    state: NovelState,
+) -> Literal["evolution_worldbuilding", "evolution_orchestrator"]:
+    reviewers = _reviewers_for(state)
+    if reviewers["worldbuilding"]:
+        return "evolution_worldbuilding"
+    return "evolution_orchestrator"
 
 
 def route_after_human_evolution(state: NovelState) -> Literal["__end__", "evolution_writer"]:
@@ -992,10 +1029,29 @@ def _build_workflow() -> StateGraph:
     workflow.add_conditional_edges(
         "evolution_writer",
         route_after_writer,
-        {"evolution_editor": "evolution_editor", "worldbuilding": "worldbuilding"},
+        {
+            "evolution_editor": "evolution_editor",
+            "worldbuilding": "worldbuilding",
+            "evolution_orchestrator": "evolution_orchestrator",
+        },
     )
-    workflow.add_edge("evolution_editor", "evolution_continuity")
-    workflow.add_edge("evolution_continuity", "evolution_worldbuilding")
+    workflow.add_conditional_edges(
+        "evolution_editor",
+        route_after_editor,
+        {
+            "evolution_continuity": "evolution_continuity",
+            "evolution_worldbuilding": "evolution_worldbuilding",
+            "evolution_orchestrator": "evolution_orchestrator",
+        },
+    )
+    workflow.add_conditional_edges(
+        "evolution_continuity",
+        route_after_continuity,
+        {
+            "evolution_worldbuilding": "evolution_worldbuilding",
+            "evolution_orchestrator": "evolution_orchestrator",
+        },
+    )
     workflow.add_edge("evolution_worldbuilding", "evolution_orchestrator")
     workflow.add_conditional_edges(
         "evolution_orchestrator",

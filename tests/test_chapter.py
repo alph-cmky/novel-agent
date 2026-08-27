@@ -12,6 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from novel_agent.graph.chapter import (
     evolution_orchestrator_node,
+    route_after_continuity,
+    route_after_editor,
+    route_after_writer,
     writer_node,
 )
 
@@ -443,6 +446,92 @@ class TestStyleAnalyzerRunsAfterWriter:
         scores = extract_scores({"editor_report": {"overall_score": 80}})
         assert scores["style_structure_score"] == 0
         assert scores["style_gate"] == "PASS"  # gate defaults to PASS (no anomaly detected)
+
+
+class TestEvolutionConditionalRouting:
+    """Phase 5 (P1-3): revision scope determines reviewers — style-only skips LLM review."""
+
+    @staticmethod
+    def _plan(focus: list[str], instruction: str = "改进") -> dict:
+        return {"focus_dimensions": focus, "primary_instruction": instruction}
+
+    # ── required_reviewers (deterministic service rule) ──
+
+    def test_required_reviewers_conservative_without_focus(self):
+        """空 focus（新章/人类拒绝/未知 plan）→ 全量保守执行。"""
+        from novel_agent.services.evolution import required_reviewers
+
+        full = {"editor": True, "continuity": True, "worldbuilding": True}
+        assert required_reviewers({}) == full
+        assert required_reviewers(None) == full
+        reject = {"focus_dimensions": [], "primary_instruction": "人类审阅者拒绝了这个版本"}
+        assert required_reviewers(reject) == full
+
+    def test_required_reviewers_style_only_skips_all(self):
+        from novel_agent.services.evolution import required_reviewers
+
+        r = required_reviewers(self._plan(["rhythm", "ai_flavor"]))
+        assert r == {"editor": False, "continuity": False, "worldbuilding": False}
+
+    def test_required_reviewers_logic_scope_runs_editor_continuity_only(self):
+        from novel_agent.services.evolution import required_reviewers
+
+        r = required_reviewers(self._plan(["logic"]))
+        assert r["editor"] is True
+        assert r["continuity"] is True
+        assert r["worldbuilding"] is False
+
+    def test_required_reviewers_world_keywords_rerun_worldbuilding(self):
+        from novel_agent.services.evolution import required_reviewers
+
+        r = required_reviewers(self._plan(["logic"], instruction="修正世界观：北墙势力归属变更"))
+        assert r["worldbuilding"] is True
+
+    def test_required_reviewers_unknown_dimension_keeps_worldbuilding(self):
+        """非 Editor 维度无法判断 → 保守跑 Worldbuilding。"""
+        from novel_agent.services.evolution import required_reviewers
+
+        r = required_reviewers(self._plan(["worldbuilding_consistency"]))
+        assert r["worldbuilding"] is True
+
+    # ── graph routers ──
+
+    def test_route_after_writer_style_only_goes_to_orchestrator(self):
+        state = {
+            "quality_gate_report": {"passed": False},
+            "chapter_number": 3,
+            "evolution_improvement_plan": self._plan(["rhythm"]),
+        }
+        assert route_after_writer(state) == "evolution_orchestrator"
+
+    def test_route_after_writer_full_plan_goes_to_editor(self):
+        state = {
+            "quality_gate_report": {"passed": False},
+            "chapter_number": 3,
+            "evolution_improvement_plan": self._plan([]),
+        }
+        assert route_after_writer(state) == "evolution_editor"
+
+    def test_route_after_editor_logic_scope_keeps_continuity(self):
+        state = {"evolution_improvement_plan": self._plan(["logic"])}
+        assert route_after_editor(state) == "evolution_continuity"
+
+    def test_route_after_continuity_logic_scope_skips_worldbuilding(self):
+        state = {"evolution_improvement_plan": self._plan(["logic"])}
+        assert route_after_continuity(state) == "evolution_orchestrator"
+
+    def test_route_after_continuity_world_scope_runs_worldbuilding(self):
+        state = {
+            "evolution_improvement_plan": self._plan(
+                ["dialogue"], instruction="调整实体关系与设定冲突"
+            )
+        }
+        assert route_after_continuity(state) == "evolution_worldbuilding"
+
+    def test_fresh_chapter_without_plan_runs_full_chain(self):
+        state = {}
+        assert route_after_editor(state) == "evolution_continuity"
+        assert route_after_continuity(state) == "evolution_worldbuilding"
 
 
 class TestEvolutionContextMinimal:
