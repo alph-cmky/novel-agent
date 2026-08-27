@@ -18,9 +18,9 @@ class ChapterStrategy(BaseModel):
     - AUXILIARY: injected as [参考] hints
     """
 
-    # ── Original fields (GLOBAL) ──
+    # ── Always useful fields ──
     pacing: str = "normal"
-    key_scenes: list[str] = Field(default_factory=list)
+    key_scenes: list[str] | None = None
     # None → Writer naturally closes the chapter; a cliffhanger bias must
     # never be reintroduced through a Pydantic default.
     ending_type: str | None = None
@@ -45,7 +45,7 @@ class ChapterStrategy(BaseModel):
     storyline_intersection: dict | None = None
 
     # ── Phase 3: Character + Experience layer ──
-    character_arcs: list[dict] = Field(default_factory=list)
+    character_arcs: list[dict] | None = None
     # Optional-mode fields default to None so "not requested" stays
     # distinguishable from "model explicitly emitted an empty value".
     character_emotional_state: dict | None = None

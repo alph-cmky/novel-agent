@@ -189,18 +189,8 @@ class OrchestratorAgent(BaseAgent):
                 "chapter_strategy": {
                     "storylines": [],
                     "pacing": "normal",
-                    "key_scenes": [],
                     "foreshadowings_to_address": [],
                     "suggested_chapter_words": target_chapter_words,
-                    "climax_sequence": None,
-                    "stage_boundary": None,
-                    "unit_arc": None,
-                    "pov_config": None,
-                    "time_structure": {"mode": "linear", "current_timeline": "present"},
-                    "ending_tone": None,
-                    "storyline_intersection": None,
-                    "character_arcs": [],
-                    "scene_composition": None,
                 },
                 "context_needed": {
                     "characters": [],

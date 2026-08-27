@@ -11,7 +11,7 @@ def build_scene_plan(
     max_scenes: int = 4,
 ) -> list[dict[str, Any]]:
     """Build a small deterministic scene plan from strategy or outline text."""
-    raw = (strategy or {}).get("chapter_strategy", {}).get("key_scenes", [])
+    raw = (strategy or {}).get("chapter_strategy", {}).get("key_scenes") or []
     outlines: list[str] = []
     for item in raw:
         if isinstance(item, str) and item.strip():
