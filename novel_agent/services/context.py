@@ -52,20 +52,35 @@ class ContextCompiler:
         project_id: str,
         chapter_number: int,
         snapshot_id: str | None = None,
+        task: str = "full",
     ) -> ContextPacket:
+        # The run starts with an Orchestrator view. It only needs a bounded
+        # canon sample; context_needed performs the precise retrieval later.
+        entity_limit = 20 if task == "orchestrator" else None
         snapshot = self.manager.get_canon_snapshot(snapshot_id) if snapshot_id else None
         if snapshot:
             context = self.manager.build_context_from_snapshot(
-                snapshot, chapter_number, max_recent_chapters=self.recent_chapters
+                snapshot,
+                chapter_number,
+                max_recent_chapters=self.recent_chapters,
+                max_entities=entity_limit,
             )
             payload = snapshot["payload"]
             foreshadowings = payload.get("foreshadowings", [])
             events = payload.get("story_events", [])
+            if task == "orchestrator":
+                foreshadowings = [
+                    item
+                    for item in foreshadowings
+                    if item.get("status") in {"open", "planted", "hinted", "advanced"}
+                ][:25]
+                events = events[-90:]
         else:
             context = self.manager.build_context(
                 project_id,
                 chapter_number,
                 max_recent_chapters=self.recent_chapters,
+                max_entities=entity_limit,
             )
             # Task-aware retrieval: bounded, relevance-ranked reads —
             # no full foreshadowings/story_events table scan.
@@ -96,6 +111,16 @@ class ContextCompiler:
             timeline_events=events[-30:],
             timeline_findings=timeline_findings,
         )
+
+    def compile_for_task(
+        self,
+        project_id: str,
+        chapter_number: int,
+        task: str,
+        snapshot_id: str | None = None,
+    ) -> ContextPacket:
+        """Compile the smallest initial packet needed by a task."""
+        return self.compile(project_id, chapter_number, snapshot_id, task=task)
 
     def compile_for_run(self, run_id: str) -> ContextPacket:
         run = self.manager.get_writing_run(run_id)

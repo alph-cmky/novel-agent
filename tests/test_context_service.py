@@ -43,6 +43,55 @@ def test_compile_uses_task_aware_retrieval_not_full_reads():
     manager.get_story_events.assert_not_called()
 
 
+def test_compile_for_orchestrator_bounds_entity_reads():
+    """Writing runs request a bounded initial packet before context_needed retrieval."""
+    manager = MagicMock()
+    manager.build_context.return_value = {}
+    manager.get_relevant_foreshadowings.return_value = []
+    manager.get_relevant_story_events.return_value = []
+
+    ContextCompiler(manager).compile_for_task("p", 5, task="orchestrator")
+
+    manager.build_context.assert_called_once_with("p", 5, max_recent_chapters=3, max_entities=20)
+
+
+def test_compile_for_orchestrator_bounds_snapshot_entities_and_events():
+    """Snapshot-backed runs also avoid placing the full canon in the initial packet."""
+    manager = MagicMock()
+    manager.get_canon_snapshot.return_value = {
+        "payload": {
+            "entities": [
+                {"entity_type": "character", "name": f"角色{i}", "properties": "{}"}
+                for i in range(30)
+            ],
+            "foreshadowings": [
+                {"status": "open", "description": f"伏笔{i}", "planted_chapter": i}
+                for i in range(30)
+            ],
+            "story_events": [{"chapter_number": i, "action": f"事件{i}"} for i in range(100)],
+            "chapters": [],
+        }
+    }
+    manager.build_context_from_snapshot.return_value = {
+        "character_context": "",
+        "world_context": "",
+        "recent_summary": "",
+    }
+
+    packet = ContextCompiler(manager).compile_for_task(
+        "p", 50, task="orchestrator", snapshot_id="snapshot"
+    )
+
+    manager.build_context_from_snapshot.assert_called_once_with(
+        manager.get_canon_snapshot.return_value,
+        50,
+        max_recent_chapters=3,
+        max_entities=20,
+    )
+    assert len(packet.timeline_events) == 30
+    assert len(packet.unresolved_foreshadowings) == 25
+
+
 def test_for_orchestrator_bounds_world_context_not_full_dump():
     """Phase 2: Orchestrator 规划不吃全量世界观——world_context 硬性 1/4 预算。"""
     packet = {

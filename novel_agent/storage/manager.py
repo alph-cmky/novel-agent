@@ -1302,6 +1302,7 @@ class ProjectManager:
         project_id: str,
         chapter_number: int,
         max_recent_chapters: int = 3,
+        max_entities: int | None = None,
     ) -> dict[str, str]:
         """Build context for writing a chapter: recent summary + character/world info."""
         # SQL-bounded window read — get_all_chapters would load every draft
@@ -1330,13 +1331,19 @@ class ProjectManager:
 
         # Character context from world_entities
         with self._conn() as conn:
+            limit = " LIMIT ?" if max_entities is not None else ""
+            params = (
+                (project_id, max(max_entities, 0)) if max_entities is not None else (project_id,)
+            )
             chars = conn.execute(
-                "SELECT * FROM world_entities WHERE project_id = ? AND entity_type = 'character'",
-                (project_id,),
+                "SELECT * FROM world_entities WHERE project_id = ? AND entity_type = 'character' "
+                "ORDER BY first_appearance_chapter DESC, name" + limit,
+                params,
             ).fetchall()
             world_ents = conn.execute(
-                "SELECT * FROM world_entities WHERE project_id = ? AND entity_type != 'character'",
-                (project_id,),
+                "SELECT * FROM world_entities WHERE project_id = ? AND entity_type != 'character' "
+                "ORDER BY first_appearance_chapter DESC, name" + limit,
+                params,
             ).fetchall()
 
         character_context = (
@@ -1356,7 +1363,11 @@ class ProjectManager:
         }
 
     def build_context_from_snapshot(
-        self, snapshot: dict, chapter_number: int, max_recent_chapters: int = 3
+        self,
+        snapshot: dict,
+        chapter_number: int,
+        max_recent_chapters: int = 3,
+        max_entities: int | None = None,
     ) -> dict[str, str]:
         """Build context only from the immutable Canon snapshot payload."""
         payload = snapshot.get("payload", snapshot)
@@ -1384,6 +1395,10 @@ class ProjectManager:
             for entity in payload.get("entities", [])
             if entity.get("entity_type") != "character"
         ]
+        if max_entities is not None:
+            entity_limit = max(max_entities, 0)
+            characters = characters[:entity_limit]
+            world_entities = world_entities[:entity_limit]
         return {
             "recent_summary": "\n\n".join(recent_parts),
             "character_context": "\n".join(
