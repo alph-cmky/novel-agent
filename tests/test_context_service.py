@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from novel_agent.services.context import ContextCompiler, estimate_tokens
+from novel_agent.services.context import ContextCompiler
 
 
 def test_context_packet_single_contract():
@@ -50,7 +50,7 @@ def test_compile_for_orchestrator_bounds_entity_reads():
     manager.get_relevant_foreshadowings.return_value = []
     manager.get_relevant_story_events.return_value = []
 
-    ContextCompiler(manager).compile_for_task("p", 5, task="orchestrator")
+    ContextCompiler(manager).compile("p", 5, task="orchestrator")
 
     manager.build_context.assert_called_once_with("p", 5, max_recent_chapters=3, max_entities=20)
 
@@ -78,9 +78,7 @@ def test_compile_for_orchestrator_bounds_snapshot_entities_and_events():
         "recent_summary": "",
     }
 
-    packet = ContextCompiler(manager).compile_for_task(
-        "p", 50, task="orchestrator", snapshot_id="snapshot"
-    )
+    packet = ContextCompiler(manager).compile("p", 50, task="orchestrator", snapshot_id="snapshot")
 
     manager.build_context_from_snapshot.assert_called_once_with(
         manager.get_canon_snapshot.return_value,
@@ -103,10 +101,10 @@ def test_for_orchestrator_bounds_world_context_not_full_dump():
         "timeline_findings": [],
     }
 
-    projected = ContextCompiler.for_orchestrator(packet, budget_chars=4000)
+    projected = ContextCompiler.for_orchestrator(packet)
 
-    assert len(projected["world_context"]) <= 4000 // 4 + 30  # bound + compact marker
-    assert len(projected["character_context"]) <= 4000 // 2 + 30
+    assert len(projected["world_context"]) <= 1000 + 30  # bound + compact marker
+    assert len(projected["character_context"]) <= 2000 + 30
     assert projected["recent_summary"] == "前情"
 
 
@@ -290,36 +288,8 @@ def test_context_packet_bounds_each_section():
     assert len(packet.recent_summary) <= 101
 
 
-def test_context_compiler_can_compile_from_run_snapshot():
-    manager = MagicMock()
-    manager.get_writing_run.return_value = {
-        "project_id": "p",
-        "chapter_number": 2,
-        "input_snapshot_id": "snap",
-    }
-    manager.get_canon_snapshot.return_value = {
-        "payload": {
-            "entities": [{"entity_type": "character", "name": "甲", "properties": "{}"}],
-            "foreshadowings": [],
-            "story_events": [],
-            "chapters": [{"chapter_number": 1, "draft_content": "已批准正文"}],
-        }
-    }
-    manager.build_context_from_snapshot.return_value = {
-        "character_context": "- 甲: {}",
-        "world_context": "",
-        "recent_summary": "第1章: 已批准正文",
-    }
-
-    packet = ContextCompiler(manager).compile_for_run("run")
-
-    assert "已批准正文" in packet.recent_summary
-    assert packet.character_context == "- 甲: {}"
-    manager.build_context.assert_not_called()
-
-
 class TestTaskAwareProjections:
-    """Phase 3: for_writer / for_editor / for_continuity / for_evolution."""
+    """Phase 3: for_writer / for_editor / for_continuity."""
 
     def _big_packet(self) -> dict:
         return {
@@ -351,8 +321,8 @@ class TestTaskAwareProjections:
             assert key in projected, f"missing key: {key}"
 
     def test_for_writer_caps_character_context(self):
-        projected = ContextCompiler.for_writer(self._big_packet(), budget_chars=3000)
-        assert len(projected["character_context"]) <= 1001
+        projected = ContextCompiler.for_writer(self._big_packet())
+        assert len(projected["character_context"]) <= 1667 + 30
 
     def test_for_writer_limits_foreshadowings_to_5(self):
         projected = ContextCompiler.for_writer(self._big_packet())
@@ -374,34 +344,6 @@ class TestTaskAwareProjections:
         assert len(projected["timeline_events"]) == 10
         assert len(projected["unresolved_foreshadowings"]) == 8
 
-    def test_for_evolution_only_keeps_metrics(self):
-        projected = ContextCompiler.for_evolution(
-            current_scores={"editor_overall": 80},
-            previous_scores={"editor_overall": 70},
-            delta={"trend": "improving"},
-            guard_report={"violations": ["length_regression"]},
-            improvement_plan={"primary_instruction": "改进节奏"},
-        )
-        assert "current_scores" in projected
-        assert "guard_violations" in projected
-        assert "character_context" not in projected
-
-    def test_context_metrics_returns_chars_tokens_utilization(self):
-        ctx = {"character_context": "角色" * 100}
-        metrics = ContextCompiler.context_metrics(ctx, budget_tokens=3500)
-        assert "context_chars" in metrics
-        assert "estimated_tokens" in metrics
-        assert "budget_tokens" in metrics
-        assert "utilization" in metrics
-        assert metrics["context_chars"] > 0
-        assert metrics["estimated_tokens"] > 0
-
-    def test_estimate_tokens_chinese(self):
-        assert estimate_tokens("字" * 300) == 200  # 300/1.5
-
-    def test_estimate_tokens_empty(self):
-        assert estimate_tokens("") == 0
-
     def test_for_extension_only_keeps_chars_and_foreshadowings(self):
         """Extension projection 只返回 character_context + 3 条伏笔。"""
         projected = ContextCompiler.for_extension(self._big_packet())
@@ -411,19 +353,3 @@ class TestTaskAwareProjections:
         assert "world_context" not in projected
         assert "recent_summary" not in projected
         assert "timeline_events" not in projected
-
-    def test_for_evolution_has_no_draft_or_world(self):
-        """Evolution projection 不含正文、world_context、character_context。"""
-        projected = ContextCompiler.for_evolution(
-            current_scores={"editor_overall": 80},
-            previous_scores={"editor_overall": 70},
-            delta={"trend": "improving"},
-            guard_report={"violations": ["length_target_unmet"]},
-            improvement_plan={"primary_instruction": "改进"},
-        )
-        assert "current_scores" in projected
-        assert "delta" in projected
-        assert "guard_violations" in projected
-        assert "character_context" not in projected
-        assert "world_context" not in projected
-        assert "draft_content" not in projected

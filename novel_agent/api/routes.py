@@ -587,11 +587,7 @@ async def write_chapter(project_id: str, chapter_number: int):
     mgr.update_outline_item(project_id, chapter_number, status=OutlineStatus.WRITING.value)
 
     # Build context — single context carrier: context_packet only
-    ctx = (
-        ContextCompiler(mgr)
-        .compile_for_task(project_id, chapter_number, task="orchestrator")
-        .to_state()
-    )
+    ctx = ContextCompiler(mgr).compile(project_id, chapter_number, task="orchestrator").to_state()
 
     # Build initial state
     persist_dir = str(_get_persist_dir())

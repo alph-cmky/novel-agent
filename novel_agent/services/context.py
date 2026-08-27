@@ -1,20 +1,9 @@
 """Build an auditable, bounded context packet for chapter agents."""
 
-import json
-import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from novel_agent.services.continuity import ContinuityService
-
-
-def estimate_tokens(text: str) -> int:
-    """Rough token estimation: Chinese ~1.5 char/token, other ~4 char/token."""
-    if not text:
-        return 0
-    cjk = len(re.findall(r"[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]", text))
-    other = len(text) - cjk
-    return int(cjk / 1.5 + other / 4)
 
 
 @dataclass(frozen=True)
@@ -97,9 +86,11 @@ class ContextCompiler:
             if item.get("status") in {"open", "planted", "hinted", "advanced"}
         ]
         section_budget = max(self.max_context_chars // 3, 1)
-        character_context = self._bound(context.get("character_context", ""), section_budget)
-        world_context = self._bound(context.get("world_context", ""), section_budget)
-        recent_summary = self._bound(context.get("recent_summary", ""), section_budget)
+        character_context = ContextCompiler.bound(
+            context.get("character_context", ""), section_budget
+        )
+        world_context = ContextCompiler.bound(context.get("world_context", ""), section_budget)
+        recent_summary = ContextCompiler.bound(context.get("recent_summary", ""), section_budget)
         unresolved = [item for item in unresolved if item.strip()][:40]
         return ContextPacket(
             project_id=project_id,
@@ -111,29 +102,6 @@ class ContextCompiler:
             timeline_events=events[-30:],
             timeline_findings=timeline_findings,
         )
-
-    def compile_for_task(
-        self,
-        project_id: str,
-        chapter_number: int,
-        task: str,
-        snapshot_id: str | None = None,
-    ) -> ContextPacket:
-        """Compile the smallest initial packet needed by a task."""
-        return self.compile(project_id, chapter_number, snapshot_id, task=task)
-
-    def compile_for_run(self, run_id: str) -> ContextPacket:
-        run = self.manager.get_writing_run(run_id)
-        if not run:
-            raise ValueError("Run not found")
-        return self.compile(
-            run["project_id"],
-            run["chapter_number"],
-            snapshot_id=run.get("input_snapshot_id"),
-        )
-
-    def _bound(self, text: str, limit: int) -> str:
-        return ContextCompiler.bound(text, limit)
 
     @staticmethod
     def bound(text: str, limit: int) -> str:
@@ -148,7 +116,7 @@ class ContextCompiler:
     # ── Task-aware projections ────────────────────────────
 
     @staticmethod
-    def for_orchestrator(packet: dict, budget_chars: int = 4000) -> dict:
+    def for_orchestrator(packet: dict) -> dict:
         """Minimal context for Orchestrator planning.
 
         Planning needs storyline inputs: recent summaries, active characters,
@@ -157,28 +125,22 @@ class ContextCompiler:
         consistent with canon at a fraction of the size (≈2-4K tokens).
         """
         return {
-            "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), budget_chars // 2
-            ),
-            "world_context": ContextCompiler.bound(
-                packet.get("world_context", ""), budget_chars // 4
-            ),
-            "recent_summary": ContextCompiler.bound(
-                packet.get("recent_summary", ""), budget_chars // 2
-            ),
+            "character_context": ContextCompiler.bound(packet.get("character_context", ""), 2000),
+            "world_context": ContextCompiler.bound(packet.get("world_context", ""), 1000),
+            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), 2000),
             "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:10],
             "timeline_events": (packet.get("timeline_events") or [])[-8:],
             "timeline_findings": (packet.get("timeline_findings") or [])[:5],
         }
 
     @staticmethod
-    def for_writer(packet: dict, budget_chars: int = 5000) -> dict:
+    def for_writer(packet: dict) -> dict:
         """Minimal context for Writer: chars + summary + foreshadowings + events.
 
         world_context is explicitly empty — Writer does not need full worldbuilding.
         All keys are present so Writer can read them without nil-checks.
         """
-        char_budget = budget_chars // 3
+        char_budget = 5000 // 3
         return {
             "character_context": ContextCompiler.bound(
                 packet.get("character_context", ""), char_budget
@@ -191,16 +153,14 @@ class ContextCompiler:
         }
 
     @staticmethod
-    def for_extension(packet: dict, budget_chars: int = 1500) -> dict:
+    def for_extension(packet: dict) -> dict:
         """Minimal context for Narrative Extension: active chars + top foreshadowings only.
 
         No world_context, no recent_summary, no timeline — only what the
         continuation needs to stay on-plot.
         """
         return {
-            "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), budget_chars
-            ),
+            "character_context": ContextCompiler.bound(packet.get("character_context", ""), 1500),
             "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:3],
         }
 
@@ -217,33 +177,15 @@ class ContextCompiler:
         }
 
     @staticmethod
-    def for_continuity(packet: dict, budget_chars: int = 4000) -> dict:
+    def for_continuity(packet: dict) -> dict:
         """Minimal context for Continuity: structured events + findings + foreshadowings."""
         return {
             "timeline_events": (packet.get("timeline_events") or [])[-10:],
             "timeline_findings": (packet.get("timeline_findings") or [])[:5],
             "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:8],
             "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), budget_chars // 3
+                packet.get("character_context", ""), 4000 // 3
             ),
-        }
-
-    @staticmethod
-    def for_evolution(
-        current_scores: dict,
-        previous_scores: dict | None = None,
-        delta: dict | None = None,
-        guard_report: dict | None = None,
-        improvement_plan: dict | None = None,
-        budget_chars: int = 3000,
-    ) -> dict:
-        """Minimal context for Evolution: metrics + deltas + violations + plan only."""
-        return {
-            "current_scores": current_scores,
-            "previous_scores": previous_scores or {},
-            "delta": delta or {},
-            "guard_violations": (guard_report or {}).get("violations", []),
-            "improvement_plan": improvement_plan or {},
         }
 
     def apply_context_needed(
@@ -320,20 +262,3 @@ class ContextCompiler:
             packet["recent_summary"] = f"{recent_sum}\n{hint}" if recent_sum else hint
 
         return packet
-
-    @staticmethod
-    def context_metrics(context: dict, budget_tokens: int = 3500) -> dict:
-        """Code-level statistics for logging/debugging. No LLM call.
-
-        All values are approximate — do not use for billing. ``budget_tokens``
-        is the target ceiling for this task's context.
-        """
-        text = json.dumps(context, ensure_ascii=False, default=str)
-        chars = len(text)
-        tokens = estimate_tokens(text)
-        return {
-            "context_chars": chars,
-            "estimated_tokens": tokens,
-            "budget_tokens": budget_tokens,
-            "utilization": round(tokens / max(budget_tokens, 1), 2),
-        }
