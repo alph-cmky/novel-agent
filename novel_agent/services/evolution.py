@@ -107,10 +107,15 @@ def extract_scores(state: dict) -> dict:
 
     # Deterministic style score from StyleAnalyzer (0 LLM) — replaces
     # dims_avg in composite_score to avoid same-source double-counting.
+    # StyleAnalyzer runs in writer_node on every draft, so style_report
+    # should always be present.  When missing (e.g. empty draft), the
+    # score must NOT default to 100 — that would treat "unanalyzed" as
+    # "perfect".  Instead mark unavailable and use 0 so composite is
+    # honestly low rather than artificially inflated.
     style_report = state.get("style_report") or {}
-    style_structure_score = style_report.get("paragraph_structure_score", 100)
+    style_structure_score = style_report.get("paragraph_structure_score")
     if not isinstance(style_structure_score, (int, float)):
-        style_structure_score = 100
+        style_structure_score = 0
     style_gate_str = style_report.get("style_gate", "PASS")
     if not isinstance(style_gate_str, str) or style_gate_str not in (
         "PASS",
@@ -186,6 +191,9 @@ def build_quality_guard_report(state: dict, best_state: dict | None = None) -> d
     # FAIL means severe fragmentation (consecutive short paragraphs, excessive
     # single-sentence paragraphs).  This is a hard constraint: a candidate with
     # FAIL should not replace a PASS candidate even if the Editor score is higher.
+    # When style_report is missing, style_gate defaults to PASS (no structural
+    # anomaly detected) but style_structure_score will be 0 in extract_scores,
+    # so the composite still reflects the missing analysis honestly.
     current_style_report = state.get("style_report") or {}
     best_style_report = (best_state or {}).get("style_report") or {}
     current_style_gate = current_style_report.get("style_gate", "PASS")

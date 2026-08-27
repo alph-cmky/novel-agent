@@ -50,6 +50,7 @@ from novel_agent.services.evolution import (
     is_better_candidate,
 )
 from novel_agent.services.quality import QualityService
+from novel_agent.style.analyzer import StyleAnalyzer
 
 router = ModelRouter()
 
@@ -405,6 +406,15 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         quality_gate_report["passed"] = False
     if not quality_gate_report["passed"]:
         print("  [QualityGate] blocked: " + ", ".join(quality_gate_report["violations"]))
+
+    # Deterministic style analysis — runs on every draft, 0 LLM.
+    # Must execute before route_after_writer so style_report is available
+    # even when the Quality Gate skips the Editor.
+    style_report_dict: dict = {}
+    if content.strip():
+        style_report = StyleAnalyzer().analyze(content)
+        style_report_dict = style_report.model_dump()
+
     total_tool_calls = sum(writer.tool_call_counts.values())
     search_calls = writer.tool_call_counts.get("search_context", 0)
     tok_info = f"{writer.input_tokens}/{writer.output_tokens}"
@@ -416,6 +426,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         "draft_content": content,
         "evolution_round": state.get("evolution_round", 0),
         "quality_gate_report": quality_gate_report,
+        "style_report": style_report_dict,
         "scene_drafts": scene_drafts,
         "writer_model_calls": state.get("writer_model_calls", 0) + writer.model_calls,
         "writer_tool_calls": state.get("writer_tool_calls", 0) + total_tool_calls,
@@ -431,20 +442,15 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 async def editor_node(state: NovelState) -> dict:
     """Editor Agent reviews the chapter.
 
-    Runs deterministic StyleAnalyzer (0 LLM) before the Editor, so the
-    Editor receives structured style evidence as context instead of calling
-    a tool at runtime. Also applies ContextCompiler.for_editor() projection.
+    Reads the deterministic StyleReport from state (produced by writer_node)
+    so the Editor receives structured style evidence without calling StyleAnalyzer
+    again. Also applies ContextCompiler.for_editor() projection.
     """
     editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
 
-    # Deterministic style analysis — 0 LLM, runs before Editor
+    # StyleReport is produced by writer_node (deterministic, 0 LLM)
     draft = state.get("draft_content", "")
-    style_report_dict: dict = {}
-    if draft.strip():
-        from novel_agent.style.analyzer import StyleAnalyzer
-
-        style_report = StyleAnalyzer().analyze(draft)
-        style_report_dict = style_report.model_dump()
+    style_report_dict = state.get("style_report") or {}
 
     # Minimal context projection for Editor
     full_packet = state.get("context_packet") or {}
@@ -531,7 +537,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "continuity": current_scores["continuity_overall"],
             "composite": composite_score(current_scores),
             "dimensions": current_scores["dimensions"],
-            "style_structure_score": current_scores.get("style_structure_score", 100),
+            "style_structure_score": current_scores.get("style_structure_score", 0),
             "delta": None,
             "focus": None,
             "quality_guard": initial_guard,
@@ -594,7 +600,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "editor_overall": previous["editor"],
         "continuity_overall": previous["continuity"],
         "dimensions": previous.get("dimensions", {}),
-        "style_structure_score": previous.get("style_structure_score", 100),
+        "style_structure_score": previous.get("style_structure_score", 0),
     }
     delta = compute_delta(current_scores, previous_scores)
 
@@ -681,7 +687,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "continuity": current_scores["continuity_overall"],
         "composite": composite_score(current_scores),
         "dimensions": current_scores["dimensions"],
-        "style_structure_score": current_scores.get("style_structure_score", 100),
+        "style_structure_score": current_scores.get("style_structure_score", 0),
         "delta": delta,
         "focus": plan.get("focus_dimensions", []) if plan else [],
         "quality_guard": guard_report,

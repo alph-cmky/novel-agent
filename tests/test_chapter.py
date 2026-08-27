@@ -367,6 +367,84 @@ class TestWriterCostCounters:
         assert result["writer_reasoning_tokens"] == 55
 
 
+class TestStyleAnalyzerRunsAfterWriter:
+    """Phase 1 (P0-1): StyleAnalyzer must run on every draft, not only when Editor runs.
+
+    Regression: when route_after_writer skips Editor (deterministic_gate_first +
+    gate PASS), style_report was never produced, so extract_scores defaulted
+    style_structure_score to 100 — treating "unanalyzed" as "perfect".
+    """
+
+    @staticmethod
+    def _run_writer_with_mocks(write_content: str = "正" * 3000) -> dict:
+        mock_writer = MagicMock()
+        mock_writer.write = AsyncMock(
+            return_value=(write_content, MagicMock(input_tokens=10, output_tokens=20))
+        )
+        mock_writer.write_stream = MagicMock()
+        mock_writer.narrative_extension = AsyncMock(return_value="")
+        mock_writer.latest_trace = MagicMock(input_tokens=10, output_tokens=20)
+        mock_writer.model_calls = 1
+        mock_writer.tool_call_counts = {}
+        mock_writer.input_tokens = 100
+        mock_writer.output_tokens = 50
+        mock_writer.cached_tokens = 0
+        mock_writer.reasoning_tokens = 0
+
+        state = {
+            "chapter_number": 1,
+            "chapter_outline": "大纲",
+            "target_chapter_words": 3000,
+            "persist_dir": "./novel-data",
+            "project_id": "",
+        }
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter._get_chapter_store"),
+            patch("novel_agent.graph.chapter.WriterAgent", return_value=mock_writer),
+        ):
+            return asyncio.run(writer_node(state, None))
+
+    def test_style_analyzer_runs_after_writer(self):
+        """writer_node output includes style_report from deterministic StyleAnalyzer."""
+        result = self._run_writer_with_mocks()
+        assert "style_report" in result
+        assert result["style_report"]
+        assert "style_gate" in result["style_report"]
+        assert "paragraph_structure" in result["style_report"]
+
+    def test_style_report_persisted_in_state(self):
+        """style_report contains real metrics from StyleAnalyzer, not empty dict."""
+        result = self._run_writer_with_mocks()
+        sr = result["style_report"]
+        assert "paragraph_structure_score" in sr
+        assert isinstance(sr["paragraph_structure_score"], (int, float))
+        assert "ai_flavor_score" in sr
+
+    def test_style_report_present_when_quality_gate_skips_editor(self):
+        """style_report is in writer_node output even when Editor is skipped.
+
+        route_after_writer reads quality_gate_report from writer_node output;
+        style_report is also in writer_node output, so it enters state
+        before the routing decision — regardless of whether Editor runs.
+        """
+        result = self._run_writer_with_mocks()
+        # writer_node must always produce style_report, independent of gate result
+        assert "style_report" in result
+        assert result["style_report"]
+        # quality_gate_report is also present (from the same writer_node)
+        assert "quality_gate_report" in result
+
+    def test_missing_style_report_is_not_score_100(self):
+        """extract_scores must not default style_structure_score to 100 when missing."""
+        from novel_agent.services.evolution import extract_scores
+
+        # State with no style_report — must NOT yield score 100
+        scores = extract_scores({"editor_report": {"overall_score": 80}})
+        assert scores["style_structure_score"] == 0
+        assert scores["style_gate"] == "PASS"  # gate defaults to PASS (no anomaly detected)
+
+
 class TestEvolutionContextMinimal:
     """Task 4: evolution enrichment 默认不调用 + 不传完整 draft。"""
 
@@ -482,6 +560,11 @@ class TestContextMinimality:
             "chapter_number": 1,
             "draft_content": "正文内容" * 100,
             "narrative_mode": None,
+            "style_report": {
+                "style_gate": "PASS",
+                "paragraph_structure_score": 90,
+                "paragraph_structure": {"paragraph_count": 10},
+            },
             "context_packet": {
                 "character_context": "角色" * 5000,
                 "world_context": "设定" * 5000,
@@ -540,7 +623,7 @@ class TestContextMinimality:
         assert result["orchestrator_reasoning_tokens"] == 0
 
     def test_editor_node_passes_style_report_and_minimal_context(self):
-        """Editor receives StyleReport + for_editor projection, not full packet."""
+        """Editor receives StyleReport from state + for_editor projection."""
         from novel_agent.graph.chapter import editor_node
 
         captured: dict = {}
@@ -560,10 +643,10 @@ class TestContextMinimality:
             mock_editor_cls.return_value.reasoning_tokens = 0
             result = asyncio.run(editor_node(self._editor_state()))
 
-        # style_report must be present (deterministic, 0 LLM)
+        # style_report is passed through from state, not recomputed
         assert "style_report" in captured
         assert captured["style_report"] is not None
-        assert "style_gate" in captured["style_report"]
+        assert captured["style_report"]["style_gate"] == "PASS"
         assert "paragraph_structure" in captured["style_report"]
 
         # context_packet must be the minimal for_editor projection
@@ -577,7 +660,7 @@ class TestContextMinimality:
         assert result["editor_output_tokens"] == 300
 
     def test_editor_node_returns_style_report_in_state(self):
-        """editor_node output includes style_report for Evolution consumption."""
+        """editor_node passes style_report through from state for Evolution consumption."""
         from novel_agent.graph.chapter import editor_node
 
         with (
