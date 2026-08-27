@@ -161,9 +161,14 @@ class WorldbuildingReport(BaseModel):
 
 
 class EvolutionCandidate(TypedDict, total=False):
-    """Serializable candidate data carried by the evolution state."""
+    """Serializable candidate data carried by the evolution state.
+
+    Storage-backed candidates omit ``draft_content`` and carry ``version_id``
+    instead — the durable text lives in chapter_versions; checkpoints stay small.
+    """
 
     version: int
+    version_id: str
     draft_content: str
     editor_report: dict[str, Any]
     continuity_report: dict[str, Any]

@@ -39,6 +39,7 @@ from novel_agent.services.evolution import (
     EvolutionService,
     build_improvement_plan_rule,
     build_quality_guard_report,
+    candidate_draft,
     candidate_from_state,
     candidate_to_state,
     check_quality_guards,
@@ -113,6 +114,47 @@ def _get_chapter_store(persist_dir: str) -> ChapterStore:
     if key not in _chapter_store_cache:
         _chapter_store_cache[key] = ChapterStore(store_dir)
     return _chapter_store_cache[key]
+
+
+def _persist_candidate_draft(state: NovelState, version: int) -> str | None:
+    """Persist one evolution draft as an immutable Storage chapter_version.
+
+    Storage becomes the durable copy; the evolution candidate keeps only the
+    version_id so checkpoint size stays flat across rounds. Returns None on
+    failure — candidates then carry the draft inline as fallback so rollback
+    never loses data.
+    """
+    project_id = state.get("project_id", "")
+    if not project_id:
+        return None
+    try:
+        from novel_agent.storage.manager import ProjectManager
+
+        mgr = ProjectManager(state.get("persist_dir", "./novel-data"))
+        record = mgr.create_chapter_version(
+            project_id,
+            state.get("chapter_number", 1),
+            state.get("draft_content", ""),
+            run_id=state.get("writing_run_id") or None,
+            origin=f"evolution_v{version}",
+        )
+        print(f"  [EvoStorage] v{version} persisted → {record['id'][:8]}")
+        return record["id"]
+    except Exception as exc:
+        print(f"  [EvoStorage] v{version} 持久化失败，正文内联保存: {exc}")
+        return None
+
+
+def _candidate_loader(state: NovelState):
+    """version_id → storage record loader for rollback / best comparisons."""
+
+    def _load(version_id: str):
+        from novel_agent.storage.manager import ProjectManager
+
+        mgr = ProjectManager(state.get("persist_dir", "./novel-data"))
+        return mgr.get_chapter_version(version_id)
+
+    return None if not state.get("project_id") else _load
 
 
 # ── Node config ─────────────────────────────────────────
@@ -549,11 +591,13 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "focus": None,
             "quality_guard": initial_guard,
         }
+        version_id = _persist_candidate_draft(state, version)
         initial_candidate = candidate_from_state(
             state,
             version,
             {**current_scores, "composite": composite_score(current_scores)},
             initial_guard,
+            version_id=version_id,
         )
 
         # Rule-based improvement plan for v0
@@ -612,10 +656,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     delta = compute_delta(current_scores, previous_scores)
 
     candidates = list(state.get("evolution_candidates", []))
+    version_id = _persist_candidate_draft(state, version)
     current_candidate = candidate_from_state(
         state,
         version,
         {**current_scores, "composite": composite_score(current_scores)},
+        version_id=version_id,
     )
     best_candidate = next(
         (
@@ -638,7 +684,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         }
     )
     best_state = {
-        "draft_content": best_snapshot.get("draft_content", ""),
+        "draft_content": candidate_draft(best_candidate or {}, _candidate_loader(state)),
         "editor_report": best_ed_rpt,
         "continuity_report": best_ct_rpt,
         "worldbuilding_report": best_snapshot.get("worldbuilding_report", {}),
@@ -767,7 +813,13 @@ def select_best_version_node(state: NovelState) -> dict:
             None,
         )
         if best_candidate:
-            return candidate_to_state(best_candidate)
+            restored = candidate_to_state(best_candidate)
+            if not restored.get("draft_content"):
+                # Storage-backed candidate — fetch the durable text on rollback.
+                restored["draft_content"] = candidate_draft(
+                    best_candidate, _candidate_loader(state)
+                )
+            return restored
         return {}
 
     print(f"  [SelectBest] v{best_version} is best, termination={termination}")

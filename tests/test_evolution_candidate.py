@@ -1,4 +1,8 @@
-from novel_agent.services.evolution import candidate_from_state, candidate_to_state
+from novel_agent.services.evolution import (
+    candidate_draft,
+    candidate_from_state,
+    candidate_to_state,
+)
 
 
 def test_evolution_candidate_round_trips_all_review_state():
@@ -36,3 +40,51 @@ def test_candidate_conversion_normalizes_missing_report_values():
     assert candidate["editor_report"] == {}
     assert candidate["continuity_report"] == {}
     assert candidate_to_state(candidate)["worldbuilding_report"] == {}
+
+
+def test_persisted_candidate_carries_version_id_not_draft():
+    """Phase 6: Storage-backed candidates keep only a runtime reference."""
+    state = {
+        "draft_content": "很长的正文" * 500,
+        "editor_report": {"overall_score": 80},
+        "quality_gate_report": {"passed": True},
+    }
+    candidate = candidate_from_state(state, version=3, scores={}, version_id="ver-123")
+
+    assert candidate["version_id"] == "ver-123"
+    assert "draft_content" not in candidate
+    # content_length is retained for guard comparisons
+    assert candidate["content_length"] == len("很长的正文" * 500)
+
+
+def test_unpersisted_candidate_keeps_inline_draft_fallback():
+    """Persistence failure → draft stays inline so rollback never loses data."""
+    state = {"draft_content": "回退正文"}
+    candidate = candidate_from_state(state, version=1, scores={}, version_id=None)
+
+    assert candidate["draft_content"] == "回退正文"
+    assert "version_id" not in candidate
+
+
+def test_candidate_draft_prefers_inline_then_storage():
+    inline = candidate_draft({"draft_content": "内联"})
+    assert inline == "内联"
+
+    loaded = candidate_draft(
+        {"version_id": "ver-9"},
+        loader=lambda vid: {"content": f"存储正文@{vid}"},
+    )
+    assert loaded == "存储正文@ver-9"
+
+    # Inline wins over storage when both exist
+    both = candidate_draft(
+        {"draft_content": "内联", "version_id": "x"},
+        loader=lambda vid: {"content": "存储"},
+    )
+    assert both == "内联"
+
+    missing = candidate_draft({"version_id": "gone"}, loader=lambda vid: None)
+    assert missing == ""
+
+    no_loader = candidate_draft({"version_id": "ver-9"}, loader=None)
+    assert no_loader == ""

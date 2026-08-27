@@ -675,11 +675,18 @@ def candidate_from_state(
     version: int,
     scores: dict[str, Any],
     quality_guard_report: dict | None = None,
+    version_id: str | None = None,
 ) -> EvolutionCandidate:
-    """Build a serializable candidate snapshot from graph state."""
-    return {
+    """Build a serializable candidate snapshot from graph state.
+
+    When the draft was persisted to Storage (version_id present), the full
+    text is omitted from the snapshot — State keeps a runtime reference only.
+    Without persistence the draft is kept inline as fallback so rollback and
+    comparison never lose data.
+    """
+    draft_content = state.get("draft_content", "")
+    candidate: EvolutionCandidate = {
         "version": version,
-        "draft_content": state.get("draft_content", ""),
         "editor_report": state.get("editor_report", {}) or {},
         "continuity_report": state.get("continuity_report", {}) or {},
         "worldbuilding_report": state.get("worldbuilding_report", {}) or {},
@@ -690,8 +697,35 @@ def candidate_from_state(
         "required_facts_missing": state.get("required_facts_missing", 0),
         "scores": scores,
         "composite_score": scores.get("composite", 0),
-        "content_length": len(state.get("draft_content", "")),
+        "content_length": len(draft_content),
     }
+    if version_id:
+        candidate["version_id"] = version_id
+    else:
+        candidate["draft_content"] = draft_content
+    return candidate
+
+
+def candidate_draft(candidate: EvolutionCandidate, loader=None) -> str:
+    """Return the candidate's full text.
+
+    Prefers inline ``draft_content`` (unpersisted fallback); otherwise loads
+    it from Storage via ``loader(version_id)``. Returns "" when neither is
+    available — guard comparisons then treat length neutrally instead of
+    failing hard.
+    """
+    inline = candidate.get("draft_content") or ""
+    if inline:
+        return inline
+    version_id = candidate.get("version_id")
+    if version_id and loader is not None:
+        try:
+            record = loader(version_id)
+            if record:
+                return record.get("content", "") or ""
+        except Exception:
+            pass
+    return ""
 
 
 def candidate_to_state(candidate: EvolutionCandidate) -> dict[str, Any]:

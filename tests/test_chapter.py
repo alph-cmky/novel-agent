@@ -15,6 +15,7 @@ from novel_agent.graph.chapter import (
     route_after_continuity,
     route_after_editor,
     route_after_writer,
+    select_best_version_node,
     writer_node,
 )
 
@@ -532,6 +533,104 @@ class TestEvolutionConditionalRouting:
         state = {}
         assert route_after_editor(state) == "evolution_continuity"
         assert route_after_continuity(state) == "evolution_worldbuilding"
+
+
+class TestCandidateStateFootprint:
+    """Phase 6 (P1-4): storage-backed candidates keep version_id, not full drafts."""
+
+    @staticmethod
+    def _storage_state(**overrides) -> dict:
+        state = _state()
+        state.update(
+            {
+                "project_id": "p1",
+                "persist_dir": "./novel-data",
+                "writing_run_id": "run-1",
+                "chapter_number": 5,
+                "draft_content": "新正文" * 100,
+            }
+        )
+        state.update(overrides)
+        return state
+
+    def test_persisted_candidate_stores_version_id_not_draft(self):
+        mock_mgr = MagicMock()
+        mock_mgr.create_chapter_version.return_value = {"id": "ver-abc", "content": "x"}
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=None),
+            patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent,
+            patch("novel_agent.storage.manager.ProjectManager", return_value=mock_mgr),
+        ):
+            mock_agent.return_value.enrich_plan = AsyncMock(return_value=None)
+            result = asyncio.run(evolution_orchestrator_node(self._storage_state()))
+
+        candidate = result["evolution_candidates"][-1]
+        assert candidate["version_id"] == "ver-abc"
+        assert "draft_content" not in candidate
+        assert candidate["content_length"] == len("新正文" * 100)
+        # one INSERT per round, tagged with the evolution origin
+        call = mock_mgr.create_chapter_version.call_args
+        assert call.kwargs["origin"] == "evolution_v2"
+
+    def test_persistence_failure_falls_back_to_inline_draft(self):
+        mock_mgr = MagicMock()
+        mock_mgr.create_chapter_version.side_effect = RuntimeError("db down")
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=None),
+            patch("novel_agent.graph.chapter.EvolutionOrchestratorAgent") as mock_agent,
+            patch("novel_agent.storage.manager.ProjectManager", return_value=mock_mgr),
+        ):
+            mock_agent.return_value.enrich_plan = AsyncMock(return_value=None)
+            result = asyncio.run(evolution_orchestrator_node(self._storage_state()))
+
+        candidate = result["evolution_candidates"][-1]
+        assert candidate["draft_content"] == "新正文" * 100
+        assert "version_id" not in candidate
+
+    def test_no_project_id_skips_persistence_and_keeps_inline_draft(self):
+        state = self._storage_state(project_id="", persist_dir="")
+        result = asyncio.run(evolution_orchestrator_node(state))
+        candidate = result["evolution_candidates"][-1]
+        assert candidate["draft_content"]
+        assert "version_id" not in candidate
+
+    def test_select_best_rollback_loads_draft_from_storage(self):
+        state = _state()
+        state.update({"project_id": "p1", "persist_dir": "./novel-data"})
+        best = {
+            "version": 1,
+            "version_id": "ver-old",
+            "editor_report": {"overall_score": 80, "dimensions": {"rhythm": 80}},
+            "continuity_report": {"overall_score": 80},
+            "style_report": {"style_gate": "PASS", "paragraph_structure_score": 60},
+            "worldbuilding_report": {},
+            "quality_gate_report": {},
+            "outline_coverage": None,
+            "required_facts_missing": 0,
+            "content_length": 4,
+        }
+        state["evolution_candidates"] = [best]
+
+        mock_mgr = MagicMock()
+        mock_mgr.get_chapter_version.return_value = {
+            "id": "ver-old",
+            "content": "旧正文全文",
+        }
+        with patch("novel_agent.storage.manager.ProjectManager", return_value=mock_mgr):
+            result = select_best_version_node(state)
+
+        assert result["draft_content"] == "旧正文全文"
+        mock_mgr.get_chapter_version.assert_called_once_with("ver-old")
+
+    def test_select_best_rollback_without_storage_access_returns_empty_draft(self):
+        """无 project_id 时 loader 为 None → 不崩溃，draft 留空（SSE 兜底走当前文）。"""
+        state = _state()
+        state["project_id"] = ""
+        state["evolution_candidates"] = [
+            {"version": 1, "version_id": "ver-old", "editor_report": {}}
+        ]
+        result = select_best_version_node(state)
+        assert result["draft_content"] == ""
 
 
 class TestEvolutionContextMinimal:
