@@ -432,3 +432,61 @@ class TestFixtureMetricAlignment:
             ]
         }
         assert dlg["dialogue"] > dlg["natural"] > dlg["description"]
+
+
+class TestParagraphCalibration:
+    """P2-1: 段落分类与短段判定的校准 — 综合判断，不做一刀切。"""
+
+    def test_task_doc_alternation_sample(self):
+        """任务文档 §23 样本：对白/叙述交替分类正确。"""
+        from novel_agent.style.analyzer import _classify_paragraph
+
+        assert _classify_paragraph("\u201c走。\u201d") == "DIALOGUE"
+        assert _classify_paragraph("他转过身。") == "NARRATIVE"
+        assert _classify_paragraph("\u201c等等。\u201d") == "DIALOGUE"
+        assert _classify_paragraph("他没有回头。") == "NARRATIVE"
+
+    def test_speech_tag_is_mixed(self):
+        """说话人提示 + 引语 → MIXED（两种引号）。"""
+        from novel_agent.style.analyzer import _classify_paragraph
+
+        assert _classify_paragraph("他说：\u201c走。\u201d") == "MIXED"
+        assert _classify_paragraph("她说：「等等。」") == "MIXED"
+
+    def test_action_burst_inside_varied_prose_not_over_penalized(self):
+        """任务文档 §24：整体节奏健康的章节中，孤立短句爆发不应重罚。
+
+        连续短段惩罚必须与整体短段比例耦合 — 碎片化是多信号共振，
+        单一局部爆发只是节奏选择。
+        """
+        long_para = (
+            "他沿着河堤慢慢走了很久。一路上把心里那些翻来覆去的念头一条一条摆开来检视，"
+            "又逐一把它们收回原处。最后只留下一句还没有答案的话悬在那里。"
+        )
+        burst = "他停步。\n风很紧。\n有人跟了上来。\n他攥紧了刀柄。"
+        text = "\n\n".join([long_para] * 6) + "\n\n" + burst
+        report = ParagraphStructureAnalyzer().analyze(text)
+
+        assert report.max_consecutive_short_narrative_paragraphs >= 4
+        # coupled penalty keeps the score healthy despite the local burst
+        assert report.fragmentation_score >= 80
+
+    def test_kinetic_beats_reported_as_evidence_only(self):
+        """任务文档 §24 四连拍全部计入 kinetic_beat_count，仅作证据。"""
+        text = "他拔刀。\n刀光一闪。\n他退后一步。\n对方已经逼近。"
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.kinetic_beat_count == 4
+        assert report.narrative_paragraph_count == 4
+
+    def test_chapter_wide_fragmentation_still_severe(self):
+        """全章碎片化（多信号共振）仍被判严重 — 耦合不放松真问题。"""
+        text = _fixture("fragmented.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.fragmentation_score < 60
+        assert style_gate(report) in ("WARNING", "FAIL")
+
+    def test_beat_count_zero_on_natural_prose(self):
+        """自然长段无 beat 噪声计数。"""
+        text = _fixture("natural.txt")
+        report = ParagraphStructureAnalyzer().analyze(text)
+        assert report.kinetic_beat_count == 0

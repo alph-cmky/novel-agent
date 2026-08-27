@@ -15,6 +15,7 @@ from statistics import median
 from pydantic import BaseModel, ConfigDict, Field
 
 from novel_agent.config import (
+    KINETIC_BEAT_CHAR_LIMIT,
     MAX_CONSECUTIVE_SHORT_PARAGRAPHS,
     SHORT_NARRATIVE_PARAGRAPH_THRESHOLD,
     SHORT_NARRATIVE_RATIO_THRESHOLD,
@@ -46,6 +47,9 @@ class ParagraphStructureReport(BaseModel):
     single_sentence_narrative_ratio: float = 0
     max_consecutive_short_narrative_paragraphs: int = 0
     fragmentation_score: float = Field(ge=0, le=100, default=100)
+    # Descriptive evidence only — ultra-short narrative single sentences are
+    # a rhythm choice in action scenes; the count never feeds the score.
+    kinetic_beat_count: int = 0
     issues: list[str] = Field(default_factory=list)
 
 
@@ -208,6 +212,15 @@ class ParagraphStructureAnalyzer:
 
         max_consecutive = self._max_consecutive_short(paragraphs, classifications, short_threshold)
 
+        # Kinetic-beat evidence: ultra-short narrative single sentences.
+        kinetic_beats = sum(
+            1
+            for i in range(len(paragraphs))
+            if classifications[i] == "NARRATIVE"
+            and _is_single_sentence(paragraphs[i])
+            and len(paragraphs[i]) <= KINETIC_BEAT_CHAR_LIMIT
+        )
+
         frag_score = self._fragmentation_score(
             short_ratio, single_sentence_ratio, max_consecutive, median_len
         )
@@ -230,6 +243,7 @@ class ParagraphStructureAnalyzer:
             single_sentence_narrative_ratio=round(single_sentence_ratio, 3),
             max_consecutive_short_narrative_paragraphs=max_consecutive,
             fragmentation_score=frag_score,
+            kinetic_beat_count=kinetic_beats,
             issues=issues,
         )
 
@@ -256,7 +270,14 @@ class ParagraphStructureAnalyzer:
         max_consec: int,
         median_len: float,
     ) -> float:
-        """100 = natural, 0 = severely fragmented. Explainable, no complex model."""
+        """100 = natural, 0 = severely fragmented. Explainable, no complex model.
+
+        Combined judgment (P2-1): an isolated burst of consecutive short
+        paragraphs inside otherwise-varied prose is a rhythm choice, not
+        fragmentation — the consecutive penalty is softened unless the overall
+        short-narrative ratio corroborates it. Severe fragmentation shows up
+        across signals, not in a single burst.
+        """
         score = 100.0
 
         if short_ratio > SHORT_NARRATIVE_RATIO_THRESHOLD:
@@ -272,7 +293,11 @@ class ParagraphStructureAnalyzer:
             score -= min(25, excess * 25)
 
         if max_consec > MAX_CONSECUTIVE_SHORT_PARAGRAPHS:
-            score -= min(25, (max_consec - MAX_CONSECUTIVE_SHORT_PARAGRAPHS) * 8)
+            base = min(25, (max_consec - MAX_CONSECUTIVE_SHORT_PARAGRAPHS) * 8)
+            # Coupled: isolated bursts (overall ratio healthy) lose ~65% of
+            # the sting; bursts amid chapter-wide fragmentation keep full weight.
+            factor = 1.0 if short_ratio > SHORT_NARRATIVE_RATIO_THRESHOLD else 0.35
+            score -= min(25, base * factor)
 
         if median_len > 0 and median_len < SHORT_NARRATIVE_PARAGRAPH_THRESHOLD:
             score -= min(

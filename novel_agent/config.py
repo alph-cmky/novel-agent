@@ -21,6 +21,11 @@ SHORT_NARRATIVE_PARAGRAPH_THRESHOLD = 40
 SINGLE_SENTENCE_RATIO_THRESHOLD = 0.30
 SHORT_NARRATIVE_RATIO_THRESHOLD = 0.40
 MAX_CONSECUTIVE_SHORT_PARAGRAPHS = 3
+# Descriptive-evidence cutoff: narrative single sentences up to this length
+# are reported as "kinetic beats" (动作节拍). Beats carry NO score penalty —
+# classification into beat vs fragmented narration is semantic, so the count
+# is evidence for Editor/humans, never an automatic deduction.
+KINETIC_BEAT_CHAR_LIMIT = 12
 
 
 def env_bool(name: str, default: bool = False) -> bool:
