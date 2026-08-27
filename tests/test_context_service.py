@@ -81,40 +81,146 @@ def test_for_orchestrator_keeps_planning_inputs_capped():
 
 
 def test_apply_context_needed_folds_orchestrator_demands_into_packet():
-    """context_needed 是 Orchestrator → ContextCompiler 需求声明，五种信号都落进 packet。"""
+    """context_needed triggers real SQL retrieval, not text hints."""
+    manager = MagicMock()
+    # Characters: query returns matching entities
+    manager.get_entities_by_names.side_effect = lambda pid, names, **kw: (
+        [{"name": "甲", "entity_type": "character", "properties": "主角，冷静"}]
+        if kw.get("entity_type") == "character"
+        else [{"name": "北墙秘道", "entity_type": "location", "properties": "隐藏通道"}]
+    )
+    # Cross-timeline events
+    manager.get_story_events_by_subjects.return_value = [
+        {"id": "e1", "subject": "甲", "action": "坠崖", "chapter_number": 3}
+    ]
+
     packet = {
-        "character_context": "- 甲: 主角",
-        "world_context": "- 北墙: 黑曜石",
+        "character_context": "- 旧角色: 过时信息",
+        "world_context": "- 旧设定: 过时",
         "recent_summary": "第1章：甲出城",
+        "timeline_events": [],
     }
-    enriched = ContextCompiler.apply_context_needed(
+    compiler = ContextCompiler(manager)
+    enriched = compiler.apply_context_needed(
         packet,
         {
             "characters": ["甲", "乙"],
             "world_elements": ["北墙秘道"],
             "perspective_specific": "乙不知道甲的身份",
-            "cross_timeline_references": ["三年前的坠崖"],
+            "cross_timeline_references": ["甲"],
             "recent_reference": "甲与乙的约定",
         },
+        project_id="p",
+        chapter_number=5,
     )
 
-    assert "[本章涉及角色: 甲, 乙]" in enriched["character_context"]
+    # Character context is replaced with queried entities, not appended hints
+    assert "- 甲: 主角，冷静" in enriched["character_context"]
+    assert "旧角色" not in enriched["character_context"]
     assert "[视角特定信息: 乙不知道甲的身份]" in enriched["character_context"]
-    assert "- 甲: 主角" in enriched["character_context"]
-    assert "[本章涉及设定: 北墙秘道]" in enriched["world_context"]
-    assert "[跨时间线参考: 三年前的坠崖]" in enriched["world_context"]
-    assert "[主编提示：本章需要回顾 — 甲与乙的约定]" in enriched["recent_summary"]
+
+    # World context is replaced with queried world entities
+    assert "[location] 北墙秘道: 隐藏通道" in enriched["world_context"]
+    assert "旧设定" not in enriched["world_context"]
+
+    # Cross-timeline events are merged into timeline_events
+    assert any(e.get("action") == "坠崖" for e in enriched["timeline_events"])
+
+    # POV metadata and recent_reference remain as text annotations
+    assert "[本章需要回顾 — 甲与乙的约定]" in enriched["recent_summary"]
+
     # 原 packet 不被原地修改
-    assert "[本章涉及角色" not in packet["character_context"]
+    assert "旧角色" in packet["character_context"]
 
 
 def test_apply_context_needed_empty_declaration_is_noop():
     """空声明（无消费者需求）→ packet 原样返回，不注入占位噪声。"""
+    manager = MagicMock()
     packet = {"character_context": "ctx", "recent_summary": "sum"}
-    enriched = ContextCompiler.apply_context_needed(packet, {})
+    compiler = ContextCompiler(manager)
+    enriched = compiler.apply_context_needed(packet, {}, project_id="p", chapter_number=1)
 
     assert enriched == packet
     assert "暂无" not in enriched["character_context"]
+    manager.get_entities_by_names.assert_not_called()
+    manager.get_story_events_by_subjects.assert_not_called()
+
+
+class TestContextNeededRetrieval:
+    """Phase 2 (P0-2): context_needed triggers real SQL retrieval, not text hints."""
+
+    def test_characters_query_replaces_not_appends(self):
+        """context_needed.characters triggers get_entities_by_names, replacing packet content."""
+        manager = MagicMock()
+        manager.get_entities_by_names.return_value = [
+            {"name": "甲", "entity_type": "character", "properties": "主角"},
+        ]
+        packet = {"character_context": "- 旧: 过时信息"}
+        compiler = ContextCompiler(manager)
+        result = compiler.apply_context_needed(
+            packet, {"characters": ["甲"]}, project_id="p", chapter_number=1
+        )
+        # Old content replaced, not appended
+        assert "旧" not in result["character_context"]
+        assert "甲: 主角" in result["character_context"]
+        manager.get_entities_by_names.assert_called_once_with("p", ["甲"], entity_type="character")
+
+    def test_world_elements_query_replaces_not_appends(self):
+        """context_needed.world_elements triggers get_entities_by_names for non-characters."""
+        manager = MagicMock()
+        manager.get_entities_by_names.return_value = [
+            {"name": "北墙", "entity_type": "location", "properties": "黑曜石城墙"},
+        ]
+        packet = {"world_context": "- 旧设定: 过时"}
+        compiler = ContextCompiler(manager)
+        result = compiler.apply_context_needed(
+            packet, {"world_elements": ["北墙"]}, project_id="p", chapter_number=1
+        )
+        assert "旧设定" not in result["world_context"]
+        assert "[location] 北墙: 黑曜石城墙" in result["world_context"]
+
+    def test_cross_timeline_merges_into_timeline_events(self):
+        """context_needed.cross_timeline_references triggers get_story_events_by_subjects."""
+        manager = MagicMock()
+        manager.get_story_events_by_subjects.return_value = [
+            {"id": "e1", "subject": "甲", "action": "坠崖", "chapter_number": 3},
+        ]
+        packet = {"timeline_events": [{"id": "e0", "action": "出城"}]}
+        compiler = ContextCompiler(manager)
+        result = compiler.apply_context_needed(
+            packet,
+            {"cross_timeline_references": ["甲"]},
+            project_id="p",
+            chapter_number=10,
+        )
+        assert len(result["timeline_events"]) == 2
+        manager.get_story_events_by_subjects.assert_called_once_with("p", ["甲"])
+
+    def test_perspective_specific_remains_text_annotation(self):
+        """perspective_specific is POV metadata, not entity retrieval."""
+        manager = MagicMock()
+        packet = {"character_context": "- 甲: 主角"}
+        compiler = ContextCompiler(manager)
+        result = compiler.apply_context_needed(
+            packet,
+            {"perspective_specific": "乙不知甲的身份"},
+            project_id="p",
+            chapter_number=1,
+        )
+        assert "[视角特定信息: 乙不知甲的身份]" in result["character_context"]
+        manager.get_entities_by_names.assert_not_called()
+
+    def test_no_retrieval_without_manager(self):
+        """When mgr is available but context_needed is empty, no SQL calls."""
+        manager = MagicMock()
+        packet = {"character_context": "ctx", "world_context": "world"}
+        compiler = ContextCompiler(manager)
+        result = compiler.apply_context_needed(
+            packet, {"characters": [], "world_elements": []}, project_id="p", chapter_number=1
+        )
+        assert result == packet
+        manager.get_entities_by_names.assert_not_called()
+        manager.get_story_events_by_subjects.assert_not_called()
 
 
 def test_context_packet_bounds_each_section():

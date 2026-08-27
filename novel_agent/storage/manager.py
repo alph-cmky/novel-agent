@@ -1404,6 +1404,61 @@ class ProjectManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_entities_by_names(
+        self,
+        project_id: str,
+        names: list[str],
+        *,
+        entity_type: str | None = None,
+    ) -> list[dict]:
+        """Retrieve entities matching the given names (SQL IN query).
+
+        Used by ContextCompiler to fetch only the characters/world elements
+        the Orchestrator declared as needed, instead of loading all entities.
+        """
+        if not names:
+            return []
+        placeholders = ", ".join("?" for _ in names)
+        query = (
+            "SELECT * FROM world_entities WHERE project_id = ? "
+            f"AND name IN ({placeholders}) ORDER BY first_appearance_chapter, name"
+        )
+        params: list = [project_id, *names]
+        if entity_type:
+            query = (
+                "SELECT * FROM world_entities WHERE project_id = ? "
+                f"AND entity_type = ? AND name IN ({placeholders}) "
+                "ORDER BY first_appearance_chapter, name"
+            )
+            params = [project_id, entity_type, *names]
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_story_events_by_subjects(
+        self,
+        project_id: str,
+        subjects: list[str],
+        *,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Retrieve story events matching the given subjects (SQL IN query).
+
+        Used by ContextCompiler to fetch cross-timeline events only for
+        entities the Orchestrator declared as relevant.
+        """
+        if not subjects:
+            return []
+        placeholders = ", ".join("?" for _ in subjects)
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM story_events WHERE project_id = ? "
+                f"AND subject IN ({placeholders}) "
+                "ORDER BY chapter_number DESC, created_at DESC LIMIT ?",
+                [project_id, *subjects, limit],
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_relevant_world_entities(
         self,
         project_id: str,

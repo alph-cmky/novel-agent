@@ -221,58 +221,79 @@ class ContextCompiler:
             "improvement_plan": improvement_plan or {},
         }
 
-    @staticmethod
-    def apply_context_needed(packet: dict, context_needed: dict) -> dict:
-        """Fold the Orchestrator's context declaration into the packet.
+    def apply_context_needed(
+        self,
+        packet: dict,
+        context_needed: dict,
+        project_id: str,
+        chapter_number: int,
+    ) -> dict:
+        """Fold the Orchestrator's context declaration into the packet via real retrieval.
 
-        context_needed is the Orchestrator → ContextCompiler demand signal:
-        characters and world elements this chapter touches, POV-scoped
-        knowledge, cross-timeline references and recent plot points the
-        Writer must see. ContextCompiler owns packet shaping — hints are
-        merged here, once, and every downstream projection consumes the
-        enriched packet.
+        context_needed is the Orchestrator → ContextCompiler demand signal.
+        Instead of appending text hints, this method queries Storage for the
+        actual entities/events the chapter needs and replaces the packet's
+        character_context / world_context / timeline_events with the results.
+
+        perspective_specific and recent_reference remain as text annotations
+        (POV metadata, not entity retrieval).
         """
         packet = dict(packet)
-        chars = ", ".join(context_needed.get("characters", []))
-        world = ", ".join(context_needed.get("world_elements", []))
 
-        char_ctx = packet.get("character_context", "")
-        if chars:
-            hint = f"[本章涉及角色: {chars}]"
-            char_ctx = f"{char_ctx}\n{hint}" if char_ctx else hint
-
-        world_ctx = packet.get("world_context", "")
-        if world:
-            hint = f"[本章涉及设定: {world}]"
-            world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
-
-        persp_specific = context_needed.get("perspective_specific", "")
-        if persp_specific:
-            char_ctx = (
-                f"{char_ctx}\n[视角特定信息: {persp_specific}]"
-                if char_ctx
-                else f"[视角特定信息: {persp_specific}]"
+        # ── Character retrieval: query matching entities by name ──
+        char_names = context_needed.get("characters", [])
+        if char_names:
+            chars = self.manager.get_entities_by_names(
+                project_id, char_names, entity_type="character"
             )
+            char_lines = [f"- {c['name']}: {c['properties']}" for c in chars if c.get("name")]
+            if char_lines:
+                packet["character_context"] = "\n".join(char_lines)
 
+        # ── World element retrieval: query matching non-character entities ──
+        world_names = context_needed.get("world_elements", [])
+        if world_names:
+            world_ents = self.manager.get_entities_by_names(project_id, world_names)
+            # Exclude characters — they're handled above
+            world_ents = [e for e in world_ents if e.get("entity_type") != "character"]
+            world_lines = [
+                f"- [{e['entity_type']}] {e['name']}: {e['properties']}"
+                for e in world_ents
+                if e.get("name")
+            ]
+            if world_lines:
+                packet["world_context"] = "\n".join(world_lines)
+
+        # ── Cross-timeline retrieval: query events by subject ──
         cross_timeline = context_needed.get("cross_timeline_references", [])
         if cross_timeline:
-            hint = f"[跨时间线参考: {', '.join(cross_timeline)}]"
-            world_ctx = f"{world_ctx}\n{hint}" if world_ctx else hint
+            cross_events = self.manager.get_story_events_by_subjects(project_id, cross_timeline)
+            if cross_events:
+                existing = list(packet.get("timeline_events") or [])
+                # Merge deduplicated: avoid duplicating events already in packet
+                existing_keys = {
+                    e.get("id") or e.get("action", "") for e in existing if isinstance(e, dict)
+                }
+                for ev in cross_events:
+                    key = ev.get("id") or ev.get("action", "")
+                    if key not in existing_keys:
+                        existing.append(ev)
+                packet["timeline_events"] = existing[-30:]
 
+        # ── POV metadata: text annotation (not entity retrieval) ──
+        persp_specific = context_needed.get("perspective_specific", "")
+        if persp_specific:
+            char_ctx = packet.get("character_context", "")
+            hint = f"[视角特定信息: {persp_specific}]"
+            packet["character_context"] = f"{char_ctx}\n{hint}" if char_ctx else hint
+
+        # ── Recent reference: text annotation (not entity retrieval) ──
         recent_ref = context_needed.get("recent_reference", "")
-        recent_sum = packet.get("recent_summary", "")
         if recent_ref:
-            hint = f"[主编提示：本章需要回顾 — {recent_ref}]"
-            recent_sum = f"{recent_sum}\n{hint}" if recent_sum else hint
+            recent_sum = packet.get("recent_summary", "")
+            hint = f"[本章需要回顾 — {recent_ref}]"
+            packet["recent_summary"] = f"{recent_sum}\n{hint}" if recent_sum else hint
 
-        # Write back only what a demand signal touched — an empty declaration
-        # must not inject new keys (or placeholder noise) into the packet.
-        if chars or persp_specific:
-            packet["character_context"] = char_ctx
-        if world or cross_timeline:
-            packet["world_context"] = world_ctx
-        if recent_ref:
-            packet["recent_summary"] = recent_sum
         return packet
 
     @staticmethod

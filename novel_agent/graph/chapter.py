@@ -149,9 +149,11 @@ async def orchestrator_node(state: NovelState) -> dict:
 
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
+    chapter_number = state.get("chapter_number", 1)
     previous_chapters: list[dict] = []
     total_chapters = 0
     unresolved: list[str] = []
+    mgr = None
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
@@ -160,16 +162,16 @@ async def orchestrator_node(state: NovelState) -> dict:
             # SQL-side tail slice — no full chapter table load for long projects
             previous_chapters = mgr.get_recent_chapters(
                 project_id,
-                before=state.get("chapter_number", 1),
+                before=chapter_number,
                 limit=5,
             )
             previous_chapters.reverse()  # → ascending order for summaries
-            total_chapters = mgr.count_chapters(project_id, before=state.get("chapter_number", 1))
+            total_chapters = mgr.count_chapters(project_id, before=chapter_number)
             # Load unresolved foreshadowings before planning so the same
             # long-range constraints reach both the orchestrator and the writer.
             relevant_fs = mgr.get_relevant_foreshadowings(
                 project_id,
-                state.get("chapter_number", 1),
+                chapter_number,
             )
             unresolved = [
                 f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
@@ -216,10 +218,14 @@ async def orchestrator_node(state: NovelState) -> dict:
     )
 
     # context_needed is the Orchestrator → ContextCompiler demand signal;
-    # ContextCompiler owns packet shaping, so enrichment lives there.
-    full_packet = ContextCompiler.apply_context_needed(
-        full_packet, strategy.get("context_needed", {})
-    )
+    # ContextCompiler queries Storage for the actual entities/events the
+    # chapter needs, replacing text hints with real data.
+    context_needed = strategy.get("context_needed", {})
+    if context_needed and mgr and project_id:
+        compiler = ContextCompiler(mgr)
+        full_packet = compiler.apply_context_needed(
+            full_packet, context_needed, project_id, chapter_number
+        )
 
     scene_plan = state.get("scene_plan", [])
     if state.get("scene_first"):
