@@ -140,6 +140,10 @@ def build_chat_model(config: AgentConfig) -> ChatOpenAI:
 
     是否 reasoning 由 AgentConfig.is_reasoning 声明（env: QUALITY_IS_REASONING
     / BUDGET_IS_REASONING），不在代码里写死具体模型名。
+
+    LLM_THINKING_DISABLED=true：对非 reasoning 的 hybrid 模型（如 DeepSeek v4）
+    显式关闭 thinking（extra_body thinking:disabled）——评测基线要求推理路径
+    确定、latency 可比；只对声明关闭的 provider 生效，不影响 reasoning 模型。
     """
     kwargs: dict[str, Any] = {
         "model": config.model,
@@ -151,6 +155,8 @@ def build_chat_model(config: AgentConfig) -> ChatOpenAI:
     if config.is_reasoning:
         kwargs["reasoning_effort"] = REASONING_EFFORT
         kwargs["stream_chunk_timeout"] = None
+    elif os.getenv("LLM_THINKING_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     return ChatOpenAI(**kwargs)
 
 
