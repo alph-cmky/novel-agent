@@ -89,3 +89,15 @@ class NovelState(TypedDict, total=False):
     editor_output_tokens: int
     editor_cached_tokens: int
     editor_reasoning_tokens: int
+    continuity_input_tokens: int
+    continuity_output_tokens: int
+    continuity_cached_tokens: int
+    continuity_reasoning_tokens: int
+    worldbuilding_input_tokens: int
+    worldbuilding_output_tokens: int
+    worldbuilding_cached_tokens: int
+    worldbuilding_reasoning_tokens: int
+    evolution_input_tokens: int
+    evolution_output_tokens: int
+    evolution_cached_tokens: int
+    evolution_reasoning_tokens: int

@@ -554,17 +554,26 @@ async def continuity_node(state: NovelState) -> dict:
         narrative_mode=state.get("narrative_mode"),
         context_packet=continuity_packet,
     )
+    token_delta = {
+        "continuity_input_tokens": state.get("continuity_input_tokens", 0) + auditor.input_tokens,
+        "continuity_output_tokens": state.get("continuity_output_tokens", 0)
+        + auditor.output_tokens,
+        "continuity_cached_tokens": state.get("continuity_cached_tokens", 0)
+        + auditor.cached_tokens,
+        "continuity_reasoning_tokens": state.get("continuity_reasoning_tokens", 0)
+        + auditor.reasoning_tokens,
+    }
     score = report.get("overall_score", 0)
     if report.get("unavailable"):
         print("  [Continuity] unavailable（空输出，一致性维度跳过）")
-        return {"continuity_report": report}
+        return {"continuity_report": report, **token_delta}
     criticals = [
         i
         for i in (report.get("inconsistencies") or [])
         if isinstance(i, dict) and i.get("severity") == "critical"
     ]
     print(f"  [Continuity] {score}/100, Critical: {len(criticals)}")
-    return {"continuity_report": report}
+    return {"continuity_report": report, **token_delta}
 
 
 async def evolution_orchestrator_node(state: NovelState) -> dict:
@@ -608,8 +617,10 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         profile = ExecutionProfile.from_state(state)
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
         enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
+        evo_tokens = {"input": 0, "output": 0, "cached": 0, "reasoning": 0}
         if not rule_has_instruction and profile.should_enrich_evolution():
             enrich_calls += 1
+            agent = None
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -624,6 +635,13 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
                     plan = enriched
             except Exception:
                 pass
+            if agent is not None:
+                evo_tokens = {
+                    "input": agent.input_tokens,
+                    "output": agent.output_tokens,
+                    "cached": agent.cached_tokens,
+                    "reasoning": agent.reasoning_tokens,
+                }
 
         editor_score = current_scores["editor_overall"]
         continuity_score = current_scores["continuity_overall"]
@@ -643,6 +661,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_termination": "",
             "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
             "evolution_llm_enrichment_calls": enrich_calls,
+            "evolution_input_tokens": state.get("evolution_input_tokens", 0)
+            + evo_tokens["input"],
+            "evolution_output_tokens": state.get("evolution_output_tokens", 0)
+            + evo_tokens["output"],
+            "evolution_cached_tokens": state.get("evolution_cached_tokens", 0)
+            + evo_tokens["cached"],
+            "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
+            + evo_tokens["reasoning"],
         }
 
     # ── Branch B: Has history → Delta comparison ──
@@ -714,10 +740,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     # 3. LLM enrichment — only when rule plan lacks primary_instruction
     plan = rule_plan
     enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
+    evo_tokens = {"input": 0, "output": 0, "cached": 0, "reasoning": 0}
     if not termination and ExecutionProfile.from_state(state).should_enrich_evolution():
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
         if not rule_has_instruction:
             enrich_calls += 1
+            agent = None
             try:
                 agent = EvolutionOrchestratorAgent(config=_config_for(TaskClass.META_EVALUATION))
                 enriched = await agent.enrich_plan(
@@ -732,6 +760,13 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
                     plan = enriched
             except Exception:
                 pass
+            if agent is not None:
+                evo_tokens = {
+                    "input": agent.input_tokens,
+                    "output": agent.output_tokens,
+                    "cached": agent.cached_tokens,
+                    "reasoning": agent.reasoning_tokens,
+                }
 
     # 4. Build history entry
     new_entry = {
@@ -753,6 +788,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "quality_guard_report": guard_report,
         "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
         "evolution_llm_enrichment_calls": enrich_calls,
+        "evolution_input_tokens": state.get("evolution_input_tokens", 0)
+        + evo_tokens["input"],
+        "evolution_output_tokens": state.get("evolution_output_tokens", 0)
+        + evo_tokens["output"],
+        "evolution_cached_tokens": state.get("evolution_cached_tokens", 0)
+        + evo_tokens["cached"],
+        "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
+        + evo_tokens["reasoning"],
     }
 
     # 5. Check if new best version
@@ -868,7 +911,17 @@ async def worldbuilding_node(state: NovelState) -> dict:
         f"  [Worldbuilding] {entities} entities, {conflicts} conflicts, "
         f"{new_fs} new foreshadowings, {resolved_fs} resolved"
     )
-    return {"worldbuilding_report": report}
+    return {
+        "worldbuilding_report": report,
+        "worldbuilding_input_tokens": state.get("worldbuilding_input_tokens", 0)
+        + wb.input_tokens,
+        "worldbuilding_output_tokens": state.get("worldbuilding_output_tokens", 0)
+        + wb.output_tokens,
+        "worldbuilding_cached_tokens": state.get("worldbuilding_cached_tokens", 0)
+        + wb.cached_tokens,
+        "worldbuilding_reasoning_tokens": state.get("worldbuilding_reasoning_tokens", 0)
+        + wb.reasoning_tokens,
+    }
 
 
 def human_review_node(state: NovelState) -> dict:
