@@ -1288,26 +1288,31 @@ class ProjectManager:
 
         Optionally restricted to rows created up to ``after_chapter`` so long
         runs can record per-chapter canon state without full-table reads.
+        Each table uses its own chapter column: world_entities tracks
+        first_appearance_chapter, story_events chapter_number, foreshadowings
+        planted_chapter.
         """
         if not project_id:
             return {}
-        suffix = " WHERE project_id = ?"
-        params: list = [project_id]
-        if after_chapter is not None:
-            suffix += " AND chapter_number <= ?"
-            params.append(after_chapter)
         with self._conn() as conn:
-            entities = conn.execute(
-                "SELECT COUNT(*) FROM world_entities" + suffix, params
-            ).fetchone()[0]
-            events = conn.execute(
-                "SELECT COUNT(*) FROM story_events" + suffix, params
-            ).fetchone()[0]
-            fs_open = conn.execute(
-                "SELECT COUNT(*) FROM foreshadowings" + suffix
-                + " AND status != 'resolved'",
-                params,
-            ).fetchone()[0]
+            entities_q = "SELECT COUNT(*) FROM world_entities WHERE project_id = ?"
+            events_q = "SELECT COUNT(*) FROM story_events WHERE project_id = ?"
+            fs_q = (
+                "SELECT COUNT(*) FROM foreshadowings WHERE project_id = ? "
+                "AND status != 'resolved'"
+            )
+            if after_chapter is not None:
+                entities_q += " AND first_appearance_chapter <= ?"
+                events_q += " AND chapter_number <= ?"
+                fs_q += " AND planted_chapter <= ?"
+                params: list = [project_id, after_chapter]
+                entities = conn.execute(entities_q, params).fetchone()[0]
+                events = conn.execute(events_q, params).fetchone()[0]
+                fs_open = conn.execute(fs_q, params).fetchone()[0]
+            else:
+                entities = conn.execute(entities_q, [project_id]).fetchone()[0]
+                events = conn.execute(events_q, [project_id]).fetchone()[0]
+                fs_open = conn.execute(fs_q, [project_id]).fetchone()[0]
             chapters = self.count_chapters(project_id)
         return {
             "world_entities": entities,
