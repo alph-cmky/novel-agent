@@ -10,7 +10,9 @@ def test_get_canon_counts_after_chapter(tmp_path):
     # ch1: 1 角色 + 1 事件 + 1 伏笔
     mgr.save_world_entities(
         pid,
-        {"new_entities": [{"entity_type": "character", "name": "林远", "properties": {"身份": "弟子"}}]},
+        {"new_entities": [
+            {"entity_type": "character", "name": "林远", "properties": {"身份": "弟子"}}
+        ]},
         chapter_number=1,
     )
     mgr.save_story_events(pid, 1, [{"action": "捡剑"}])
