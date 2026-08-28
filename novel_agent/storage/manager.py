@@ -1283,6 +1283,39 @@ class ProjectManager:
             (count,) = conn.execute(query, params).fetchone()
         return count
 
+    def get_canon_counts(self, project_id: str, after_chapter: int | None = None) -> dict:
+        """Canon storage growth counters (C-3 snapshot growth observability).
+
+        Optionally restricted to rows created up to ``after_chapter`` so long
+        runs can record per-chapter canon state without full-table reads.
+        """
+        if not project_id:
+            return {}
+        suffix = " WHERE project_id = ?"
+        params: list = [project_id]
+        if after_chapter is not None:
+            suffix += " AND chapter_number <= ?"
+            params.append(after_chapter)
+        with self._conn() as conn:
+            entities = conn.execute(
+                "SELECT COUNT(*) FROM world_entities" + suffix, params
+            ).fetchone()[0]
+            events = conn.execute(
+                "SELECT COUNT(*) FROM story_events" + suffix, params
+            ).fetchone()[0]
+            fs_open = conn.execute(
+                "SELECT COUNT(*) FROM foreshadowings" + suffix
+                + " AND status != 'resolved'",
+                params,
+            ).fetchone()[0]
+            chapters = self.count_chapters(project_id)
+        return {
+            "world_entities": entities,
+            "story_events": events,
+            "foreshadowings_open": fs_open,
+            "chapters": chapters,
+        }
+
     def get_chapter_worldbuilding(self, project_id: str) -> list[dict]:
         """Lightweight fetch of chapter_number + worldbuilding_report only.
 
