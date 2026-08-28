@@ -10,6 +10,7 @@ import asyncio
 import json as _json
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -236,6 +237,7 @@ async def orchestrator_node(state: NovelState) -> dict:
     if unresolved:
         full_packet["unresolved_foreshadowings"] = unresolved
 
+    _t0 = time.monotonic()
     strategy = await orchestrator.analyze(
         chapter_number=state.get("chapter_number", 1),
         chapter_outline=state.get("chapter_outline", ""),
@@ -251,6 +253,7 @@ async def orchestrator_node(state: NovelState) -> dict:
         total_chapters=total_chapters,
         scene_first=bool(state.get("scene_first")),
     )
+    _orch_latency = time.monotonic() - _t0
 
     stage = strategy.get("narrative_stage", "?")
     pacing = strategy.get("chapter_strategy", {}).get("pacing", "?")
@@ -289,6 +292,10 @@ async def orchestrator_node(state: NovelState) -> dict:
         + orchestrator.cached_tokens,
         "orchestrator_reasoning_tokens": state.get("orchestrator_reasoning_tokens", 0)
         + orchestrator.reasoning_tokens,
+        "orchestrator_model_calls": state.get("orchestrator_model_calls", 0)
+        + orchestrator.model_calls,
+        "orchestrator_latency_seconds": state.get("orchestrator_latency_seconds", 0.0)
+        + _orch_latency,
     }
 
 
@@ -297,6 +304,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
 
     Consumes the evolution improvement plan when present.
     """
+    _w_t0 = time.monotonic()
     target_words = state.get("target_chapter_words", 3000)
     max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
 
@@ -485,6 +493,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         "writer_cached_tokens": state.get("writer_cached_tokens", 0) + writer.cached_tokens,
         "writer_reasoning_tokens": state.get("writer_reasoning_tokens", 0)
         + writer.reasoning_tokens,
+        "writer_latency_seconds": state.get("writer_latency_seconds", 0.0)
+        + (time.monotonic() - _w_t0),
     }
 
 
@@ -505,6 +515,7 @@ async def editor_node(state: NovelState) -> dict:
     full_packet = state.get("context_packet") or {}
     editor_packet = ContextCompiler.for_editor(full_packet) if full_packet else None
 
+    _e_t0 = time.monotonic()
     report, _ = await editor.review(
         chapter_number=state.get("chapter_number", 1),
         draft_content=draft,
@@ -512,12 +523,15 @@ async def editor_node(state: NovelState) -> dict:
         style_report=style_report_dict or None,
         context_packet=editor_packet,
     )
+    _e_latency = time.monotonic() - _e_t0
     token_delta = {
         "editor_input_tokens": state.get("editor_input_tokens", 0) + editor.input_tokens,
         "editor_output_tokens": state.get("editor_output_tokens", 0) + editor.output_tokens,
         "editor_cached_tokens": state.get("editor_cached_tokens", 0) + editor.cached_tokens,
         "editor_reasoning_tokens": state.get("editor_reasoning_tokens", 0)
         + editor.reasoning_tokens,
+        "editor_model_calls": state.get("editor_model_calls", 0) + editor.model_calls,
+        "editor_latency_seconds": state.get("editor_latency_seconds", 0.0) + _e_latency,
     }
     if report.get("unavailable"):
         print("  [Editor] unavailable（空输出，审查维度跳过）")
@@ -548,12 +562,14 @@ async def continuity_node(state: NovelState) -> dict:
     full_packet = state.get("context_packet") or {}
     continuity_packet = ContextCompiler.for_continuity(full_packet) if full_packet else None
 
+    _c_t0 = time.monotonic()
     report, _ = await auditor.audit(
         chapter_number=state.get("chapter_number", 1),
         draft_content=state.get("draft_content", ""),
         narrative_mode=state.get("narrative_mode"),
         context_packet=continuity_packet,
     )
+    _c_latency = time.monotonic() - _c_t0
     token_delta = {
         "continuity_input_tokens": state.get("continuity_input_tokens", 0) + auditor.input_tokens,
         "continuity_output_tokens": state.get("continuity_output_tokens", 0)
@@ -562,6 +578,8 @@ async def continuity_node(state: NovelState) -> dict:
         + auditor.cached_tokens,
         "continuity_reasoning_tokens": state.get("continuity_reasoning_tokens", 0)
         + auditor.reasoning_tokens,
+        "continuity_model_calls": state.get("continuity_model_calls", 0) + auditor.model_calls,
+        "continuity_latency_seconds": state.get("continuity_latency_seconds", 0.0) + _c_latency,
     }
     score = report.get("overall_score", 0)
     if report.get("unavailable"):
@@ -599,6 +617,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "delta": None,
             "focus": None,
             "quality_guard": initial_guard,
+            # C-7 evolution path: reviewers ran this round + writer cost snapshot
+            "reviewers": _reviewers_for(state),
+            "writer_tokens": {
+                "input": state.get("writer_input_tokens", 0),
+                "output": state.get("writer_output_tokens", 0),
+            },
         }
         version_id = _persist_candidate_draft(state, version)
         initial_candidate = candidate_from_state(
@@ -618,6 +642,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
         enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
         evo_tokens = {"input": 0, "output": 0, "cached": 0, "reasoning": 0}
+        evo_model_calls = 0
+        evo_t0 = time.monotonic()
         if not rule_has_instruction and profile.should_enrich_evolution():
             enrich_calls += 1
             agent = None
@@ -636,12 +662,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             except Exception:
                 pass
             if agent is not None:
+                evo_model_calls += agent.model_calls
                 evo_tokens = {
                     "input": agent.input_tokens,
                     "output": agent.output_tokens,
                     "cached": agent.cached_tokens,
                     "reasoning": agent.reasoning_tokens,
                 }
+        evo_latency = time.monotonic() - evo_t0
 
         editor_score = current_scores["editor_overall"]
         continuity_score = current_scores["continuity_overall"]
@@ -669,6 +697,9 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             + evo_tokens["cached"],
             "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
             + evo_tokens["reasoning"],
+            "evolution_model_calls": state.get("evolution_model_calls", 0) + evo_model_calls,
+            "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0)
+            + evo_latency,
         }
 
     # ── Branch B: Has history → Delta comparison ──
@@ -741,6 +772,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     plan = rule_plan
     enrich_calls = state.get("evolution_llm_enrichment_calls", 0)
     evo_tokens = {"input": 0, "output": 0, "cached": 0, "reasoning": 0}
+    evo_model_calls = 0
+    evo_t0 = time.monotonic()
     if not termination and ExecutionProfile.from_state(state).should_enrich_evolution():
         rule_has_instruction = bool(rule_plan.get("primary_instruction", "").strip())
         if not rule_has_instruction:
@@ -761,12 +794,14 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             except Exception:
                 pass
             if agent is not None:
+                evo_model_calls += agent.model_calls
                 evo_tokens = {
                     "input": agent.input_tokens,
                     "output": agent.output_tokens,
                     "cached": agent.cached_tokens,
                     "reasoning": agent.reasoning_tokens,
                 }
+    evo_latency = time.monotonic() - evo_t0
 
     # 4. Build history entry
     new_entry = {
@@ -779,6 +814,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "delta": delta,
         "focus": plan.get("focus_dimensions", []) if plan else [],
         "quality_guard": guard_report,
+        # C-7 evolution path: reviewers ran this round + writer cost snapshot
+        "reviewers": _reviewers_for(state),
+        "writer_tokens": {
+            "input": state.get("writer_input_tokens", 0),
+            "output": state.get("writer_output_tokens", 0),
+        },
     }
 
     result: dict = {
@@ -796,6 +837,9 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         + evo_tokens["cached"],
         "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
         + evo_tokens["reasoning"],
+        "evolution_model_calls": state.get("evolution_model_calls", 0) + evo_model_calls,
+        "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0)
+        + evo_latency,
     }
 
     # 5. Check if new best version
@@ -898,11 +942,13 @@ async def worldbuilding_node(state: NovelState) -> dict:
         existing_entities=existing,
         existing_foreshadowings=existing_fs,
     )
+    _wb_t0 = time.monotonic()
     report, _ = await wb.extract(
         chapter_number=chapter_number,
         draft_content=draft,
         narrative_mode=state.get("narrative_mode"),
     )
+    _wb_latency = time.monotonic() - _wb_t0
     entities = len(report.get("new_entities", []))
     conflicts = len(report.get("conflicts", []))
     new_fs = len(report.get("foreshadowings", []))
@@ -921,6 +967,9 @@ async def worldbuilding_node(state: NovelState) -> dict:
         + wb.cached_tokens,
         "worldbuilding_reasoning_tokens": state.get("worldbuilding_reasoning_tokens", 0)
         + wb.reasoning_tokens,
+        "worldbuilding_model_calls": state.get("worldbuilding_model_calls", 0) + wb.model_calls,
+        "worldbuilding_latency_seconds": state.get("worldbuilding_latency_seconds", 0.0)
+        + _wb_latency,
     }
 
 

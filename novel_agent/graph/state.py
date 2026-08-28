@@ -101,3 +101,16 @@ class NovelState(TypedDict, total=False):
     evolution_output_tokens: int
     evolution_cached_tokens: int
     evolution_reasoning_tokens: int
+    # per-role model_calls（writer 已有 writer_model_calls；C-2 cost attribution）
+    orchestrator_model_calls: int
+    editor_model_calls: int
+    continuity_model_calls: int
+    worldbuilding_model_calls: int
+    evolution_model_calls: int
+    # per-role latency（C-2 cost attribution；秒级，节点 wall time）
+    orchestrator_latency_seconds: float
+    writer_latency_seconds: float
+    editor_latency_seconds: float
+    continuity_latency_seconds: float
+    worldbuilding_latency_seconds: float
+    evolution_latency_seconds: float
