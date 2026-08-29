@@ -8,8 +8,9 @@ from dataclasses import dataclass
 DEFAULT_CHAPTER_WORDS = 3000
 DEFAULT_MAX_TOKENS = 4096
 # reasoning 模型（如 step-3.7-flash）的推理深度；低档压 reasoning 预算，
-# 防止其 max_tokens 里的推理 token 挤空正文 content（实测偶发只出 123 字）
-REASONING_EFFORT = "low"
+# 防止其 max_tokens 里的推理 token 挤空正文 content（实测偶发只出 123 字）。
+# env 可覆盖：SenseNova 用 "none" 完全禁推理；DeepSeek 用 thinking:disabled（LLM_THINKING_DISABLED）。
+REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low")
 NARRATIVE_PACING = (
     "渐进展开，intro充分铺垫(前5-10%)，development多线并进，climax在70-80%处，伏笔长线回收"
 )
