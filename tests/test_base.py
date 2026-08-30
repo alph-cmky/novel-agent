@@ -37,14 +37,28 @@ class TestBuildChatModel:
             is_reasoning=is_reasoning,
         )
 
-    def test_reasoning_model_injects_low_effort(self):
+    def test_reasoning_model_injects_low_effort(self, monkeypatch):
+        monkeypatch.delenv("REASONING_EFFORT", raising=False)
         model = build_chat_model(self._config(is_reasoning=True))
         assert model.reasoning_effort == "low"
 
-    def test_reasoning_model_disables_stream_chunk_timeout(self):
-        # 推理模型长 thinking 阶段 >120s 不吐 chunk，禁用流式超时避免误判
+    def test_reasoning_effort_env_override(self, monkeypatch):
+        monkeypatch.setenv("REASONING_EFFORT", "none")
+        model = build_chat_model(self._config(is_reasoning=True))
+        assert model.reasoning_effort == "none"
+
+    def test_reasoning_model_disables_stream_chunk_timeout(self, monkeypatch):
+        # 真 thinking 模型长 thinking 阶段 >120s 不吐 chunk，禁用流式超时避免误判
+        monkeypatch.setenv("REASONING_EFFORT", "high")
         model = build_chat_model(self._config(is_reasoning=True))
         assert model.stream_chunk_timeout is None
+
+    def test_reasoning_disabled_keeps_chunk_timeout(self, monkeypatch):
+        # effort=none（推理已关）无静默 thinking 阶段：保留 chunk 超时兜底
+        monkeypatch.setenv("REASONING_EFFORT", "none")
+        model = build_chat_model(self._config(is_reasoning=True))
+        assert model.stream_chunk_timeout == 300.0
+        assert model.reasoning_effort == "none"
 
     def test_non_reasoning_model_no_effort(self):
         model = build_chat_model(self._config(is_reasoning=False))

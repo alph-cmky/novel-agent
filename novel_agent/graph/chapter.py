@@ -413,6 +413,30 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
     else:
         content, _ = await writer.write(**write_args)
 
+    # Tool-loop 空输出守卫（跨模型实测：DeepSeek thinking=off 4/20、
+    # SenseNova reasoning=none 多次触发、GLM-4.7 thinking:disabled 2/20——
+    # writer 反复 search_context 不写正文，连 Extension 也为空）。
+    # 主写为空时用无工具 Writer 重试一次：检索内容已由 context_packet 提供，
+    # 空输出多为循环卡死而非信息不足。计数合并进原 writer 保持 cost attribution。
+    if not content.strip():
+        print("  [Writer] 主写空输出（tool 循环），无工具重试...")
+        notools = WriterAgent(
+            config=agent_config,
+            target_chapter_words=target_words,
+            narrative_mode=narrative_mode,
+            narrative_perspective=narrative_perspective,
+        )
+        content, _ = await notools.write(**write_args)
+        writer.model_calls += notools.model_calls
+        writer.input_tokens += notools.input_tokens
+        writer.output_tokens += notools.output_tokens
+        writer.cached_tokens += notools.cached_tokens
+        writer.reasoning_tokens += notools.reasoning_tokens
+        for tool_name, cnt in notools.tool_call_counts.items():
+            writer.tool_call_counts[tool_name] = (
+                writer.tool_call_counts.get(tool_name, 0) + cnt
+            )
+
     # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
     extension_failed = False

@@ -17,7 +17,6 @@ from langchain_core.messages import (
 )
 from langchain_openai import ChatOpenAI
 
-from novel_agent.config import REASONING_EFFORT
 from novel_agent.observability.langfuse import get_handler as _get_lf_handler
 from novel_agent.tools.base import BaseTool, ToolResult
 
@@ -153,8 +152,14 @@ def build_chat_model(config: AgentConfig) -> ChatOpenAI:
         "temperature": config.temperature,
     }
     if config.is_reasoning:
-        kwargs["reasoning_effort"] = REASONING_EFFORT
-        kwargs["stream_chunk_timeout"] = None
+        effort = os.getenv("REASONING_EFFORT", "low")
+        kwargs["reasoning_effort"] = effort
+        # effort=none/off/0（推理已关）无静默 thinking 阶段：保留 chunk 超时兜底，
+        # 供应商流卡死可触发重试而非整章挂死（实测 SenseNova 偶发 stall）；
+        # 真 thinking 模型仍禁用 chunk 超时，避免长思考被误杀
+        kwargs["stream_chunk_timeout"] = (
+            300.0 if effort in ("none", "off", "0") else None
+        )
     elif os.getenv("LLM_THINKING_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     return ChatOpenAI(**kwargs)
