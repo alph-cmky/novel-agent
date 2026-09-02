@@ -31,10 +31,10 @@ def _state(**overrides) -> dict:
                 "continuity": 70,
                 "composite": 70.0,
                 "dimensions": {
-                    "rhythm": 70,
+                    "plot": 70,
                     "ai_flavor": 70,
                     "dialogue": 70,
-                    "logic": 70,
+                    "consistency": 70,
                     "writing": 70,
                 },
                 "style_structure_score": 70,
@@ -45,10 +45,10 @@ def _state(**overrides) -> dict:
         "editor_report": {
             "overall_score": 80,
             "dimensions": {
-                "rhythm": 80,
+                "plot": 80,
                 "ai_flavor": 80,
                 "dialogue": 80,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 80,
             },
         },
@@ -63,7 +63,7 @@ def _state(**overrides) -> dict:
                 "draft_content": "旧正文",
                 "editor_report": {
                     "overall_score": 80,
-                    "dimensions": {"rhythm": 100},
+                    "dimensions": {"plot": 100},
                 },
                 "continuity_report": {"overall_score": 80},
                 "style_report": {
@@ -113,10 +113,10 @@ class TestBestScoresZeroFill:
                     "editor_report": {
                         "overall_score": 60,
                         "dimensions": {
-                            "rhythm": 60,
+                            "plot": 60,
                             "ai_flavor": 60,
                             "dialogue": 60,
-                            "logic": 60,
+                            "consistency": 60,
                             "writing": 60,
                         },
                     },
@@ -471,13 +471,13 @@ class TestEvolutionConditionalRouting:
     def test_required_reviewers_style_only_skips_all(self):
         from novel_agent.services.evolution import required_reviewers
 
-        r = required_reviewers(self._plan(["rhythm", "ai_flavor"]))
+        r = required_reviewers(self._plan(["writing", "ai_flavor"]))
         assert r == {"editor": False, "continuity": False, "worldbuilding": False}
 
-    def test_required_reviewers_logic_scope_runs_editor_continuity_only(self):
+    def test_required_reviewers_consistency_scope_runs_editor_continuity_only(self):
         from novel_agent.services.evolution import required_reviewers
 
-        r = required_reviewers(self._plan(["logic"]))
+        r = required_reviewers(self._plan(["consistency"]))
         assert r["editor"] is True
         assert r["continuity"] is True
         assert r["worldbuilding"] is False
@@ -485,7 +485,7 @@ class TestEvolutionConditionalRouting:
     def test_required_reviewers_world_keywords_rerun_worldbuilding(self):
         from novel_agent.services.evolution import required_reviewers
 
-        r = required_reviewers(self._plan(["logic"], instruction="修正世界观：北墙势力归属变更"))
+        r = required_reviewers(self._plan(["consistency"], instruction="修正世界观：北墙势力归属变更"))
         assert r["worldbuilding"] is True
 
     def test_required_reviewers_unknown_dimension_keeps_worldbuilding(self):
@@ -501,7 +501,7 @@ class TestEvolutionConditionalRouting:
         state = {
             "quality_gate_report": {"passed": False},
             "chapter_number": 3,
-            "evolution_improvement_plan": self._plan(["rhythm"]),
+            "evolution_improvement_plan": self._plan(["writing"]),
         }
         assert route_after_writer(state) == "evolution_orchestrator"
 
@@ -513,12 +513,12 @@ class TestEvolutionConditionalRouting:
         }
         assert route_after_writer(state) == "evolution_editor"
 
-    def test_route_after_editor_logic_scope_keeps_continuity(self):
-        state = {"evolution_improvement_plan": self._plan(["logic"])}
+    def test_route_after_editor_consistency_scope_keeps_continuity(self):
+        state = {"evolution_improvement_plan": self._plan(["consistency"])}
         assert route_after_editor(state) == "evolution_continuity"
 
-    def test_route_after_continuity_logic_scope_skips_worldbuilding(self):
-        state = {"evolution_improvement_plan": self._plan(["logic"])}
+    def test_route_after_continuity_consistency_scope_skips_worldbuilding(self):
+        state = {"evolution_improvement_plan": self._plan(["consistency"])}
         assert route_after_continuity(state) == "evolution_orchestrator"
 
     def test_route_after_continuity_world_scope_runs_worldbuilding(self):
@@ -600,7 +600,7 @@ class TestCandidateStateFootprint:
         best = {
             "version": 1,
             "version_id": "ver-old",
-            "editor_report": {"overall_score": 80, "dimensions": {"rhythm": 80}},
+            "editor_report": {"overall_score": 80, "dimensions": {"plot": 80}},
             "continuity_report": {"overall_score": 80},
             "style_report": {"style_gate": "PASS", "paragraph_structure_score": 60},
             "worldbuilding_report": {},

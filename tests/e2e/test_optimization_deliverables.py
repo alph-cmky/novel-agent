@@ -27,8 +27,8 @@ from novel_agent.graph.chapter import (
     writer_node,
 )
 
-STYLE_PLAN = {"focus_dimensions": ["rhythm", "ai_flavor"], "primary_instruction": "压 AI 味"}
-LOGIC_PLAN = {"focus_dimensions": ["logic"], "primary_instruction": "修因果链"}
+STYLE_PLAN = {"focus_dimensions": ["writing", "ai_flavor"], "primary_instruction": "压 AI 味"}
+LOGIC_PLAN = {"focus_dimensions": ["consistency"], "primary_instruction": "修因果链"}
 
 
 def _writer_mock(content="正" * 3000):
@@ -72,7 +72,7 @@ class ReviewerCounter:
                             "verdict": "pass",
                             "dimensions": {
                                 d: 80
-                                for d in ("rhythm", "ai_flavor", "dialogue", "logic", "writing")
+                                for d in ("consistency", "writing", "ai_flavor", "dialogue", "plot", "instruction", "creativity", "controllability")
                             },
                         },
                         MagicMock(),

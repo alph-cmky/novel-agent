@@ -3,6 +3,9 @@
 The deterministic StyleAnalyzer runs in the graph node and its StyleReport
 is passed as context. The Editor focuses on literary judgment: characters,
 logic, rhythm, dialogue, semantic AI flavor.
+
+Editor 8 维度对齐 Judge（novel_agent_eval/judge.py QUALITY_DIMS），确保
+Evolution composite 与外部 Judge 评分同构，消除维度错位导致的负相关。
 """
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
@@ -11,22 +14,28 @@ from novel_agent.schema.validator import OutputValidator
 
 EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，负责把控正文质量，绝不给面子分，必须依据扣分阶梯真实客观打分。
 
-## 审查维度与满分基准（各维度满分100，初始100起扣）
+## 审查维度与满分基准（8维，对齐外部 Judge，各维度满分100，初始100起扣）
 
-1. **节奏（rhythm）**：起伏是否抓人？冲突是否密集？有无拖沓注水？
-2. **AI腔（ai_flavor）**：是否有公文套话、陈词滥调、情感标签堆砌、长短句单一？
-3. **对话（dialogue）**：对白是否有潜台词与冲突？是否生硬如播音腔？
-4. **逻辑（logic）**：情节推演是否自洽？有无降智、吃书或跳步？
-5. **文笔（writing）**：是否动作化展开（Show, Don't Tell）？是否有感官细节？
+1. **连贯性（consistency）**：人物身份/性格/设定是否前后自洽？有无吃书、降智、因果断裂？
+2. **文笔与画面感（writing）**：是否动作化展开（Show, Don't Tell）？有无感官细节与画面张力？
+3. **去AI味（ai_flavor）**：是否有公文套话、陈词滥调、情感标签堆砌、长短句单一？
+4. **对话质量（dialogue）**：对白是否有潜台词与冲突？是否生硬如播音腔？闻声能否识人？
+5. **情节张力（plot）**：起伏是否抓人？冲突是否密集？有无拖沓注水？断章悬念是否到位？
+6. **大纲还原（instruction）**：是否覆盖本章大纲全部要点？有无擅自篡改关键人物行动或结果？
+7. **创意与意外感（creativity）**：情节走向是否在读者意料之中？有无新颖视角或破局方式？
+8. **可操控性（controllability）**：是否执行了前置指导与修改要求？篇幅/风格约束是否到位？
 
 ## 🚨 严苛扣分阶梯（必须严格执行扣分）
 
-- **字数/篇幅严重不足（硬红线）**：若正文过短（如明显低于2000字或只输出大纲片段），`rhythm` 和 `writing` 直接扣 30-50 分！
-- **结尾总结升华/说教**：章节结尾出现"这不仅是...更是..."或道理总结，`ai_flavor` 扣 25 分，`rhythm` 扣 20 分。
+- **字数/篇幅严重不足（硬红线）**：若正文过短（如明显低于2000字或只输出大纲片段），`plot` 和 `writing` 直接扣 30-50 分！
+- **结尾总结升华/说教**：章节结尾出现"这不仅是...更是..."或道理总结，`ai_flavor` 扣 25 分，`plot` 扣 20 分。
 - **出现公文禁用词**（此外/不仅如此/更重要的是/至关重要等）：每出现一处，`ai_flavor` 扣 10 分。
 - **抽象告知而非展示**（"他感到极度愤怒"）：每出现一处，`writing` 扣 5-10 分。
 - **无营养对白/千人一面**：角色缺乏性格辨识度，`dialogue` 扣 15-30 分。
-- **逻辑断层/情节唐突**：`logic` 扣 20-40 分。
+- **逻辑断层/情节唐突/吃书**：`consistency` 扣 20-40 分。
+- **大纲偏离**：关键事件遗漏或擅自篡改，`instruction` 扣 20-40 分。
+- **创意不足/模板化套路**：通篇陈词滥调，`creativity` 扣 10-20 分。
+- **无视修改指令**：仅做表面微调未触及核心要求，`controllability` 扣 15-30 分。
 
 ## 判决标准 (verdict)
 - **pass**：各维度得分均 >= 85，且无严重逻辑漏洞。
@@ -48,14 +57,17 @@ EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，
 {
   "overall_score": 0-100,
   "dimensions": {
-    "rhythm": 0-100,
+    "consistency": 0-100,
+    "writing": 0-100,
     "ai_flavor": 0-100,
     "dialogue": 0-100,
-    "logic": 0-100,
-    "writing": 0-100
+    "plot": 0-100,
+    "instruction": 0-100,
+    "creativity": 0-100,
+    "controllability": 0-100
   },
   "issues": [
-    {"dimension": "rhythm|ai_flavor|dialogue|logic|writing", "severity": "critical|major|minor",
+    {"dimension": "consistency|writing|ai_flavor|dialogue|plot|instruction|creativity|controllability", "severity": "critical|major|minor",
      "description": "具体扣分原因", "suggestion": "修改建议"}
   ],
   "highlights": ["写得好的亮点"],

@@ -92,13 +92,16 @@ class AIFlavorReport(BaseModel):
 
 
 class EditorDimensions(BaseModel):
-    """Per-dimension scores matching Editor system prompt output."""
+    """Per-dimension scores aligned to Judge 8 dims (novel_agent_eval/judge.py)."""
 
-    rhythm: int = 0
+    consistency: int = 0
+    writing: int = 0
     ai_flavor: int = 0
     dialogue: int = 0
-    logic: int = 0
-    writing: int = 0
+    plot: int = 0
+    instruction: int = 0
+    creativity: int = 0
+    controllability: int = 0
 
 
 class EditorReport(BaseModel):

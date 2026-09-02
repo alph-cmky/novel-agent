@@ -30,12 +30,20 @@ class EvolutionConfig:
     max_new_critical_errors: int = 0
     max_new_major_errors: int = 0
     outline_regression_tolerance: float = 0.0
+    # Conditional revision: skip the v1 rewrite when v0 composite >= gate
+    # (saves the ~55% token overhead on chapters that are already good).
+    # Set to None to disable the gate and always allow one rewrite.
+    v0_gate_score: float | None = 70.0
 
 
 DEFAULT_EVO_CONFIG = EvolutionConfig()
 
-# All 5 editor dimensions
-EDITOR_DIMENSIONS = ("rhythm", "ai_flavor", "dialogue", "logic", "writing")
+# 8 editor dimensions aligned to Judge 8 dims (novel_agent_eval/judge.py QUALITY_DIMS)
+# Old 5维 → 8维 mapping: rhythm→plot, logic→consistency, +instruction/creativity/controllability
+EDITOR_DIMENSIONS = (
+    "consistency", "writing", "ai_flavor", "dialogue",
+    "plot", "instruction", "creativity", "controllability",
+)
 QUALITY_DIMENSIONS = EDITOR_DIMENSIONS + (
     "character_fidelity",
     "timeline_consistency",
@@ -45,7 +53,9 @@ QUALITY_DIMENSIONS = EDITOR_DIMENSIONS + (
 
 # Dimensions measurable by deterministic StyleAnalyzer — revisions scoped to
 # these need no LLM review at all (Writer → StyleAnalyzer → Evolution).
-STYLE_DIMENSIONS = frozenset({"rhythm", "ai_flavor"})
+# writing: StyleAnalyzer covers paragraph structure, Show Don't Tell
+# ai_flavor: StyleAnalyzer covers AI flavor detection (禁用词/陈词滥调)
+STYLE_DIMENSIONS = frozenset({"writing", "ai_flavor"})
 
 # Revision-scope keywords that imply canon/world changes → Worldbuilding rerun.
 WORLD_SCOPE_KEYWORDS = ("世界观", "设定", "实体", "伏笔", "地点", "组织", "阵营", "宗门")
@@ -127,7 +137,7 @@ def extract_scores(state: dict) -> dict:
         {
             "editor_overall": int,
             "continuity_overall": int,
-            "dimensions": {"rhythm": int, "ai_flavor": int, ...},
+            "dimensions": {"consistency": int, "writing": int, "ai_flavor": int, ...},
             "style_structure_score": float,  # deterministic, 0 LLM
             "style_gate": str,               # PASS / WARNING / FAIL
         }
@@ -615,13 +625,16 @@ def _style_targeting(style_gate_val: str, style_score: float) -> tuple[list[str]
 
 
 def _dim_label(dim: str) -> str:
-    """Human-readable dimension label."""
+    """Human-readable dimension label (aligned to Judge 8 dims)."""
     labels = {
-        "rhythm": "节奏",
+        "consistency": "连贯性",
+        "writing": "文笔",
         "ai_flavor": "AI味",
         "dialogue": "对话",
-        "logic": "逻辑",
-        "writing": "文笔",
+        "plot": "情节",
+        "instruction": "大纲还原",
+        "creativity": "创意",
+        "controllability": "可操控",
     }
     return labels.get(dim, dim)
 
@@ -629,9 +642,13 @@ def _dim_label(dim: str) -> str:
 def _dim_suggestions(focus: list[str]) -> list[str]:
     """Generate concrete suggestions per dimension."""
     suggestions = {
-        "rhythm": [
-            "调整句子长短交替，避免连续三个同长度句子",
-            "检查场景切换频率，关键场景适当放慢节奏",
+        "consistency": [
+            "检查情节因果链是否完整，避免逻辑跳跃",
+            "确认角色行为动机与性格设定一致，无吃书",
+        ],
+        "writing": [
+            "减少过度修饰的长句，增加白描和感官细节",
+            "用展示而非告知的方式表达情感",
         ],
         "ai_flavor": [
             "检查并替换AI高频词：此外、不仅如此、至关重要",
@@ -641,13 +658,21 @@ def _dim_suggestions(focus: list[str]) -> list[str]:
             "增加角色间的口语化互动，每段对话后跟简短动作描写",
             "确保每个角色有独特的说话风格和口头禅",
         ],
-        "logic": [
-            "检查情节因果链是否完整，避免逻辑跳跃",
-            "确认角色行为动机与性格设定一致",
+        "plot": [
+            "调整句子长短交替，避免连续三个同长度句子",
+            "检查场景切换频率，关键场景适当放慢节奏",
         ],
-        "writing": [
-            "减少过度修饰的长句，增加白描和感官细节",
-            "用展示而非告知的方式表达情感",
+        "instruction": [
+            "核对本章大纲要点是否全部覆盖，无遗漏",
+            "确保关键事件按大纲顺序展开，不擅自篡改",
+        ],
+        "creativity": [
+            "寻找意料之外但合情合理的转折点",
+            "避免模板化套路，尝试新颖的切入视角",
+        ],
+        "controllability": [
+            "落实修改意见中的核心要求，不回避重点",
+            "确保篇幅/风格约束被执行到位",
         ],
     }
     result = []
@@ -665,7 +690,7 @@ def _avoid_patterns(focus: list[str], dim_deltas: dict) -> list[str]:
         avoid.append("过度使用形容词和比喻")
     if "dialogue" in focus or dim_deltas.get("dialogue", 0) < -3:
         avoid.append("用大段叙述替代对话推进剧情")
-    if "rhythm" in focus or dim_deltas.get("rhythm", 0) < -3:
+    if "plot" in focus or dim_deltas.get("plot", 0) < -3:
         avoid.append("重复使用简短的疑问句作为节奏工具")
     return avoid
 

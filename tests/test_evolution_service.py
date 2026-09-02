@@ -1,4 +1,4 @@
-"""Tests for the evolution core logic — Delta, termination, improvement plans."""
+"""Tests for the evolution core consistency — Delta, termination, improvement plans."""
 
 from novel_agent.schema.enums import EvolutionAction
 from novel_agent.services.evolution import (
@@ -23,10 +23,10 @@ class TestExtractScores:
             "editor_report": {
                 "overall_score": 72,
                 "dimensions": {
-                    "rhythm": 70,
+                    "plot": 70,
                     "ai_flavor": 65,
                     "dialogue": 75,
-                    "logic": 80,
+                    "consistency": 80,
                     "writing": 70,
                 },
             },
@@ -35,7 +35,7 @@ class TestExtractScores:
         scores = extract_scores(state)
         assert scores["editor_overall"] == 72
         assert scores["continuity_overall"] == 80
-        assert scores["dimensions"]["rhythm"] == 70
+        assert scores["dimensions"]["plot"] == 70
         assert scores["dimensions"]["ai_flavor"] == 65
 
     def test_handles_empty_state(self):
@@ -46,11 +46,11 @@ class TestExtractScores:
 
     def test_handles_missing_dimensions(self):
         state = {
-            "editor_report": {"overall_score": 80, "dimensions": {"rhythm": 70}},
+            "editor_report": {"overall_score": 80, "dimensions": {"plot": 70}},
             "continuity_report": {"overall_score": 85},
         }
         scores = extract_scores(state)
-        assert scores["dimensions"]["rhythm"] == 70
+        assert scores["dimensions"]["plot"] == 70
         assert scores["dimensions"]["ai_flavor"] == 0  # missing → 0
 
     def test_unavailable_continuity_neutralized_to_editor(self):
@@ -106,10 +106,10 @@ class TestCompositeScore:
             "editor_overall": 80,
             "continuity_overall": 90,
             "dimensions": {
-                "rhythm": 75,
+                "plot": 75,
                 "ai_flavor": 70,
                 "dialogue": 85,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 75,
             },
             "style_structure_score": 77,
@@ -124,10 +124,10 @@ class TestCompositeScore:
             "editor_overall": 80,
             "continuity_overall": 90,
             "dimensions": {
-                "rhythm": 75,
+                "plot": 75,
                 "ai_flavor": 70,
                 "dialogue": 85,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 75,
             },
             "style_structure_score": 77,
@@ -165,10 +165,10 @@ class TestComputeDelta:
             "editor_overall": 80,
             "continuity_overall": 85,
             "dimensions": {
-                "rhythm": 75,
+                "plot": 75,
                 "ai_flavor": 70,
                 "dialogue": 80,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 75,
             },
         }
@@ -176,10 +176,10 @@ class TestComputeDelta:
             "editor_overall": 70,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 65,
+                "plot": 65,
                 "ai_flavor": 60,
                 "dialogue": 75,
-                "logic": 78,
+                "consistency": 78,
                 "writing": 70,
             },
         }
@@ -193,10 +193,10 @@ class TestComputeDelta:
             "editor_overall": 75,
             "continuity_overall": 80,
             "dimensions": {
-                "rhythm": 70,
+                "plot": 70,
                 "ai_flavor": 75,
                 "dialogue": 60,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 65,
             },
         }
@@ -204,10 +204,10 @@ class TestComputeDelta:
             "editor_overall": 72,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 68,
+                "plot": 68,
                 "ai_flavor": 70,
                 "dialogue": 68,
-                "logic": 82,
+                "consistency": 82,
                 "writing": 68,
             },
         }
@@ -220,10 +220,10 @@ class TestComputeDelta:
             "editor_overall": 68,
             "continuity_overall": 78,
             "dimensions": {
-                "rhythm": 65,
+                "plot": 65,
                 "ai_flavor": 62,
                 "dialogue": 60,
-                "logic": 75,
+                "consistency": 75,
                 "writing": 62,
             },
         }
@@ -231,10 +231,10 @@ class TestComputeDelta:
             "editor_overall": 75,
             "continuity_overall": 82,
             "dimensions": {
-                "rhythm": 72,
+                "plot": 72,
                 "ai_flavor": 70,
                 "dialogue": 68,
-                "logic": 80,
+                "consistency": 80,
                 "writing": 68,
             },
         }
@@ -245,7 +245,10 @@ class TestComputeDelta:
 
 class TestDecideTermination:
     def _scores(self, editor=80, continuity=85, **dims):
-        dims_dict = {"rhythm": 75, "ai_flavor": 70, "dialogue": 80, "logic": 80, "writing": 75}
+        dims_dict = {
+            "consistency": 80, "writing": 75, "ai_flavor": 70, "dialogue": 80,
+            "plot": 75, "instruction": 80, "creativity": 70, "controllability": 80,
+        }
         dims_dict.update(dims)
         return {
             "editor_overall": editor,
@@ -300,7 +303,7 @@ class TestDecideTermination:
     def test_convergence(self):
         """All |delta| < threshold → converged."""
         reason, _ = decide_termination(
-            delta=self._delta(rhythm=1, ai_flavor=2, dialogue=-1, logic=2, writing=-2),
+            delta=self._delta(plot=1, ai_flavor=2, dialogue=-1, consistency=2, writing=-2),
             current_scores=self._scores(),
             best_scores=self._scores(),
             history=[],
@@ -316,11 +319,14 @@ class TestDecideTermination:
             current_scores=self._scores(
                 editor=95,
                 continuity=92,
-                rhythm=92,
+                consistency=95,
+                writing=94,
                 ai_flavor=93,
                 dialogue=91,
-                logic=95,
-                writing=94,
+                plot=92,
+                instruction=92,
+                creativity=92,
+                controllability=92,
             ),
             best_scores=self._scores(),
             history=[],
@@ -375,17 +381,17 @@ class TestDecideTermination:
         ``'NoneType' object has no attribute 'get'`` once history reached
         plateau_rounds (2) entries.
         """
-        flat = self._delta(rhythm=1, ai_flavor=1, dialogue=1, logic=1, writing=1)
+        flat = self._delta(plot=1, ai_flavor=1, dialogue=1, consistency=1, writing=1)
         dims = self._scores()["dimensions"]
         history = [
             {"v": 0, "delta": None, "editor": 80, "continuity": 85, "dimensions": dims},
             {"v": 1, "delta": flat, "editor": 80, "continuity": 85, "dimensions": dims},
             {"v": 2, "delta": flat, "editor": 80, "continuity": 85, "dimensions": dims},
         ]
-        # Current delta is NOT flat (rhythm=5) so convergence doesn't short-circuit;
+        # Current delta is NOT flat (plot=5) so convergence doesn't short-circuit;
         # this lets the plateau branch actually run over the history.
         reason, _ = decide_termination(
-            delta=self._delta(rhythm=5, ai_flavor=1, dialogue=1, logic=1, writing=1),
+            delta=self._delta(plot=5, ai_flavor=1, dialogue=1, consistency=1, writing=1),
             current_scores=self._scores(),
             best_scores=self._scores(),
             history=history,
@@ -396,7 +402,10 @@ class TestDecideTermination:
 
 class TestBuildImprovementPlan:
     def _scores(self, **dims):
-        dims_dict = {"rhythm": 70, "ai_flavor": 65, "dialogue": 75, "logic": 80, "writing": 70}
+        dims_dict = {
+            "consistency": 80, "writing": 70, "ai_flavor": 65, "dialogue": 75,
+            "plot": 70, "instruction": 80, "creativity": 65, "controllability": 80,
+        }
         dims_dict.update(dims)
         return {"editor_overall": 72, "continuity_overall": 80, "dimensions": dims_dict}
 
@@ -408,23 +417,23 @@ class TestBuildImprovementPlan:
 
     def test_with_delta_focuses_on_regressed(self):
         """Delta with regressed dimensions → focus on them."""
-        current = self._scores(rhythm=68, ai_flavor=75)
+        current = self._scores(plot=68, ai_flavor=75)
         delta = {
             "editor": 3,
             "continuity": 2,
-            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
+            "dimensions": {"plot": -5, "ai_flavor": 10, "dialogue": 2, "consistency": 2, "writing": 1},
             "trend": "mixed",
         }
         plan = build_improvement_plan_rule(current, delta=delta)
-        assert "rhythm" in plan["focus_dimensions"]  # regressed
+        assert "plot" in plan["focus_dimensions"]  # regressed
 
     def test_preserve_improved_dimensions(self):
         """Dimensions that improved >+3 should be in preserve."""
-        current = self._scores(rhythm=68, ai_flavor=80)
+        current = self._scores(plot=68, ai_flavor=80)
         delta = {
             "editor": 5,
             "continuity": 2,
-            "dimensions": {"rhythm": -5, "ai_flavor": 10, "dialogue": 2, "logic": 2, "writing": 1},
+            "dimensions": {"plot": -5, "ai_flavor": 10, "dialogue": 2, "consistency": 2, "writing": 1},
             "trend": "mixed",
         }
         plan = build_improvement_plan_rule(current, delta=delta)
@@ -466,11 +475,8 @@ def _candidate_state(content: str, *, critical: int = 0, outline: float = 1.0):
             "overall_score": 80,
             "outline_coverage": outline,
             "dimensions": {
-                "rhythm": 80,
-                "ai_flavor": 80,
-                "dialogue": 80,
-                "logic": 80,
-                "writing": 80,
+                "consistency": 80, "writing": 80, "ai_flavor": 80, "dialogue": 80,
+                "plot": 80, "instruction": 80, "creativity": 80, "controllability": 80,
             },
         },
         "continuity_report": {

@@ -49,11 +49,14 @@ class WriterAgent(BaseAgent):
     name = "writer"
 
     _DIMENSION_LABELS = {
-        "rhythm": "节奏",
+        "consistency": "连贯性",
+        "writing": "文笔",
         "ai_flavor": "AI味",
         "dialogue": "对话",
-        "logic": "逻辑",
-        "writing": "文笔",
+        "plot": "情节",
+        "instruction": "大纲还原",
+        "creativity": "创意",
+        "controllability": "可操控",
     }
 
     def __init__(

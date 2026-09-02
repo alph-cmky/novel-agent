@@ -11,6 +11,7 @@ import json as _json
 import re
 import sqlite3
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -627,6 +628,11 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
     version = state.get("evolution_version", 0)
     current_scores = extract_scores(state)
     evo_config = EvolutionConfig(max_rounds=state.get("evolution_max_rounds", 5))
+    # Conditional revision gate: when v0 composite is already good, skip the
+    # v1 rewrite entirely (saves ~55% token overhead on strong chapters).
+    v0_gate = state.get("evolution_v0_gate_score")
+    if v0_gate is not None and isinstance(v0_gate, (int, float)) and v0_gate >= 0:
+        evo_config = replace(evo_config, v0_gate_score=float(v0_gate))
 
     # ── Branch A: First round (no history) ──
     if not state.get("evolution_history"):
@@ -697,9 +703,24 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
         editor_score = current_scores["editor_overall"]
         continuity_score = current_scores["continuity_overall"]
+        v0_composite = entry["composite"]
+
+        # Conditional revision gate: v0 already good → skip v1 rewrite
+        v0_gate_termination = ""
+        if (
+            evo_config.v0_gate_score is not None
+            and v0_composite >= evo_config.v0_gate_score
+        ):
+            v0_gate_termination = "v0_gate"
+            print(
+                f"  [EvoOrchestrator] v0 composite={v0_composite:.1f} "
+                f">= gate={evo_config.v0_gate_score} → 跳过重写"
+            )
+
+        status = "v0_gate 跳过重写" if v0_gate_termination else "首轮，记录历史，生成改进计划"
         print(
             f"  [EvoOrchestrator] v{version} E:{editor_score} C:{continuity_score} "
-            f"→ 首轮，记录历史，生成改进计划 focus={plan.get('focus_dimensions', [])}"
+            f"→ {status} focus={plan.get('focus_dimensions', [])}"
         )
 
         return {
@@ -709,8 +730,8 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_candidates": [initial_candidate],
             "evolution_best_candidate_version": version,
             "quality_guard_report": initial_guard,
-            "evolution_improvement_plan": plan,
-            "evolution_termination": "",
+            "evolution_improvement_plan": plan if not v0_gate_termination else {},
+            "evolution_termination": v0_gate_termination,
             "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
             "evolution_llm_enrichment_calls": enrich_calls,
             "evolution_input_tokens": state.get("evolution_input_tokens", 0)
@@ -1080,6 +1101,7 @@ def human_review_node(state: NovelState) -> dict:
         "evolution_version": 0,
         "evolution_history": [],
         "evolution_max_rounds": 2,
+        "evolution_v0_gate_score": 70.0,
         "evolution_termination": "",
     }
 

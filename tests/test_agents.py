@@ -71,7 +71,7 @@ class TestEditorReview:
         assert "字数/篇幅严重不足" in prompt
         assert "结尾总结升华" in prompt
         assert "出现公文禁用词" in prompt
-        assert "rhythm" in prompt and "ai_flavor" in prompt and "dialogue" in prompt
+        assert "plot" in prompt and "ai_flavor" in prompt and "dialogue" in prompt
 
 
 class TestOrchestratorPromptHelpers:

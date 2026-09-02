@@ -187,12 +187,12 @@ class TestInvalidInput:
 class TestParseValidated:
     def test_editor_coerces_score_string_to_int(self):
         text = (
-            '{"overall_score": "85", "dimensions": {"rhythm": "70"},'
+            '{"overall_score": "85", "dimensions": {"plot": "70"},'
             ' "issues": [], "verdict": "pass"}'
         )
         report = parse_validated("editor", text)
         assert report["overall_score"] == 85
-        assert report["dimensions"]["rhythm"] == 70
+        assert report["dimensions"]["plot"] == 70
 
     def test_editor_coerces_single_issue_to_list(self):
         text = '{"overall_score": 80, "issues": {"description": "x"}, "verdict": "pass"}'

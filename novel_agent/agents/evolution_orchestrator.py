@@ -90,7 +90,7 @@ class EvolutionOrchestratorAgent(BaseAgent):
         """
         # Build context for the LLM
         dims = current_scores.get("dimensions", {})
-        dim_keys = ["rhythm", "ai_flavor", "dialogue", "logic", "writing"]
+        dim_keys = ["consistency", "writing", "ai_flavor", "dialogue", "plot", "instruction", "creativity", "controllability"]
         dim_summary = ", ".join(f"{self._dim_label(d)}:{dims.get(d, 0)}" for d in dim_keys)
         editor_score = current_scores.get("editor_overall", 0)
         continuity_score = current_scores.get("continuity_overall", 0)
@@ -99,7 +99,7 @@ class EvolutionOrchestratorAgent(BaseAgent):
         if delta:
             dim_deltas = delta.get("dimensions", {})
             delta_parts = []
-            for d in ["rhythm", "ai_flavor", "dialogue", "logic", "writing"]:
+            for d in ["consistency", "writing", "ai_flavor", "dialogue", "plot", "instruction", "creativity", "controllability"]:
                 v = dim_deltas.get(d, 0)
                 sign = "+" if v > 0 else ""
                 delta_parts.append(f"{self._dim_label(d)}{sign}{v}")
@@ -184,10 +184,13 @@ class EvolutionOrchestratorAgent(BaseAgent):
     @staticmethod
     def _dim_label(dim: str) -> str:
         labels = {
-            "rhythm": "节奏",
+            "consistency": "连贯性",
+            "writing": "文笔",
             "ai_flavor": "AI味",
             "dialogue": "对话",
-            "logic": "逻辑",
-            "writing": "文笔",
+            "plot": "情节",
+            "instruction": "大纲还原",
+            "creativity": "创意",
+            "controllability": "可操控",
         }
         return labels.get(dim, dim)

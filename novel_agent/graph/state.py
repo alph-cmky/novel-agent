@@ -50,6 +50,7 @@ class NovelState(TypedDict, total=False):
     # ── 进化控制 ──
     evolution_max_rounds: int  # 最大轮次，默认 5
     evolution_convergence_threshold: float  # 收敛阈值，默认 3.0
+    evolution_v0_gate_score: float  # v0 门控阈值，>= 此分跳过重写（<0 禁用）
     evolution_round: int  # 当前轮次 (0-based)
     evolution_version: int  # 当前版本号
 
