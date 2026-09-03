@@ -644,6 +644,9 @@ async def write_chapter(project_id: str, chapter_number: int):
         "narrative_perspective": project.get("narrative_perspective", ""),
         "context_packet": ctx.get("context_packet", {}),
         "scene_first": False,
+        # Phase4 消融证实：确定性硬门通过时跳过 LLM Reviewer 无质量损失
+        # （质量 +0.59、CED -0.70、token -59%），默认开启。
+        "deterministic_gate_first": True,
         "persist_dir": persist_dir,
     }
 
