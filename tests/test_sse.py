@@ -124,19 +124,18 @@ def test_create_sse_stream_persists_waiting_review_run(tmp_path):
     store = SessionStore()
     session_id = store.create(_LifecycleGraph(state), asyncio.Queue())
 
-    with patch("novel_agent.api.sse.create_trace"):
-        events = _run_stream(
-            create_sse_stream(
-                store,
-                session_id,
-                store.get(session_id)["graph"],
-                {"writing_run_id": run["id"]},
-                {"configurable": {}},
-                mgr,
-                project_id,
-                1,
-            )
+    events = _run_stream(
+        create_sse_stream(
+            store,
+            session_id,
+            store.get(session_id)["graph"],
+            {"writing_run_id": run["id"]},
+            {"configurable": {}},
+            mgr,
+            project_id,
+            1,
         )
+    )
 
     assert any("review_required" in event for event in events)
     assert mgr.get_writing_run(run["id"])["status"] == "waiting_review"
@@ -151,19 +150,18 @@ def test_create_sse_stream_marks_run_failed(tmp_path):
         _LifecycleGraph(None, RuntimeError("generation failed")), asyncio.Queue()
     )
 
-    with patch("novel_agent.api.sse.create_trace"):
-        events = _run_stream(
-            create_sse_stream(
-                store,
-                session_id,
-                store.get(session_id)["graph"],
-                {"writing_run_id": run["id"]},
-                {"configurable": {}},
-                mgr,
-                project_id,
-                1,
-            )
+    events = _run_stream(
+        create_sse_stream(
+            store,
+            session_id,
+            store.get(session_id)["graph"],
+            {"writing_run_id": run["id"]},
+            {"configurable": {}},
+            mgr,
+            project_id,
+            1,
         )
+    )
 
     assert any("error" in event for event in events)
     assert mgr.get_writing_run(run["id"])["status"] == "failed"

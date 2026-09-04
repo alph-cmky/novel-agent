@@ -1,17 +1,17 @@
-"""Observability integration — LangFuse tracing for LLM calls."""
+"""Observability — chapter traces (optional Langfuse)."""
 
-from novel_agent.observability.langfuse import (
-    create_trace,
-    get_handler,
-    is_configured,
-    score_trace,
-    set_handler,
+from novel_agent.observability.tracing import (
+    chapter_trace,
+    current_handle,
+    flush_tracing,
+    require_tracing_config,
+    tracing_requested,
 )
 
 __all__ = [
-    "create_trace",
-    "get_handler",
-    "is_configured",
-    "score_trace",
-    "set_handler",
+    "chapter_trace",
+    "current_handle",
+    "flush_tracing",
+    "require_tracing_config",
+    "tracing_requested",
 ]

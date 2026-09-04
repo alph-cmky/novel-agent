@@ -17,7 +17,7 @@ from langchain_core.messages import (
 )
 from langchain_openai import ChatOpenAI
 
-from novel_agent.observability.langfuse import get_handler as _get_lf_handler
+from novel_agent.observability.tracing import current_handle
 from novel_agent.tools.base import BaseTool, ToolResult
 
 
@@ -157,9 +157,7 @@ def build_chat_model(config: AgentConfig) -> ChatOpenAI:
         # effort=none/off/0（推理已关）无静默 thinking 阶段：保留 chunk 超时兜底，
         # 供应商流卡死可触发重试而非整章挂死（实测 SenseNova 偶发 stall）；
         # 真 thinking 模型仍禁用 chunk 超时，避免长思考被误杀
-        kwargs["stream_chunk_timeout"] = (
-            300.0 if effort in ("none", "off", "0") else None
-        )
+        kwargs["stream_chunk_timeout"] = 300.0 if effort in ("none", "off", "0") else None
     elif os.getenv("LLM_THINKING_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     return ChatOpenAI(**kwargs)
@@ -266,13 +264,10 @@ class BaseAgent:
         )
 
         config: dict[str, Any] = {}
-        lf_handler = _get_lf_handler()
-        if lf_handler:
-            config["callbacks"] = [lf_handler]
 
         # step-3.7-flash 等模型偶发返回空 content（无 tool_calls），重试最多 3 次
         response: AIMessage | None = None
-        for _ in range(3):
+        for attempt in range(3):
             self.model_calls += 1
             response = await bound.ainvoke(lc_messages, config=config)
             in_tok, out_tok, cached_tok, reasoning_tok = _extract_token_usage(response)
@@ -282,6 +277,10 @@ class BaseAgent:
             self.reasoning_tokens += reasoning_tok
             if response.content or getattr(response, "tool_calls", None):
                 break
+            current_handle().event(
+                "writer.empty_retry",
+                {"attempt": attempt + 1, "after_tools": bool(self.tool_call_counts)},
+            )
         assert response is not None  # 循环至少执行一次
         _warn_undeclared_reasoning(self.config, getattr(response, "reasoning_content", "") or "")
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -322,9 +321,6 @@ class BaseAgent:
 
         model = build_chat_model(self.config)
         config: dict[str, Any] = {}
-        lf_handler = _get_lf_handler()
-        if lf_handler:
-            config["callbacks"] = [lf_handler]
 
         self.model_calls += 1
         async for chunk in model.astream(lc_messages, config=config):
@@ -396,10 +392,20 @@ class BaseAgent:
                 except json.JSONDecodeError:
                     tool_args = {}
 
+            result: ToolResult | None = None
+            args = tool_args if isinstance(tool_args, dict) else {}
             try:
-                result: ToolResult = await tool.execute(**tool_args)
+                span = current_handle().tool_span(tool_name, args)
+                with span as tool_obs:
+                    try:
+                        result = await tool.execute(**tool_args)
+                    except Exception as exc:
+                        result = ToolResult(success=False, error=str(exc))
+                    tool_obs.update(output={"success": result.success, "error": result.error})
             except Exception as exc:
-                result = ToolResult(success=False, error=str(exc))
+                if result is None:
+                    result = ToolResult(success=False, error=str(exc))
+            assert result is not None
 
             results.append(
                 {

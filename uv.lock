@@ -1315,7 +1315,6 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
-    { name = "langfuse" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "onnxruntime" },
@@ -1330,6 +1329,9 @@ dependencies = [
 hosted = [
     { name = "pgvector" },
     { name = "psycopg2-binary" },
+]
+observability = [
+    { name = "langfuse" },
 ]
 
 [package.dev-dependencies]
@@ -1349,7 +1351,7 @@ requires-dist = [
     { name = "langchain", specifier = ">=0.3.0" },
     { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.3.0" },
-    { name = "langfuse", specifier = ">=3.0.0" },
+    { name = "langfuse", marker = "extra == 'observability'", specifier = ">=4.0.0" },
     { name = "langgraph", specifier = ">=0.6.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
     { name = "onnxruntime", specifier = "<=1.23.2" },
@@ -1361,7 +1363,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
-provides-extras = ["hosted"]
+provides-extras = ["hosted", "observability"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -7,11 +7,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from langgraph.errors import GraphInterrupt
-from langgraph.types import Command
-
 from novel_agent.api.run_service import ChapterRunService
-from novel_agent.observability.langfuse import create_trace, score_trace
+from novel_agent.graph.runner import (
+    GRAPH_INTERRUPT_EVENT,
+    chapter_run_context,
+    finalize_chapter,
+    iterate_chapter_events,
+)
 from novel_agent.schema.enums import ChapterStatus, RunStatus
 from novel_agent.storage.manager import ProjectManager
 
@@ -220,16 +222,8 @@ async def create_sse_stream(
     """Run the writing graph and stream events via SSE.
 
     Uses a background drain task to stream writer chunks in real-time,
-    and graph.astream_events() for node-level progress events.
+    and run_chapter event iteration for node-level progress events.
     """
-    # Create LangFuse trace — sets contextvar handler so all agent
-    # LLM calls in the graph are automatically grouped under this trace.
-    create_trace(
-        name=f"chapter_{chapter_number}",
-        project_id=project_id,
-        chapter_number=chapter_number,
-    )
-
     store.set_context(session_id, project_id, chapter_number)
     store.set_config(session_id, config)
     queue = store.get_queue(session_id)
@@ -251,41 +245,45 @@ async def create_sse_stream(
             store.set_context(session_id, project_id, chapter_number, run_id)
         yield _sse_event("start", {"message": "开始写作..."})
 
-        async for event in graph.astream_events(initial_state, config, version="v2"):
-            # Flush writer chunks
+        interrupt_payload: dict | None = None
+        async with chapter_run_context(graph, config=config, state=initial_state) as ctx:
+            async for event in iterate_chapter_events(graph, ctx.payload, ctx.config):
+                async for s in _flush_output(output):
+                    yield s
+                if event.get("event") == GRAPH_INTERRUPT_EVENT:
+                    data = event.get("data")
+                    interrupt_payload = data if isinstance(data, dict) else {}
+                    continue
+                kind = event["event"]
+                name = event.get("name", "")
+                if kind == "on_chain_start" and name in _NODE_LABELS:
+                    current_node = name
+                    if run_id:
+                        mgr.update_writing_run(
+                            run_id,
+                            status=RunStatus.RUNNING.value,
+                            current_node=name,
+                        )
+                    yield await _make_progress_event(name, "running")
+                elif kind == "on_chain_end" and name in _NODE_LABELS:
+                    yield await _make_progress_event(name, "done", event)
+
+            running.clear()
+            await drain_task
             async for s in _flush_output(output):
                 yield s
+            async for s in _drain_queue(queue):
+                yield s
 
-            kind = event["event"]
-            name = event.get("name", "")
-
-            if kind == "on_chain_start" and name in _NODE_LABELS:
-                current_node = name
-                if run_id:
-                    mgr.update_writing_run(
-                        run_id,
-                        status=RunStatus.RUNNING.value,
-                        current_node=name,
-                    )
-                yield await _make_progress_event(name, "running")
-            elif kind == "on_chain_end" and name in _NODE_LABELS:
-                yield await _make_progress_event(name, "done", event)
-
-        # Final flush
-        running.clear()
-        await drain_task
-        async for s in _flush_output(output):
-            yield s
-        async for s in _drain_queue(queue):
-            yield s
-
-        # Check if graph was interrupted (human_review called interrupt())
-        # Note: GraphInterrupt may not raise in all LangGraph versions with
-        # astream_events v2, so we check get_state() after the loop.
-        final_state = await graph.aget_state(config)
-        if final_state and final_state.next:
-            # Graph is paused at human_review — build payload from state
-            vals = final_state.values or {}
+            outcome = await finalize_chapter(
+                graph,
+                ctx.config,
+                interrupt_payload=interrupt_payload,
+                fallback_trace_id=ctx.trace_id,
+            )
+            ctx.handle.record_outcome(outcome.values, interrupted=outcome.interrupted)
+        if outcome.interrupted:
+            vals = outcome.values
             if run_id:
                 mgr.update_writing_run(
                     run_id,
@@ -302,47 +300,16 @@ async def create_sse_stream(
                     "detail": None,
                 },
             )
-            yield _sse_event("review_required", _review_payload(vals, chapter_number))
-        else:
-            # Graph completed normally
-            if final_state and final_state.values:
-                _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
-                _push_quality_scores(final_state.values)
-            status = (
-                "approved"
-                if (final_state and final_state.values or {}).get("human_approved")
-                else "draft"
+            yield _sse_event(
+                "review_required",
+                outcome.interrupt_payload or _review_payload(vals, chapter_number),
             )
+        else:
+            if outcome.values:
+                _save_chapter_result(mgr, project_id, chapter_number, outcome.values)
+            status = "approved" if outcome.values.get("human_approved") else "draft"
             yield _sse_event("done", {"chapter_content": "", "status": status})
             store.remove(session_id)
-
-    except GraphInterrupt as gi:
-        running.clear()
-        await drain_task
-        run_id = initial_state.get("writing_run_id")
-        if run_id:
-            mgr.update_writing_run(
-                run_id,
-                status=RunStatus.WAITING_REVIEW.value,
-                current_node="human_review",
-            )
-        async for s in _flush_output(output):
-            yield s
-        async for s in _drain_queue(queue):
-            yield s
-
-        interrupt_data = gi.args[0] if gi.args else {}
-        yield _sse_event(
-            "progress",
-            {
-                "node": "human_review",
-                "label": "人工审批",
-                "status": "running",
-                "score": None,
-                "detail": None,
-            },
-        )
-        yield _sse_event("review_required", interrupt_data)
 
     except Exception as e:
         running.clear()
@@ -380,13 +347,6 @@ async def resume_graph(
         yield _sse_event("error", {"message": "Session not found"})
         return
 
-    if project_id and chapter_number:
-        create_trace(
-            name=f"chapter_{chapter_number}",
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
-
     graph = session["graph"]
     config = session.get("config", {})
     run_id = session.get("run_id")
@@ -408,40 +368,47 @@ async def resume_graph(
         yield _sse_event("start", {"message": "继续写作..."})
         yield await _make_progress_event("human_review", "done")
 
-        async for event in graph.astream_events(Command(resume=feedback), config, version="v2"):
+        interrupt_payload: dict | None = None
+        async with chapter_run_context(graph, config=config, resume=feedback) as ctx:
+            async for event in iterate_chapter_events(graph, ctx.payload, ctx.config):
+                async for s in _flush_output(output):
+                    yield s
+                if event.get("event") == GRAPH_INTERRUPT_EVENT:
+                    data = event.get("data")
+                    interrupt_payload = data if isinstance(data, dict) else {}
+                    continue
+                kind = event["event"]
+                name = event.get("name", "")
+                if kind == "on_chain_start" and name in _NODE_LABELS:
+                    current_node = name
+                    if run_id and mgr:
+                        mgr.update_writing_run(
+                            run_id,
+                            status=RunStatus.RUNNING.value,
+                            current_node=name,
+                        )
+                    yield await _make_progress_event(name, "running")
+                elif kind == "on_chain_end" and name in _NODE_LABELS:
+                    yield await _make_progress_event(name, "done", event)
+
+            running.clear()
+            if drain_task:
+                await drain_task
             async for s in _flush_output(output):
                 yield s
+            if queue:
+                async for s in _drain_queue(queue):
+                    yield s
 
-            kind = event["event"]
-            name = event.get("name", "")
-
-            if kind == "on_chain_start" and name in _NODE_LABELS:
-                current_node = name
-                if run_id and mgr:
-                    mgr.update_writing_run(
-                        run_id,
-                        status=RunStatus.RUNNING.value,
-                        current_node=name,
-                    )
-                yield await _make_progress_event(name, "running")
-            elif kind == "on_chain_end" and name in _NODE_LABELS:
-                yield await _make_progress_event(name, "done", event)
-
-        running.clear()
-        if drain_task:
-            await drain_task
-        async for s in _flush_output(output):
-            yield s
-        if queue:
-            async for s in _drain_queue(queue):
-                yield s
-
-        # Check if graph was interrupted again (e.g. reject → rewrite → human_review)
-        # Note: GraphInterrupt may not raise in all LangGraph versions with
-        # astream_events v2, so we check get_state() after the loop.
-        final_state = await graph.aget_state(config)
-        if final_state and final_state.next:
-            vals = final_state.values or {}
+            outcome = await finalize_chapter(
+                graph,
+                ctx.config,
+                interrupt_payload=interrupt_payload,
+                fallback_trace_id=ctx.trace_id,
+            )
+            ctx.handle.record_outcome(outcome.values, interrupted=outcome.interrupted)
+        if outcome.interrupted:
+            vals = outcome.values
             if run_id and mgr:
                 mgr.update_writing_run(
                     run_id,
@@ -458,48 +425,17 @@ async def resume_graph(
                     "detail": None,
                 },
             )
-            yield _sse_event("review_required", _review_payload(vals, chapter_number))
-        else:
-            # Graph completed normally
-            if final_state and final_state.values:
-                _save_chapter_result(mgr, project_id, chapter_number, final_state.values)
-                _push_quality_scores(final_state.values)
-            status = (
-                "approved"
-                if (final_state and final_state.values or {}).get("human_approved")
-                else "draft"
+            yield _sse_event(
+                "review_required",
+                outcome.interrupt_payload or _review_payload(vals, chapter_number),
             )
+        else:
+            if outcome.values:
+                _save_chapter_result(mgr, project_id, chapter_number, outcome.values)
+            status = "approved" if outcome.values.get("human_approved") else "draft"
             yield _sse_event("done", {"chapter_content": "", "status": status})
             store.remove(session_id)
 
-    except GraphInterrupt as gi:
-        running.clear()
-        if drain_task:
-            await drain_task
-        if run_id and mgr:
-            mgr.update_writing_run(
-                run_id,
-                status=RunStatus.WAITING_REVIEW.value,
-                current_node="human_review",
-            )
-        async for s in _flush_output(output):
-            yield s
-        if queue:
-            async for s in _drain_queue(queue):
-                yield s
-
-        interrupt_data = gi.args[0] if gi.args else {}
-        yield _sse_event(
-            "progress",
-            {
-                "node": "human_review",
-                "label": "人工审批",
-                "status": "running",
-                "score": None,
-                "detail": None,
-            },
-        )
-        yield _sse_event("review_required", interrupt_data)
     except Exception as e:
         running.clear()
         if drain_task:
@@ -524,19 +460,6 @@ async def resume_graph(
         running.clear()
         if drain_task and not drain_task.done():
             drain_task.cancel()
-
-
-def _push_quality_scores(state_values: dict) -> None:
-    """Extract editor and continuity scores from graph state and push to LangFuse."""
-    scores = {}
-    ed = state_values.get("editor_report", {})
-    ct = state_values.get("continuity_report", {})
-    if isinstance(ed, dict) and "overall_score" in ed:
-        scores["editor_score"] = float(ed["overall_score"])
-    if isinstance(ct, dict) and "overall_score" in ct:
-        scores["continuity_score"] = float(ct["overall_score"])
-    if scores:
-        score_trace(scores)
 
 
 def _save_foreshadowings(
