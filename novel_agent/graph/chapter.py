@@ -1101,7 +1101,7 @@ def human_review_node(state: NovelState) -> dict:
         "evolution_version": 0,
         "evolution_history": [],
         "evolution_max_rounds": 2,
-        "evolution_v0_gate_score": 70.0,
+        "evolution_v0_gate_score": 78.0,
         "evolution_termination": "",
     }
 

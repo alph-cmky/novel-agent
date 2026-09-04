@@ -33,7 +33,7 @@ class EvolutionConfig:
     # Conditional revision: skip the v1 rewrite when v0 composite >= gate
     # (saves the ~55% token overhead on chapters that are already good).
     # Set to None to disable the gate and always allow one rewrite.
-    v0_gate_score: float | None = 70.0
+    v0_gate_score: float | None = 78.0
 
 
 DEFAULT_EVO_CONFIG = EvolutionConfig()
