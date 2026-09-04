@@ -22,7 +22,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-group dev
+ARG INSTALL_OBSERVABILITY=0
+RUN if [ "$INSTALL_OBSERVABILITY" = "1" ]; then \
+      uv sync --frozen --no-group dev --extra observability; \
+    else \
+      uv sync --frozen --no-group dev; \
+    fi
 
 # Copy backend source
 COPY novel_agent/ novel_agent/

@@ -12,9 +12,6 @@ services:
       - BUDGET_MODEL=${BUDGET_MODEL:-deepseek-chat}
       - QUALITY_MODEL=${QUALITY_MODEL:-deepseek-chat}
       - NOVEL_DATA_DIR=/app/novel-data
-      # LangFuse observability (optional — leave blank to disable)
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
     volumes:
       - ./novel-data:/app/novel-data
 

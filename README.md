@@ -11,15 +11,14 @@
 | 功能 | 说明 |
 |------|------|
 | 递归自进化流水线 | Orchestrator → 进化子图（Writer → Editor → Continuity → Worldbuilding → EvolutionOrchestrator）→ SelectBest → Worldbuilding → Human Review，多轮迭代直至收敛或触顶 |
-| 确定性质量门 | Writer 输出先过 `QualityService` 硬性检查（篇幅/空内容/大纲覆盖），通过时可跳过 LLM 审查直接进入 Worldbuilding |
-| Scene-first 生成（可选高级模式） | 默认 Chapter-first 整章生成；启用 `scene_first` 后按场景拆分逐场写作（`build_scene_plan`），每场独立生成后拼接为完整章节 |
+| 确定性质量门 | Writer 输出先过 `QualityService` 硬性检查（篇幅/空内容/大纲覆盖），通过时跳过 LLM 审查直接进入 Worldbuilding |
 | 流式写作 | SSE 实时推送，逐字渲染创作过程，非一次性返回 |
 | 知识图谱可视化 | Cytoscape.js 渲染角色/地点/物品/组织/事件的关系网络，支持逐章回溯 |
 | 长篇写作策略 | 3000 字/章，渐进展开、多线并进、伏笔长线回收 |
 | 双模型路由 | Quality 模型负责创作，Budget 模型负责审查/分析/抽取，按任务自动分配 |
 | 质量保障 | 递归自进化（版本对比 + Delta 分析 + 6 种终止状态）+ 人工审批，支持 Web 审批 |
 | 双层记忆 | 短期上下文（ContextCompiler 任务级投影）+ 长期向量/结构化存储（ChromaDB + SQLite） |
-| 可观测性 | 调用元数据采集 + LangFuse 全链路追踪 |
+| 可观测性 | 本地计数默认开；自建 Langfuse 可选；Cloud 备选 |
 | 两种交互方式 | CLI（服务/导出/运维）/ Web SPA（React），共享同一后端 |
 
 ## 系统架构
@@ -176,6 +175,8 @@ novel-agent serve
 ```bash
 docker compose up web          # FastAPI + React Web UI（http://localhost:8000）
 docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
+# 可选：本地 Langfuse（UI http://localhost:3000）
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up
 ```
 
 ## 核心特性
@@ -221,12 +222,10 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 | `skip_reviews` | 跳过 Editor + Continuity 审查 | `false` |
 | `review_interval` | 每 N 章执行一次完整审查 | `1` |
 | `skip_worldbuilding` | 跳过 Worldbuilding 实体提取 | `false` |
-| `skip_evolution_enrichment` | 关闭 EvolutionOrchestrator 的 LLM enrichment | `false` |
-| `deterministic_gate_first` | Writer 输出通过确定性硬性检查时跳过 LLM 审查，直接进入 Worldbuilding | `false` |
+| `skip_evolution_enrichment` | 关闭 EvolutionOrchestrator 的 LLM enrichment | `true` |
+| `deterministic_gate_first` | Writer 输出通过确定性硬性检查时跳过 LLM 审查，直接进入 Worldbuilding | `true` |
 
-### Scene-first 逐场生成（可选高级模式）
-
-默认 Chapter-first：Writer 一次性生成整章。启用 `scene_first` 后，Orchestrator 的 `key_scenes` 被拆解为 `scene_plan`（3–4 场），Writer 逐场独立生成后拼接为完整章节。每场携带前一场尾部上下文，确保叙事连贯。`build_scene_plan`（确定性拆分）和 `assemble_scenes`（拼接）在 `graph/scenes.py` 中实现。
+生产路径固定 Chapter-first：Writer 一次性生成整章。`scene_first` 与 `graph/scenes.py` 仍保留代码，但已在评测中证伪，API 入口写死为 `False`，不是生产能力。
 
 ### 双层记忆
 
@@ -249,12 +248,30 @@ docker compose --profile cli run cli   # 交互式 CLI（可选 profile）
 | `BUDGET_BASE_URL` | Budget 模型独立地址 | 同 `OPENAI_BASE_URL` |
 | `QUALITY_API_KEY` | Quality 模型独立密钥 | 同 `OPENAI_API_KEY` |
 | `QUALITY_BASE_URL` | Quality 模型独立地址 | 同 `OPENAI_BASE_URL` |
-| `LANGFUSE_PUBLIC_KEY` | LangFuse 追踪公钥（可选，留空禁用） | - |
-| `LANGFUSE_SECRET_KEY` | LangFuse 追踪私钥 | - |
-| `LANGFUSE_HOST` | LangFuse 地址 | `https://cloud.langfuse.com` |
+| `LANGFUSE_TRACING` | 是否上报 Langfuse（`1` 开启）。API 开启但缺密钥/BASE_URL/SDK 时拒绝启动 | `0` |
+| `LANGFUSE_BASE_URL` | Langfuse 地址（自建或 Cloud）。开启追踪时必填，避免误打 Cloud | - |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse 公钥 | - |
+| `LANGFUSE_SECRET_KEY` | Langfuse 私钥 | - |
+| `LANGFUSE_CAPTURE_PROMPTS` | `1` 时才挂 LangChain CallbackHandler（完整 prompt） | `0` |
 | `NOVEL_DATA_DIR` | 数据目录（SQLite + checkpoint） | `./novel-data` |
 
 模型路由按任务分类自动分配：`CREATIVE` → Quality 模型（温度 0.85），`STRUCTURAL` / `REVIEW` / `EXTRACTION` / `META_EVALUATION` → Budget 模型（温度 0.2–0.4）。
+
+### 本地追踪
+
+三层，默认只开第一层：
+
+1. **本地计数**（始终开）：Agent 上的 `model_calls` / token 计数，不依赖外部服务。
+2. **自建 Langfuse**（可选）：`uv sync --extra observability`，再设 `LANGFUSE_TRACING=1` 与 `LANGFUSE_BASE_URL`。一章一条 Trace，Session=`project_id`；默认不上报正文或完整 prompt。
+3. **Langfuse Cloud**（备选）：把 `LANGFUSE_BASE_URL` 指到 Cloud，并填入项目密钥。
+
+评测脚本缺配置时降级为 no-op，不会中断 50 章跑次。Web API 在 `LANGFUSE_TRACING=1` 但缺密钥/SDK 时拒绝启动。
+
+```bash
+uv sync --extra observability
+# 或 Docker overlay（会带上官方 Langfuse 4 + Postgres/ClickHouse/Redis/MinIO）
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up
+```
 
 ## 项目结构
 
@@ -271,7 +288,8 @@ novel_agent/
 ├── graph/               # LangGraph StateGraph
 │   ├── state.py         # NovelState TypedDict
 │   ├── chapter.py       # 流水线组装（进化子图 + HITL）
-│   └── scenes.py        # Scene-first 拆分与拼接（build_scene_plan / assemble_scenes）
+│   ├── runner.py        # 单章执行入口（SSE / CLI / eval 共用）
+│   └── scenes.py        # 非生产：scene-first 拆分与拼接（已证伪）
 ├── services/            # 确定性业务逻辑（无 LLM 调用）
 │   ├── evolution.py     # 进化规则层（Delta / 终止判断 / 改进计划 / 版本选择）
 │   ├── quality.py       # QualityService（篇幅/空内容/大纲/场景硬性检查）
@@ -288,7 +306,7 @@ novel_agent/
 │   ├── parser.py        # JSON 解析器（多层兜底）
 │   └── validator.py     # OutputValidator（类型强制 + 默认值兜底）
 ├── model_router.py      # 模型路由（双模型、运行时读环境变量）
-├── observability/        # LangFuse 全链路追踪（未配置则 no-op）
+├── observability/        # 章级追踪（默认 no-op；`uv sync --extra observability` 后可接 Langfuse）
 ├── tools/               # Agent 工具（search_context / check_continuity）
 ├── style/               # 确定性风格分析（StyleAnalyzer + ParagraphStructureAnalyzer）
 ├── api/                 # FastAPI REST + SSE
