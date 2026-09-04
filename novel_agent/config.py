@@ -45,7 +45,7 @@ class ExecutionProfile:
     skip_reviews: bool = False
     review_interval: int = 1
     skip_worldbuilding: bool = False
-    skip_evolution_enrichment: bool = False
+    skip_evolution_enrichment: bool = True
 
     @classmethod
     def from_state(cls, state: Mapping[str, object]) -> "ExecutionProfile":
@@ -53,7 +53,7 @@ class ExecutionProfile:
             skip_reviews=bool(state.get("skip_reviews", False)),
             review_interval=max(int(state.get("review_interval", 1) or 1), 1),
             skip_worldbuilding=bool(state.get("skip_worldbuilding", False)),
-            skip_evolution_enrichment=bool(state.get("skip_evolution_enrichment", False)),
+            skip_evolution_enrichment=bool(state.get("skip_evolution_enrichment", True)),
         )
 
     def should_review(self, chapter_number: int) -> bool:

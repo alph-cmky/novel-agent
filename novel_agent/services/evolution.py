@@ -44,12 +44,6 @@ EDITOR_DIMENSIONS = (
     "consistency", "writing", "ai_flavor", "dialogue",
     "plot", "instruction", "creativity", "controllability",
 )
-QUALITY_DIMENSIONS = EDITOR_DIMENSIONS + (
-    "character_fidelity",
-    "timeline_consistency",
-    "worldbuilding_consistency",
-    "outline_adherence",
-)
 
 # Dimensions measurable by deterministic StyleAnalyzer — revisions scoped to
 # these need no LLM review at all (Writer → StyleAnalyzer → Evolution).

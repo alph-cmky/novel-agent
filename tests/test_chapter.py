@@ -11,11 +11,13 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from novel_agent.graph.chapter import (
+    _draft_content_hash,
     evolution_orchestrator_node,
     route_after_continuity,
     route_after_editor,
     route_after_writer,
     select_best_version_node,
+    worldbuilding_node,
     writer_node,
 )
 
@@ -485,7 +487,9 @@ class TestEvolutionConditionalRouting:
     def test_required_reviewers_world_keywords_rerun_worldbuilding(self):
         from novel_agent.services.evolution import required_reviewers
 
-        r = required_reviewers(self._plan(["consistency"], instruction="修正世界观：北墙势力归属变更"))
+        r = required_reviewers(
+            self._plan(["consistency"], instruction="修正世界观：北墙势力归属变更")
+        )
         assert r["worldbuilding"] is True
 
     def test_required_reviewers_unknown_dimension_keeps_worldbuilding(self):
@@ -933,3 +937,59 @@ class TestContextMinimality:
         assert "recent_summary" not in ctx
         assert len(ctx.get("timeline_events", [])) <= 10
         assert len(ctx.get("unresolved_foreshadowings", [])) <= 8
+
+
+class TestWorldbuildingSkipUnchangedDraft:
+    def test_skips_extract_when_draft_hash_matches(self):
+        draft = "同一稿"
+        state = {
+            "draft_content": draft,
+            "worldbuilding_report": {
+                "source_draft_hash": _draft_content_hash(draft),
+                "new_entities": [{"name": "甲"}],
+            },
+            "project_id": "",
+            "persist_dir": "./novel-data",
+            "chapter_number": 1,
+        }
+        with patch("novel_agent.graph.chapter.WorldbuildingAgent") as wb_cls:
+            result = asyncio.run(worldbuilding_node(state))
+        assert result == {}
+        wb_cls.assert_not_called()
+
+    def test_extracts_when_draft_changed(self):
+        state = {
+            "draft_content": "新稿",
+            "worldbuilding_report": {
+                "source_draft_hash": _draft_content_hash("旧稿"),
+                "new_entities": [{"name": "甲"}],
+            },
+            "project_id": "",
+            "persist_dir": "./novel-data",
+            "chapter_number": 1,
+        }
+        mock_wb = MagicMock()
+        mock_wb.extract = AsyncMock(
+            return_value=({"new_entities": [], "conflicts": [], "foreshadowings": []}, None)
+        )
+        mock_wb.input_tokens = mock_wb.output_tokens = 0
+        mock_wb.cached_tokens = mock_wb.reasoning_tokens = 0
+        mock_wb.model_calls = 1
+        with (
+            patch("novel_agent.graph.chapter._config_for", return_value=MagicMock()),
+            patch("novel_agent.graph.chapter.WorldbuildingAgent", return_value=mock_wb),
+        ):
+            result = asyncio.run(worldbuilding_node(state))
+        mock_wb.extract.assert_awaited_once()
+        assert result["worldbuilding_report"]["source_draft_hash"] == _draft_content_hash("新稿")
+
+
+class TestEvolutionEnrichmentDefaultOff:
+    def test_empty_rule_plan_does_not_enrich_by_default(self):
+        with patch(
+            "novel_agent.graph.chapter.build_improvement_plan_rule",
+            return_value={"primary_instruction": "", "focus_dimensions": []},
+        ):
+            result, mock_agent = TestEvolutionContextMinimal._run_evo_first_round()
+        mock_agent.return_value.enrich_plan.assert_not_called()
+        assert result["evolution_llm_enrichment_calls"] == 0

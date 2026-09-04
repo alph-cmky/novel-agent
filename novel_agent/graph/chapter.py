@@ -7,6 +7,7 @@ Evolution enabled (default):
 """
 
 import asyncio
+import hashlib
 import json as _json
 import re
 import sqlite3
@@ -67,6 +68,10 @@ def _text_units(text: str) -> int:
     if cjk >= len(text) * 0.2:
         return cjk
     return len(re.findall(r"\b[\w']+\b", text))
+
+
+def _draft_content_hash(draft: str) -> str:
+    return hashlib.sha256((draft or "").encode("utf-8")).hexdigest()
 
 
 def _should_extend(content_units: int, target_words: int) -> bool:
@@ -434,9 +439,7 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         writer.cached_tokens += notools.cached_tokens
         writer.reasoning_tokens += notools.reasoning_tokens
         for tool_name, cnt in notools.tool_call_counts.items():
-            writer.tool_call_counts[tool_name] = (
-                writer.tool_call_counts.get(tool_name, 0) + cnt
-            )
+            writer.tool_call_counts[tool_name] = writer.tool_call_counts.get(tool_name, 0) + cnt
 
     # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
@@ -707,11 +710,12 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
 
         # Conditional revision gate: v0 already good → skip v1 rewrite
         v0_gate_termination = ""
-        if (
-            evo_config.v0_gate_score is not None
-            and v0_composite >= evo_config.v0_gate_score
-        ):
+        if evo_config.v0_gate_score is not None and v0_composite >= evo_config.v0_gate_score:
             v0_gate_termination = "v0_gate"
+            print(
+                f"  [Gate] layer=rewrite skip=True reason=v0_gate "
+                f"composite={v0_composite:.1f} threshold={evo_config.v0_gate_score}"
+            )
             print(
                 f"  [EvoOrchestrator] v0 composite={v0_composite:.1f} "
                 f">= gate={evo_config.v0_gate_score} → 跳过重写"
@@ -734,8 +738,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_termination": v0_gate_termination,
             "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
             "evolution_llm_enrichment_calls": enrich_calls,
-            "evolution_input_tokens": state.get("evolution_input_tokens", 0)
-            + evo_tokens["input"],
+            "evolution_input_tokens": state.get("evolution_input_tokens", 0) + evo_tokens["input"],
             "evolution_output_tokens": state.get("evolution_output_tokens", 0)
             + evo_tokens["output"],
             "evolution_cached_tokens": state.get("evolution_cached_tokens", 0)
@@ -743,8 +746,7 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
             "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
             + evo_tokens["reasoning"],
             "evolution_model_calls": state.get("evolution_model_calls", 0) + evo_model_calls,
-            "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0)
-            + evo_latency,
+            "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0) + evo_latency,
         }
 
     # ── Branch B: Has history → Delta comparison ──
@@ -874,17 +876,13 @@ async def evolution_orchestrator_node(state: NovelState) -> dict:
         "quality_guard_report": guard_report,
         "evolution_rule_plan_calls": state.get("evolution_rule_plan_calls", 0) + 1,
         "evolution_llm_enrichment_calls": enrich_calls,
-        "evolution_input_tokens": state.get("evolution_input_tokens", 0)
-        + evo_tokens["input"],
-        "evolution_output_tokens": state.get("evolution_output_tokens", 0)
-        + evo_tokens["output"],
-        "evolution_cached_tokens": state.get("evolution_cached_tokens", 0)
-        + evo_tokens["cached"],
+        "evolution_input_tokens": state.get("evolution_input_tokens", 0) + evo_tokens["input"],
+        "evolution_output_tokens": state.get("evolution_output_tokens", 0) + evo_tokens["output"],
+        "evolution_cached_tokens": state.get("evolution_cached_tokens", 0) + evo_tokens["cached"],
         "evolution_reasoning_tokens": state.get("evolution_reasoning_tokens", 0)
         + evo_tokens["reasoning"],
         "evolution_model_calls": state.get("evolution_model_calls", 0) + evo_model_calls,
-        "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0)
-        + evo_latency,
+        "evolution_latency_seconds": state.get("evolution_latency_seconds", 0.0) + evo_latency,
     }
 
     # 5. Check if new best version
@@ -966,7 +964,12 @@ async def worldbuilding_node(state: NovelState) -> dict:
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
     chapter_number = state.get("chapter_number", 1)
-    draft = state.get("draft_content", "")
+    draft = state.get("draft_content", "") or ""
+    previous = state.get("worldbuilding_report") or {}
+    draft_hash = _draft_content_hash(draft)
+    if isinstance(previous, dict) and previous.get("source_draft_hash") == draft_hash:
+        print("  [Worldbuilding] skip: draft unchanged since last extract")
+        return {}
     existing: list[dict] = []
     existing_fs: list[dict] = []
     if project_id:
@@ -994,6 +997,10 @@ async def worldbuilding_node(state: NovelState) -> dict:
         narrative_mode=state.get("narrative_mode"),
     )
     _wb_latency = time.monotonic() - _wb_t0
+    if not isinstance(report, dict):
+        report = {}
+    else:
+        report = dict(report)
     entities = len(report.get("new_entities", []))
     conflicts = len(report.get("conflicts", []))
     new_fs = len(report.get("foreshadowings", []))
@@ -1002,10 +1009,10 @@ async def worldbuilding_node(state: NovelState) -> dict:
         f"  [Worldbuilding] {entities} entities, {conflicts} conflicts, "
         f"{new_fs} new foreshadowings, {resolved_fs} resolved"
     )
+    report["source_draft_hash"] = draft_hash
     return {
         "worldbuilding_report": report,
-        "worldbuilding_input_tokens": state.get("worldbuilding_input_tokens", 0)
-        + wb.input_tokens,
+        "worldbuilding_input_tokens": state.get("worldbuilding_input_tokens", 0) + wb.input_tokens,
         "worldbuilding_output_tokens": state.get("worldbuilding_output_tokens", 0)
         + wb.output_tokens,
         "worldbuilding_cached_tokens": state.get("worldbuilding_cached_tokens", 0)
@@ -1131,6 +1138,7 @@ def route_after_writer(
     """Run expensive reviews only when the deterministic gate needs them."""
     gate = state.get("quality_gate_report") or {}
     if state.get("deterministic_gate_first") and gate.get("passed"):
+        print("  [Gate] layer=review skip=True reason=quality_gate_passed")
         return "worldbuilding"
     chapter_number = state.get("chapter_number", 1)
     if not ExecutionProfile.from_state(state).should_review(chapter_number):

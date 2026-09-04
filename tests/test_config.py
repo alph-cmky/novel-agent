@@ -30,6 +30,11 @@ class TestExecutionProfile:
 
         assert profile.should_review(1) is True
         assert profile.should_worldbuild() is True
+        assert profile.should_enrich_evolution() is False
+
+    def test_enrichment_can_be_enabled(self):
+        profile = ExecutionProfile.from_state({"skip_evolution_enrichment": False})
+
         assert profile.should_enrich_evolution() is True
 
     def test_fast_profile_preserves_existing_skip_rules(self):
