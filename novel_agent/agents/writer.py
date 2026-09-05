@@ -21,6 +21,17 @@ _META_MARK_RE = re.compile(
     r"|以下(?:是|为)(?:第\d+章|本章)(?:正文)?"
     r"|开始(?:创作|撰写)第\d+章"
     r"|好的[，,].{0,20}(?:创作|续写|撰写)"
+    # English preambles from agent-loop final output
+    r"|the analysis confirms|no issues remain|ai_flavor_score"
+    r"|here is the (?:completed )?(?:final )?chapter"
+    r"|all checks passed|style gate passed"
+    r"|here is the (?:revised |updated )?chapter"
+    r"|the ai flavor score|the humanized version"
+    r"|let me consider|looking at the feedback"
+    r"|i need to|i should|i'll now|let me now"
+    r"|the draft (?:now |is )|the revised (?:draft|version)"
+    r"|based on the (?:feedback|editor|review)"
+    r"|final draft|revised chapter|updated chapter"
 )
 
 
@@ -51,9 +62,9 @@ def strip_writer_preamble(text: str) -> str:
                 ):
                     nxt = lines[1].lstrip()
         if nxt == current:
-            return nxt
+            break
         current = nxt
-    return current
+    return _strip_english_preamble(current)
 
 
 def _is_writer_meta(block: str) -> bool:
@@ -61,6 +72,24 @@ def _is_writer_meta(block: str) -> bool:
     if not s or s in {"---", "***", "___"}:
         return True
     return bool(_META_MARK_RE.search(s))
+
+
+# First CJK character — used to find chapter body start when the model
+# leaks English reasoning before the actual prose.
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+
+def _strip_english_preamble(text: str) -> str:
+    """If text starts with non-CJK (English reasoning leak), find the first
+    paragraph that begins with a CJK character and return from there."""
+    if not text or _CJK_RE.match(text):
+        return text
+    paragraphs = re.split(r"\n\s*\n", text, maxsplit=20)
+    for i, para in enumerate(paragraphs):
+        stripped = para.strip()
+        if stripped and _CJK_RE.match(stripped):
+            return "\n\n".join(paragraphs[i:])
+    return text
 
 
 WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。

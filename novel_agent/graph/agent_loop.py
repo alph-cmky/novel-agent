@@ -32,8 +32,9 @@ from novel_agent.tools.style_check import StyleCheckTool
 
 def _config_for(task: TaskClass) -> AgentConfig:
     """Create AgentConfig from the model router's decision."""
-    from novel_agent.model_router import router
+    from novel_agent.model_router import ModelRouter
 
+    router = ModelRouter()
     route = router.resolve(task)
     kwargs: dict = {"model": route.model, "temperature": route.temperature}
     kwargs["max_tokens"] = 8192 if task is TaskClass.EXTRACTION else 4096
