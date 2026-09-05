@@ -1,11 +1,9 @@
 """Chapter tracing: default off; resume keeps the same trace_id."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
-from novel_agent.graph.runner import run_chapter
 from novel_agent.observability.tracing import (
     chapter_trace,
     require_tracing_config,
@@ -52,27 +50,12 @@ def test_require_tracing_off_is_silent(monkeypatch):
     assert require_tracing_config(strict=True) is None
 
 
-def test_resume_reuses_trace_id(monkeypatch):
+def test_trace_id_preserved_in_chapter_trace(monkeypatch):
     monkeypatch.delenv("LANGFUSE_TRACING", raising=False)
 
-    class _Graph:
-        def __init__(self):
-            self.values: dict = {}
+    async def _run():
+        async with chapter_trace({"chapter_number": 2, "trace_id": "fixed-id"}) as handle:
+            assert handle.trace_id == "fixed-id"
+            handle.record_outcome({"draft_content": "x"})
 
-        async def astream_events(self, payload, _config, version):
-            if isinstance(payload, dict) and payload.get("trace_id"):
-                self.values["trace_id"] = payload["trace_id"]
-            if False:
-                yield
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(next=(), values=dict(self.values))
-
-    graph = _Graph()
-    first = asyncio.run(run_chapter(graph, config={}, state={"chapter_number": 2}))
-    second = asyncio.run(
-        run_chapter(graph, config={}, resume={"action": "approve", "comments": ""})
-    )
-    assert first.trace_id
-    assert first.trace_id == second.trace_id
-    assert first.trace_id == graph.values["trace_id"]
+    asyncio.run(_run())

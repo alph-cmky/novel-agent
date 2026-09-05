@@ -1,8 +1,7 @@
 """Tests for durable writing-session recovery."""
 
 import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,23 +23,22 @@ from novel_agent.api.routes import (
 from novel_agent.storage.manager import ProjectManager
 
 
-def test_restore_session_rebuilds_handle_from_pending_checkpoint(tmp_path):
-    graph = SimpleNamespace(
-        aget_state=AsyncMock(
-            return_value=SimpleNamespace(next=("human_review",), values={"draft_content": "正文"})
-        )
-    )
+def test_restore_session_rebuilds_handle_from_pending_run(tmp_path):
+    mgr = ProjectManager(tmp_path)
+    project_id = mgr.init_project(name="project")
+    mgr.create_writing_run(project_id, 3)
+    mgr.update_outline_item(project_id, 3, status="writing")
     session_store._sessions.clear()
 
     with (
         patch("novel_agent.api.routes._get_persist_dir", return_value=tmp_path),
-        patch("novel_agent.api.routes.build_chapter_graph_async", AsyncMock(return_value=graph)),
+        patch("novel_agent.api.routes._get_manager", return_value=mgr),
     ):
-        session_id = asyncio.run(_restore_session("project", 3))
+        session_id = asyncio.run(_restore_session(project_id, 3))
 
+    assert session_id is not None
     session = session_store.get(session_id)
-    assert session["config"] == {"configurable": {"thread_id": "project:ch3"}}
-    assert session["project_id"] == "project"
+    assert session["project_id"] == project_id
     assert session["chapter_number"] == 3
     session_store.remove(session_id)
 

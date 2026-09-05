@@ -1,99 +1,44 @@
-"""Tests for the shared chapter graph runner."""
+"""Tests for the C5 agent loop runner."""
 
 import asyncio
-from types import SimpleNamespace
 
-from langgraph.errors import GraphInterrupt
-from langgraph.types import Command
-
-from novel_agent.graph.runner import (
-    chapter_payload,
-    run_chapter,
-    run_chapter_until_complete,
-)
+from novel_agent.graph.runner import ChapterOutcome, run_chapter_until_complete
 
 
-class _FakeGraph:
-    def __init__(self, events=(), snapshot=None, interrupt=None):
-        self.events = list(events)
-        self.snapshot = snapshot or SimpleNamespace(next=(), values={})
-        self.interrupt = interrupt
-        self.inputs: list = []
-
-    async def astream_events(self, payload, _config, version):
-        self.inputs.append(payload)
-        if self.interrupt is not None:
-            raise self.interrupt
-        for event in self.events:
-            yield event
-
-    async def aget_state(self, _config):
-        return self.snapshot
-
-
-def test_chapter_payload_assigns_trace_id():
-    payload = chapter_payload(state={"chapter_number": 2})
-    assert isinstance(payload, dict)
-    assert payload["chapter_number"] == 2
-    assert payload["trace_id"]
-
-
-def test_chapter_payload_keeps_existing_trace_id():
-    payload = chapter_payload(state={"trace_id": "fixed-id"})
-    assert payload["trace_id"] == "fixed-id"
-
-
-def test_chapter_payload_resume_is_command():
-    payload = chapter_payload(resume={"action": "approve", "comments": ""})
-    assert isinstance(payload, Command)
-
-
-def test_run_chapter_reads_checkpoint_and_interrupt():
-    snapshot = SimpleNamespace(
-        next=("human_review",),
-        values={"draft_content": "候选", "trace_id": "t1"},
-    )
-    graph = _FakeGraph(snapshot=snapshot)
-    outcome = asyncio.run(run_chapter(graph, config={}, state={"writing_run_id": "r1"}))
-
-    assert outcome.interrupted is True
-    assert outcome.next_nodes == ("human_review",)
-    assert outcome.values["draft_content"] == "候选"
-    assert outcome.trace_id == "t1"
-    assert graph.inputs[0]["writing_run_id"] == "r1"
-    assert graph.inputs[0]["trace_id"]
-
-
-def test_run_chapter_surfaces_graph_interrupt_payload():
-    snapshot = SimpleNamespace(next=("human_review",), values={})
-    graph = _FakeGraph(
-        snapshot=snapshot,
-        interrupt=GraphInterrupt({"chapter_content": "稿"}),
-    )
-    outcome = asyncio.run(run_chapter(graph, config={}, state={}))
-    assert outcome.interrupt_payload == {"chapter_content": "稿"}
-
-
-def test_run_chapter_until_complete_auto_approves():
-    class _ResumeGraph:
-        def __init__(self):
-            self.calls = 0
-
-        async def astream_events(self, _payload, _config, version):
-            if False:
-                yield
-
-        async def aget_state(self, _config):
-            self.calls += 1
-            if self.calls <= 2:
-                return SimpleNamespace(next=("human_review",), values={"draft_content": "稿"})
-            return SimpleNamespace(
-                next=(),
-                values={"draft_content": "稿", "human_approved": True},
-            )
-
-    graph = _ResumeGraph()
-    outcome = asyncio.run(run_chapter_until_complete(graph, {"chapter_number": 1}, config={}))
+def test_chapter_outcome_dataclass():
+    outcome = ChapterOutcome(values={"draft_content": "test"}, interrupted=False)
+    assert outcome.values["draft_content"] == "test"
     assert outcome.interrupted is False
-    assert outcome.values["human_approved"] is True
-    assert graph.calls == 3
+    assert outcome.trace_id is None
+
+
+def test_run_chapter_until_complete_returns_values():
+    """The new runner returns a ChapterOutcome with values from run_agent_loop.
+    This test verifies the runner interface; actual LLM calls are mocked
+    at the integration level.
+    """
+
+    class _FakeAgentLoop:
+        async def __call__(self, state, **kwargs):
+            return {
+                "draft_content": "章节正文",
+                "editor_report": {"overall_score": 80},
+                "human_approved": None,
+            }
+
+    # Patch run_agent_loop for this test
+    import novel_agent.graph.runner as runner_mod
+
+    original = runner_mod.run_agent_loop
+    runner_mod.run_agent_loop = _FakeAgentLoop()
+    try:
+        outcome = asyncio.run(
+            run_chapter_until_complete({"chapter_number": 1, "persist_dir": "/tmp"})
+        )
+    finally:
+        runner_mod.run_agent_loop = original
+
+    assert isinstance(outcome, ChapterOutcome)
+    assert outcome.interrupted is False
+    assert outcome.values["draft_content"] == "章节正文"
+    assert outcome.trace_id  # auto-generated

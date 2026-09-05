@@ -23,12 +23,11 @@ def test_chapter_input_omits_draft_text():
     assert "draft" not in payload
 
 
-def test_gate_first_skip_omits_editor_and_composite():
+def test_scores_include_editor_and_continuity():
     scores = outcome_scores(
         {
-            "deterministic_gate_first": True,
             "quality_gate_report": {"passed": True},
-            "editor_report": {},
+            "editor_report": {"overall_score": 80},
             "continuity_report": {"overall_score": 90},
             "style_report": {"paragraph_structure_score": 80.0},
             "draft_content": "中文正文" * 40,
@@ -38,21 +37,19 @@ def test_gate_first_skip_omits_editor_and_composite():
     assert "quality_gate" in names
     assert "style_structure" in names
     assert "content_units" in names
-    assert "editor" not in names
-    assert "continuity" not in names
-    assert "composite" not in names
+    assert "editor" in names
+    assert "continuity" in names
 
 
-def test_v0_gate_emits_event():
+def test_events_include_editor_issues():
     events = outcome_events(
         {
-            "evolution_termination": "v0_gate",
-            "evolution_v0_gate_score": 78,
-            "editor_report": {"overall_score": 80},
-            "continuity_report": {"overall_score": 80},
-            "style_report": {"paragraph_structure_score": 80.0},
+            "editor_report": {
+                "overall_score": 80,
+                "issues": [{"description": "对话不够自然"}],
+            },
         }
     )
-    v0 = next(item for item in events if item["name"] == "evolution.v0_gate")
-    assert v0["metadata"]["threshold"] == 78
-    assert "composite" in v0["metadata"]
+    issue_events = [item for item in events if item["name"] == "editor.issues"]
+    assert len(issue_events) == 1
+    assert "对话不够自然" in issue_events[0]["metadata"]["items"][0]

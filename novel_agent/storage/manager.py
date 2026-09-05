@@ -1298,8 +1298,7 @@ class ProjectManager:
             entities_q = "SELECT COUNT(*) FROM world_entities WHERE project_id = ?"
             events_q = "SELECT COUNT(*) FROM story_events WHERE project_id = ?"
             fs_q = (
-                "SELECT COUNT(*) FROM foreshadowings WHERE project_id = ? "
-                "AND status != 'resolved'"
+                "SELECT COUNT(*) FROM foreshadowings WHERE project_id = ? AND status != 'resolved'"
             )
             if after_chapter is not None:
                 entities_q += " AND first_appearance_chapter <= ?"

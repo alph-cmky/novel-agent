@@ -187,8 +187,7 @@ class TestInvalidInput:
 class TestParseValidated:
     def test_editor_coerces_score_string_to_int(self):
         text = (
-            '{"overall_score": "85", "dimensions": {"plot": "70"},'
-            ' "issues": [], "verdict": "pass"}'
+            '{"overall_score": "85", "dimensions": {"plot": "70"}, "issues": [], "verdict": "pass"}'
         )
         report = parse_validated("editor", text)
         assert report["overall_score"] == 85

@@ -81,6 +81,5 @@ class ModelRouter:
             "editor": TaskClass.REVIEW,
             "continuity": TaskClass.REVIEW,
             "worldbuilding": TaskClass.EXTRACTION,
-            "evolution_orchestrator": TaskClass.META_EVALUATION,
         }
         return self.resolve(mapping.get(agent_name, TaskClass.STRUCTURAL))

@@ -46,20 +46,12 @@ def compact_meta(state: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "run_id": state.get("writing_run_id") or "",
         "chapter": state.get("chapter_number"),
-        "v0_gate": state.get("evolution_v0_gate_score"),
-        "scene_first": bool(state.get("scene_first")),
-        "gate_first": bool(state.get("deterministic_gate_first")),
-        "skip_reviews": bool(state.get("skip_reviews")),
+        "loop_retries": state.get("loop_retries", 0),
     }
 
 
 def chapter_tags(state: Mapping[str, Any], *, source: str = "api") -> list[str]:
     tags = [source]
-    if state.get("deterministic_gate_first"):
-        tags.append("gate-first")
-    rounds = state.get("evolution_max_rounds")
-    if rounds is not None:
-        tags.append(f"evo-r{rounds}")
     return tags
 
 
@@ -86,17 +78,6 @@ def _editor_issue_summaries(report: Mapping[str, Any]) -> list[str]:
     return out
 
 
-def _reviews_skipped(values: Mapping[str, Any]) -> str | None:
-    gate = values.get("quality_gate_report") or {}
-    if values.get("deterministic_gate_first") and isinstance(gate, dict) and gate.get("passed"):
-        editor = values.get("editor_report") or {}
-        if not editor or (isinstance(editor, dict) and editor.get("unavailable")):
-            return "gate_first"
-    if values.get("skip_reviews"):
-        return "skip_reviews"
-    return None
-
-
 def outcome_output(values: Mapping[str, Any], *, interrupted: bool = False) -> dict[str, Any]:
     draft = str(values.get("draft_content") or "")
     gate = values.get("quality_gate_report") or {}
@@ -108,7 +89,7 @@ def outcome_output(values: Mapping[str, Any], *, interrupted: bool = False) -> d
         "content_chars": len(draft),
         "content_hash": content_hash(draft) if draft else "",
         "gate_passed": bool(gate.get("passed")) if isinstance(gate, dict) else None,
-        "termination": values.get("evolution_termination") or "",
+        "loop_retries": values.get("loop_retries", 0),
         "wb_entity_count": len(entities) if isinstance(entities, list) else 0,
     }
 
@@ -123,19 +104,12 @@ def outcome_scores(values: Mapping[str, Any]) -> list[dict[str, Any]]:
         scores.append(
             {"name": "style_structure", "value": float(style["paragraph_structure_score"])}
         )
-    skipped = _reviews_skipped(values)
-    if not skipped:
-        from novel_agent.services.evolution import composite_score, extract_scores
-
-        extracted = extract_scores(values)
-        editor = extracted.get("editor_overall") or 0
-        continuity = extracted.get("continuity_overall") or 0
-        if editor:
-            scores.append({"name": "editor", "value": float(editor)})
-        if continuity:
-            scores.append({"name": "continuity", "value": float(continuity)})
-        if editor or continuity:
-            scores.append({"name": "composite", "value": float(composite_score(extracted))})
+    editor = values.get("editor_report") or {}
+    if isinstance(editor, dict) and editor.get("overall_score") is not None:
+        scores.append({"name": "editor", "value": float(editor["overall_score"])})
+    continuity = values.get("continuity_report") or {}
+    if isinstance(continuity, dict) and continuity.get("overall_score") is not None:
+        scores.append({"name": "continuity", "value": float(continuity["overall_score"])})
     draft = str(values.get("draft_content") or "")
     if draft:
         scores.append({"name": "content_units", "value": float(_text_units(draft))})
@@ -150,33 +124,6 @@ def outcome_events(values: Mapping[str, Any], *, interrupted: bool = False) -> l
             {
                 "name": "quality_gate.failed",
                 "metadata": {"violations": list(gate.get("violations") or [])},
-            }
-        )
-    skipped = _reviews_skipped(values)
-    if skipped:
-        events.append({"name": "reviews.skipped", "metadata": {"reason": skipped}})
-    termination = values.get("evolution_termination") or ""
-    if termination == "v0_gate":
-        from novel_agent.services.evolution import composite_score, extract_scores
-
-        extracted = extract_scores(values)
-        events.append(
-            {
-                "name": "evolution.v0_gate",
-                "metadata": {
-                    "composite": composite_score(extracted),
-                    "threshold": values.get("evolution_v0_gate_score"),
-                },
-            }
-        )
-    elif termination:
-        events.append(
-            {
-                "name": "evolution.rewrite",
-                "metadata": {
-                    "termination": termination,
-                    "version": values.get("evolution_version"),
-                },
             }
         )
     editor = values.get("editor_report") or {}
@@ -200,15 +147,7 @@ def outcome_events(values: Mapping[str, Any], *, interrupted: bool = False) -> l
 
 def outcome_tags(values: Mapping[str, Any]) -> list[str]:
     tags: list[str] = []
-    skipped = _reviews_skipped(values)
-    if skipped:
-        tags.append("skipped-reviews")
     gate = values.get("quality_gate_report") or {}
     if isinstance(gate, dict) and gate.get("passed") is False:
         tags.append("gate-failed")
-    termination = values.get("evolution_termination") or ""
-    if termination == "v0_gate":
-        tags.append("evo-skip")
-    elif termination:
-        tags.append("evo-rewrite")
     return tags
