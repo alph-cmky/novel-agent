@@ -40,11 +40,17 @@ class SearchContextTool(BaseTool):
             top_k=inp.top_k,
             chapter_range=inp.chapter_range,
         )
+        instruction = (
+            "无匹配。不要说明检索结果，依据已有上下文继续写章节正文。"
+            if not results
+            else "检索内容仅供核对。不要在章节正文中提及检索、工具或信息是否找到。"
+        )
         return ToolResult(
             success=True,
             data={
                 "results": results,
                 "total_found": len(results),
                 "search_scope": inp.scope,
+                "instruction": instruction,
             },
         )

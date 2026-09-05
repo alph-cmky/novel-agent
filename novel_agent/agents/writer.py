@@ -1,11 +1,65 @@
 """Writer Agent — generates chapter content from outline and context."""
 
+import re
 from collections.abc import AsyncIterator
 
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.parser import strip_none
 from novel_agent.tools.search import SearchContextTool
+
+_HR_RE = re.compile(r"^(?:---+|\*\*\*+|___+)\s*\n+")
+_TITLE_RE = re.compile(
+    r"^#{1,3}\s*(?:第[一二三四五六七八九十百千万零〇0-9]+章|正文|本章正文)\s*\n+"
+)
+_META_MARK_RE = re.compile(
+    r"未检索到|没有检索到|检索(?:无结果|失败|未命中|未找到)"
+    r"|未找到.{0,20}(?:细节|记录|内容|结尾|章节)"
+    r"|我基于.{0,30}(?:前文|大纲|提要)|基于前文提要"
+    r"|下面(?:将)?(?:创作|撰写|开始写)第"
+    r"|以下(?:是|为)(?:第\d+章|本章)(?:正文)?"
+    r"|开始(?:创作|撰写)第\d+章"
+    r"|好的[，,].{0,20}(?:创作|续写|撰写)"
+)
+
+
+def strip_writer_preamble(text: str) -> str:
+    """Drop leading retrieval/meta speech before chapter body.
+
+    Models sometimes narrate a failed search_context call
+    (「未检索到…下面创作第N章正文」) instead of starting the scene.
+    """
+    if not text:
+        return text
+    current = text.strip()
+    for _ in range(8):
+        nxt = _TITLE_RE.sub("", _HR_RE.sub("", current, count=1), count=1).lstrip()
+        parts = re.split(r"\n\s*\n", nxt, maxsplit=1)
+        if len(parts) == 2 and _is_writer_meta(parts[0]):
+            nxt = parts[1].lstrip()
+        else:
+            hr_split = re.split(r"\n(?:---+|\*\*\*+|___+)\s*\n", nxt, maxsplit=1)
+            if len(hr_split) == 2 and _is_writer_meta(hr_split[0]):
+                nxt = hr_split[1].lstrip()
+            else:
+                lines = nxt.split("\n", 1)
+                if (
+                    len(lines) == 2
+                    and _is_writer_meta(lines[0])
+                    and not _is_writer_meta(lines[1][:80])
+                ):
+                    nxt = lines[1].lstrip()
+        if nxt == current:
+            return nxt
+        current = nxt
+    return current
+
+
+def _is_writer_meta(block: str) -> bool:
+    s = block.strip()
+    if not s or s in {"---", "***", "___"}:
+        return True
+    return bool(_META_MARK_RE.search(s))
 
 WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 
@@ -103,6 +157,7 @@ class WriterAgent(BaseAgent):
             "上下文中已提供的信息不要重复检索。"
             "只有在需要确认未提供的角色、事件、地点、伏笔或较早章节的历史事实时，"
             "才使用 search_context 工具检索；确认后继续完成本章正文。"
+            "检索无结果时不要在正文里交代检索过程，依据已有上下文继续写。"
         )
 
     async def write(
@@ -173,7 +228,7 @@ class WriterAgent(BaseAgent):
             max_rounds=3,
             action=f"write_chapter_{chapter_number}",
         )
-        return content, trace
+        return strip_writer_preamble(content), trace
 
     async def write_stream(
         self,
@@ -295,7 +350,7 @@ class WriterAgent(BaseAgent):
             max_rounds=1,
             action=f"extend_ch{chapter_number}",
         )
-        return content
+        return strip_writer_preamble(content)
 
     def _format_strategy(self, strategy: dict) -> str:
         """Format orchestrator strategy dict into a three-tier prompt section.

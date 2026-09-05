@@ -30,7 +30,7 @@ from novel_agent.agents.editor import EditorAgent
 from novel_agent.agents.evolution_orchestrator import EvolutionOrchestratorAgent
 from novel_agent.agents.orchestrator import OrchestratorAgent
 from novel_agent.agents.worldbuilding import WorldbuildingAgent
-from novel_agent.agents.writer import WriterAgent
+from novel_agent.agents.writer import WriterAgent, strip_writer_preamble
 from novel_agent.config import DEFAULT_MAX_TOKENS, ExecutionProfile
 from novel_agent.graph.scenes import assemble_scenes, build_scene_outcome, build_scene_plan
 from novel_agent.graph.state import NovelState
@@ -440,6 +440,8 @@ async def writer_node(state: NovelState, config: RunnableConfig | None = None) -
         writer.reasoning_tokens += notools.reasoning_tokens
         for tool_name, cnt in notools.tool_call_counts.items():
             writer.tool_call_counts[tool_name] = writer.tool_call_counts.get(tool_name, 0) + cnt
+
+    content = strip_writer_preamble(content)
 
     # Narrative Extension：不足目标字数时增量续写，不重新生成全文。
     content_units = _text_units(content.strip())
