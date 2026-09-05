@@ -23,11 +23,7 @@ from novel_agent.api.sse import (
     replay_review,
     resume_graph,
 )
-from novel_agent.graph.chapter import (
-    _config_for,
-    _get_chapter_store,
-    build_chapter_graph_async,
-)
+from novel_agent.graph.agent_loop import _config_for, _get_chapter_store
 from novel_agent.model_router import TaskClass
 from novel_agent.schema.enums import ChapterStatus, OutlineStatus
 from novel_agent.services.context import ContextCompiler
@@ -50,16 +46,9 @@ def _get_run_service() -> ChapterRunService:
 
 
 async def _restore_session(project_id: str, chapter_number: int) -> str | None:
-    """Recreate the in-memory SSE handle from a durable pending checkpoint."""
-    persist_dir = str(_get_persist_dir())
-    graph = await build_chapter_graph_async(persist_dir=persist_dir)
-    thread_id = f"{project_id}:ch{chapter_number}"
-    config = {"configurable": {"thread_id": thread_id}}
-    state = await graph.aget_state(config)
-    if not state or not state.next:
-        return None
-    session_id = session_store.create(graph, asyncio.Queue())
-    runs = _get_manager().list_writing_runs(project_id, chapter_number)
+    """Recreate the in-memory SSE handle from a durable pending review."""
+    mgr = _get_manager()
+    runs = mgr.list_writing_runs(project_id, chapter_number)
     active_run = next(
         (
             run
@@ -68,12 +57,14 @@ async def _restore_session(project_id: str, chapter_number: int) -> str | None:
         ),
         None,
     )
-    session_store.set_config(session_id, config)
+    if not active_run:
+        return None
+    session_id = session_store.create(asyncio.Queue())
     session_store.set_context(
         session_id,
         project_id,
         chapter_number,
-        active_run["id"] if active_run else None,
+        active_run["id"],
     )
     return session_id
 
@@ -591,40 +582,28 @@ async def write_chapter(project_id: str, chapter_number: int):
 
     # Build initial state
     persist_dir = str(_get_persist_dir())
-    graph = await build_chapter_graph_async(persist_dir=persist_dir)
     queue: asyncio.Queue = asyncio.Queue()
     # 清理同章节旧会话，避免 approve/reject 命中失效 session
     stale = session_store.find_session(project_id, chapter_number)
     if stale:
         session_store.remove(stale)
-    session_id = session_store.create(graph, queue)
+    session_id = session_store.create(queue)
 
-    # Use deterministic thread_id so checkpoints survive server restarts
-    thread_id = f"{project_id}:ch{chapter_number}"
-    config = {"configurable": {"thread_id": thread_id, "stream_queue": queue}}
-
-    # An interrupted checkpoint is the durable source of truth across restarts.
-    existing = await graph.aget_state(config)
-    if existing and existing.next:
-        runs = mgr.list_writing_runs(project_id, chapter_number)
-        run = next(
-            (
-                item
-                for item in runs
-                if item["status"]
-                in {"queued", "running", "waiting_review", "waiting_user", "retrying"}
-            ),
-            None,
-        )
-        if run is None:
-            try:
-                run = mgr.create_writing_run(project_id, chapter_number)
-            except ValueError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-        session_store.set_config(session_id, config)
-        session_store.set_context(session_id, project_id, chapter_number, run["id"])
+    # Check for a durable pending review (waiting_review run)
+    runs = mgr.list_writing_runs(project_id, chapter_number)
+    pending_run = next(
+        (
+            item
+            for item in runs
+            if item["status"] in {"queued", "running", "waiting_review", "waiting_user", "retrying"}
+        ),
+        None,
+    )
+    if pending_run:
+        session_store.set_context(session_id, project_id, chapter_number, pending_run["id"])
+        chapter_data = mgr.get_chapter(project_id, chapter_number) or {}
         return StreamingResponse(
-            replay_review(existing.values or {}, chapter_number),
+            replay_review(chapter_data, chapter_number),
             media_type="text/event-stream",
         )
 
@@ -643,10 +622,6 @@ async def write_chapter(project_id: str, chapter_number: int):
         "narrative_mode": project.get("narrative_mode"),
         "narrative_perspective": project.get("narrative_perspective", ""),
         "context_packet": ctx.get("context_packet", {}),
-        "scene_first": False,
-        # Phase4 消融证实：确定性硬门通过时跳过 LLM Reviewer 无质量损失
-        # （质量 +0.59、CED -0.70、token -59%），默认开启。
-        "deterministic_gate_first": True,
         "persist_dir": persist_dir,
     }
 
@@ -654,9 +629,7 @@ async def write_chapter(project_id: str, chapter_number: int):
         create_sse_stream(
             session_store,
             session_id,
-            graph,
             initial_state,
-            config,
             mgr,
             project_id,
             chapter_number,

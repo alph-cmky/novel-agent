@@ -1,4 +1,4 @@
-"""SSE streaming and session management for the writing pipeline."""
+"""SSE streaming and session management for the C5 agent loop."""
 
 import asyncio
 import json
@@ -8,12 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from novel_agent.api.run_service import ChapterRunService
-from novel_agent.graph.runner import (
-    GRAPH_INTERRUPT_EVENT,
-    chapter_run_context,
-    finalize_chapter,
-    iterate_chapter_events,
-)
+from novel_agent.graph.runner import run_chapter_agent_loop
 from novel_agent.schema.enums import ChapterStatus, RunStatus
 from novel_agent.storage.manager import ProjectManager
 
@@ -21,22 +16,21 @@ from novel_agent.storage.manager import ProjectManager
 class SessionStore:
     """In-memory store for active writing sessions.
 
-    Each session holds a reference to the compiled graph, its config,
-    and an asyncio.Queue for streaming chunks from writer_node to SSE.
+    Each session holds the initial state and an asyncio.Queue for
+    streaming progress events from the agent loop to SSE.
     """
 
     def __init__(self):
         self._sessions: dict[str, dict[str, Any]] = {}
 
-    def create(self, graph, queue: asyncio.Queue) -> str:
+    def create(self, queue: asyncio.Queue) -> str:
         session_id = str(uuid.uuid4())[:8]
         self._sessions[session_id] = {
-            "graph": graph,
-            "config": None,
             "queue": queue,
             "project_id": None,
             "chapter_number": None,
             "run_id": None,
+            "values": None,
         }
         return session_id
 
@@ -46,10 +40,6 @@ class SessionStore:
     def get_queue(self, session_id: str) -> asyncio.Queue | None:
         s = self._sessions.get(session_id)
         return s["queue"] if s else None
-
-    def set_config(self, session_id: str, config: dict) -> None:
-        if session_id in self._sessions:
-            self._sessions[session_id]["config"] = config
 
     def set_context(
         self,
@@ -62,6 +52,10 @@ class SessionStore:
             self._sessions[session_id]["project_id"] = project_id
             self._sessions[session_id]["chapter_number"] = chapter_number
             self._sessions[session_id]["run_id"] = run_id
+
+    def set_values(self, session_id: str, values: dict) -> None:
+        if session_id in self._sessions:
+            self._sessions[session_id]["values"] = values
 
     def find_session(self, project_id: str, chapter_number: int) -> str | None:
         for sid, s in self._sessions.items():
@@ -82,6 +76,7 @@ def _review_payload(values: dict, chapter_number: int) -> dict:
     wb = values.get("worldbuilding_report", {}) or {}
     ed = values.get("editor_report", {}) or {}
     ct = values.get("continuity_report", {}) or {}
+    qg = values.get("quality_gate_report", {}) or {}
     return {
         "type": "human_review",
         "chapter_number": chapter_number,
@@ -93,8 +88,8 @@ def _review_payload(values: dict, chapter_number: int) -> dict:
         "continuity_issues": ct.get("inconsistencies", [])[:10],
         "wb_new_entities": len(wb.get("new_entities", [])),
         "wb_conflicts": len(wb.get("conflicts", [])),
-        "evolution_rounds": len(values.get("evolution_history", [])),
-        "evolution_termination": values.get("evolution_termination", ""),
+        "quality_gate_passed": qg.get("passed", False),
+        "loop_retries": values.get("loop_retries", 0),
     }
 
 
@@ -114,209 +109,120 @@ async def replay_review(values: dict, chapter_number: int):
     yield _sse_event("review_required", _review_payload(values, chapter_number))
 
 
-async def _drain_queue(queue: asyncio.Queue):
-    """Drain chunk events from the queue, yielding SSE strings."""
-    try:
-        while True:
-            event_type, payload = await asyncio.wait_for(queue.get(), timeout=0.05)
-            yield _sse_event(event_type, payload)
-    except TimeoutError:
-        return
-
-
-_NODE_LABELS: dict[str, str] = {
-    "orchestrator": "策略规划",
-    "worldbuilding": "世界观提取",
-    "human_review": "人工审批",
-    "evolution_writer": "内容创作",
-    "evolution_editor": "编辑审查",
-    "evolution_continuity": "一致性审计",
-    "evolution_orchestrator": "进化评估",
-    "evolution_select_best": "选择最佳版本",
-}
-
-
-async def _background_drain(
-    queue: asyncio.Queue,
-    output: asyncio.Queue,
-    running: asyncio.Event,
-):
-    """Continuously drain writer chunks from queue into output queue."""
-    while running.is_set():
-        try:
-            event_type, payload = await asyncio.wait_for(queue.get(), timeout=0.05)
-            await output.put(_sse_event(event_type, payload))
-        except TimeoutError:
-            continue
-
-
-async def _flush_output(output: asyncio.Queue):
-    """Yield all pending items from the output queue."""
-    while not output.empty():
-        yield output.get_nowait()
-
-
-async def _make_progress_event(name: str, status: str, event: dict | None = None) -> str:
-    """Build a progress SSE event from a node name and status."""
-    label = _NODE_LABELS.get(name, name)
-    score = None
-    detail = None
-    meta = None
-
-    if status == "done" and event:
-        output = event.get("data", {}).get("output", {})
-        if name in ("editor", "evolution_editor"):
-            report = output.get("editor_report", {})
-            score = report.get("overall_score")
-            detail = report.get("verdict")
-        elif name in ("continuity", "evolution_continuity"):
-            report = output.get("continuity_report", {})
-            score = report.get("overall_score")
-        elif name == "worldbuilding":
-            report = output.get("worldbuilding_report", {})
-            n_ent = len(report.get("new_entities", []))
-            n_conf = len(report.get("conflicts", []))
-            detail = f"实体:{n_ent} 冲突:{n_conf}"
-        elif name == "evolution_orchestrator":
-            # Include evolution-specific metadata
-            history = output.get("evolution_history", [])
-            if history:
-                last = history[-1]
-                meta = {
-                    "version": last.get("v"),
-                    "editor": last.get("editor"),
-                    "continuity": last.get("continuity"),
-                    "composite": last.get("composite"),
-                    "delta": last.get("delta"),
-                    "termination": output.get("evolution_termination", ""),
-                }
-                score = last.get("composite")
-                term = output.get("evolution_termination", "")
-                detail = f"v{last.get('v')} E:{last.get('editor')} C:{last.get('continuity')}"
-                if term:
-                    detail += f" 终止:{term}"
-
-    return _sse_event(
-        "progress",
-        {
-            "node": name,
-            "label": label,
-            "status": status,
-            "score": score,
-            "detail": detail,
-            "meta": meta,
-        },
-    )
-
-
 async def create_sse_stream(
     store: SessionStore,
     session_id: str,
-    graph,
     initial_state: dict,
-    config: dict,
     mgr: ProjectManager,
     project_id: str,
     chapter_number: int,
 ):
-    """Run the writing graph and stream events via SSE.
+    """Run the C5 agent loop and stream progress events via SSE.
 
-    Uses a background drain task to stream writer chunks in real-time,
-    and run_chapter event iteration for node-level progress events.
+    The loop runs to completion (Orchestrator → Writer loop → Editor →
+    Continuity → Worldbuilding), then emits a review_required event.
+    Human review is a post-generation approve/reject step.
     """
     store.set_context(session_id, project_id, chapter_number)
-    store.set_config(session_id, config)
-    queue = store.get_queue(session_id)
-    output: asyncio.Queue = asyncio.Queue()
-    running = asyncio.Event()
-    running.set()
 
-    drain_task = asyncio.create_task(_background_drain(queue, output, running))
-    current_node: str | None = None
+    run_id = initial_state.get("writing_run_id")
+    if run_id:
+        mgr.update_writing_run(
+            run_id,
+            status=RunStatus.RUNNING.value,
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        store.set_context(session_id, project_id, chapter_number, run_id)
+
+    yield _sse_event("start", {"message": "开始写作..."})
 
     try:
-        run_id = initial_state.get("writing_run_id")
+        outcome = await run_chapter_agent_loop(
+            initial_state,
+            source="api",
+        )
+        values = outcome.values
+
+        # Emit progress events for each stage
+        yield _sse_event(
+            "progress",
+            {
+                "node": "orchestrator",
+                "label": "策略规划",
+                "status": "done",
+                "score": None,
+                "detail": values.get("orchestrator_strategy", {}).get("narrative_stage", ""),
+            },
+        )
+        yield _sse_event(
+            "progress",
+            {
+                "node": "writer",
+                "label": "内容创作",
+                "status": "done",
+                "score": None,
+                "detail": f"{len(values.get('draft_content', ''))} 字",
+            },
+        )
+        ed = values.get("editor_report", {}) or {}
+        yield _sse_event(
+            "progress",
+            {
+                "node": "editor",
+                "label": "编辑审查",
+                "status": "done",
+                "score": ed.get("overall_score"),
+                "detail": ed.get("verdict", ""),
+            },
+        )
+        ct = values.get("continuity_report", {}) or {}
+        yield _sse_event(
+            "progress",
+            {
+                "node": "continuity",
+                "label": "一致性审计",
+                "status": "done",
+                "score": ct.get("overall_score"),
+                "detail": None,
+            },
+        )
+        wb = values.get("worldbuilding_report", {}) or {}
+        yield _sse_event(
+            "progress",
+            {
+                "node": "worldbuilding",
+                "label": "世界观提取",
+                "status": "done",
+                "score": None,
+                "detail": (
+                    f"实体:{len(wb.get('new_entities', []))} 冲突:{len(wb.get('conflicts', []))}"
+                ),
+            },
+        )
+
+        store.set_values(session_id, values)
+
         if run_id:
             mgr.update_writing_run(
                 run_id,
-                status=RunStatus.RUNNING.value,
-                started_at=datetime.now(UTC).isoformat(),
+                status=RunStatus.WAITING_REVIEW.value,
+                current_node="human_review",
             )
-            store.set_context(session_id, project_id, chapter_number, run_id)
-        yield _sse_event("start", {"message": "开始写作..."})
-
-        interrupt_payload: dict | None = None
-        async with chapter_run_context(graph, config=config, state=initial_state) as ctx:
-            async for event in iterate_chapter_events(graph, ctx.payload, ctx.config):
-                async for s in _flush_output(output):
-                    yield s
-                if event.get("event") == GRAPH_INTERRUPT_EVENT:
-                    data = event.get("data")
-                    interrupt_payload = data if isinstance(data, dict) else {}
-                    continue
-                kind = event["event"]
-                name = event.get("name", "")
-                if kind == "on_chain_start" and name in _NODE_LABELS:
-                    current_node = name
-                    if run_id:
-                        mgr.update_writing_run(
-                            run_id,
-                            status=RunStatus.RUNNING.value,
-                            current_node=name,
-                        )
-                    yield await _make_progress_event(name, "running")
-                elif kind == "on_chain_end" and name in _NODE_LABELS:
-                    yield await _make_progress_event(name, "done", event)
-
-            running.clear()
-            await drain_task
-            async for s in _flush_output(output):
-                yield s
-            async for s in _drain_queue(queue):
-                yield s
-
-            outcome = await finalize_chapter(
-                graph,
-                ctx.config,
-                interrupt_payload=interrupt_payload,
-                fallback_trace_id=ctx.trace_id,
-            )
-            ctx.handle.record_outcome(outcome.values, interrupted=outcome.interrupted)
-        if outcome.interrupted:
-            vals = outcome.values
-            if run_id:
-                mgr.update_writing_run(
-                    run_id,
-                    status=RunStatus.WAITING_REVIEW.value,
-                    current_node="human_review",
-                )
-            yield _sse_event(
-                "progress",
-                {
-                    "node": "human_review",
-                    "label": "人工审批",
-                    "status": "running",
-                    "score": None,
-                    "detail": None,
-                },
-            )
-            yield _sse_event(
-                "review_required",
-                outcome.interrupt_payload or _review_payload(vals, chapter_number),
-            )
-        else:
-            if outcome.values:
-                _save_chapter_result(mgr, project_id, chapter_number, outcome.values)
-            status = "approved" if outcome.values.get("human_approved") else "draft"
-            yield _sse_event("done", {"chapter_content": "", "status": status})
-            store.remove(session_id)
+        yield _sse_event(
+            "progress",
+            {
+                "node": "human_review",
+                "label": "人工审批",
+                "status": "running",
+                "score": None,
+                "detail": None,
+            },
+        )
+        yield _sse_event("review_required", _review_payload(values, chapter_number))
 
     except Exception as e:
-        running.clear()
-        await drain_task
         traceback.print_exc()
         mgr.mark_chapter_failed(project_id, chapter_number)
-        run_id = initial_state.get("writing_run_id")
         if run_id:
             mgr.update_writing_run(
                 run_id,
@@ -325,12 +231,8 @@ async def create_sse_stream(
                 error_message=str(e),
                 finished_at=datetime.now(UTC).isoformat(),
             )
-        yield _sse_event("error", {"message": str(e), "node": current_node})
+        yield _sse_event("error", {"message": str(e)})
         store.remove(session_id)
-    finally:
-        running.clear()
-        if not drain_task.done():
-            drain_task.cancel()
 
 
 async def resume_graph(
@@ -341,108 +243,63 @@ async def resume_graph(
     project_id: str = "",
     chapter_number: int = 0,
 ):
-    """Resume a graph that was paused at Human Review."""
+    """Handle human review feedback: approve or reject-and-revise.
+
+    feedback["action"] == "approve": commit the chapter.
+    feedback["action"] == "reject": re-run the agent loop with feedback.
+    """
     session = store.get(session_id)
     if not session:
         yield _sse_event("error", {"message": "Session not found"})
         return
 
-    graph = session["graph"]
-    config = session.get("config", {})
     run_id = session.get("run_id")
-    queue = session.get("queue")
-    output: asyncio.Queue = asyncio.Queue()
-    running = asyncio.Event()
-    running.set()
-
-    drain_task = asyncio.create_task(_background_drain(queue, output, running)) if queue else None
-    current_node: str | None = None
+    values = session.get("values") or {}
 
     try:
+        action = feedback.get("action", "approve")
+
+        if action == "approve":
+            values["human_approved"] = True
+            if mgr and values:
+                _save_chapter_result(mgr, project_id, chapter_number, values)
+            yield _sse_event("done", {"chapter_content": "", "status": "approved"})
+            store.remove(session_id)
+            return
+
+        # Reject: re-run with feedback
+        comments = feedback.get("comments", "")
+        yield _sse_event("start", {"message": "根据反馈修订..."})
+
+        revision_state = dict(values)
+        revision_state["revision_feedback"] = comments
+        revision_state.pop("draft_content", None)
+
+        outcome = await run_chapter_agent_loop(revision_state, source="api")
+        new_values = outcome.values
+
+        store.set_values(session_id, new_values)
+
+        yield _sse_event(
+            "progress",
+            {
+                "node": "writer",
+                "label": "内容修订",
+                "status": "done",
+                "score": None,
+                "detail": f"{len(new_values.get('draft_content', ''))} 字",
+            },
+        )
+
         if run_id and mgr:
             mgr.update_writing_run(
                 run_id,
-                status=RunStatus.RUNNING.value,
+                status=RunStatus.WAITING_REVIEW.value,
                 current_node="human_review",
             )
-        yield _sse_event("start", {"message": "继续写作..."})
-        yield await _make_progress_event("human_review", "done")
-
-        interrupt_payload: dict | None = None
-        async with chapter_run_context(graph, config=config, resume=feedback) as ctx:
-            async for event in iterate_chapter_events(graph, ctx.payload, ctx.config):
-                async for s in _flush_output(output):
-                    yield s
-                if event.get("event") == GRAPH_INTERRUPT_EVENT:
-                    data = event.get("data")
-                    interrupt_payload = data if isinstance(data, dict) else {}
-                    continue
-                kind = event["event"]
-                name = event.get("name", "")
-                if kind == "on_chain_start" and name in _NODE_LABELS:
-                    current_node = name
-                    if run_id and mgr:
-                        mgr.update_writing_run(
-                            run_id,
-                            status=RunStatus.RUNNING.value,
-                            current_node=name,
-                        )
-                    yield await _make_progress_event(name, "running")
-                elif kind == "on_chain_end" and name in _NODE_LABELS:
-                    yield await _make_progress_event(name, "done", event)
-
-            running.clear()
-            if drain_task:
-                await drain_task
-            async for s in _flush_output(output):
-                yield s
-            if queue:
-                async for s in _drain_queue(queue):
-                    yield s
-
-            outcome = await finalize_chapter(
-                graph,
-                ctx.config,
-                interrupt_payload=interrupt_payload,
-                fallback_trace_id=ctx.trace_id,
-            )
-            ctx.handle.record_outcome(outcome.values, interrupted=outcome.interrupted)
-        if outcome.interrupted:
-            vals = outcome.values
-            if run_id and mgr:
-                mgr.update_writing_run(
-                    run_id,
-                    status=RunStatus.WAITING_REVIEW.value,
-                    current_node="human_review",
-                )
-            yield _sse_event(
-                "progress",
-                {
-                    "node": "human_review",
-                    "label": "人工审批",
-                    "status": "running",
-                    "score": None,
-                    "detail": None,
-                },
-            )
-            yield _sse_event(
-                "review_required",
-                outcome.interrupt_payload or _review_payload(vals, chapter_number),
-            )
-        else:
-            if outcome.values:
-                _save_chapter_result(mgr, project_id, chapter_number, outcome.values)
-            status = "approved" if outcome.values.get("human_approved") else "draft"
-            yield _sse_event("done", {"chapter_content": "", "status": status})
-            store.remove(session_id)
+        yield _sse_event("review_required", _review_payload(new_values, chapter_number))
 
     except Exception as e:
-        running.clear()
-        if drain_task:
-            await drain_task
-        if queue:
-            async for s in _drain_queue(queue):
-                yield s
         traceback.print_exc()
         if mgr:
             mgr.mark_chapter_failed(project_id, chapter_number)
@@ -454,12 +311,8 @@ async def resume_graph(
                     error_message=str(e),
                     finished_at=datetime.now(UTC).isoformat(),
                 )
-        yield _sse_event("error", {"message": str(e), "node": current_node})
+        yield _sse_event("error", {"message": str(e)})
         store.remove(session_id)
-    finally:
-        running.clear()
-        if drain_task and not drain_task.done():
-            drain_task.cancel()
 
 
 def _save_foreshadowings(
@@ -469,7 +322,6 @@ def _save_foreshadowings(
     wb_report: dict,
 ) -> None:
     """Persist new and resolved foreshadowings from worldbuilding report."""
-    # Upsert open foreshadowings so progress does not create duplicates.
     for fs in wb_report.get("foreshadowings", []) or []:
         if not isinstance(fs, dict) or not fs.get("description"):
             continue
@@ -511,7 +363,6 @@ def _save_foreshadowings(
         except Exception:
             pass
 
-    # Resolve existing foreshadowings
     for fs in wb_report.get("resolved_foreshadowings", []) or []:
         if not isinstance(fs, dict) or not fs.get("description"):
             continue
@@ -532,7 +383,7 @@ def _save_foreshadowings(
 def _save_chapter_result(
     mgr: ProjectManager, project_id: str, chapter_number: int, result: dict
 ) -> None:
-    """Persist the completed chapter to storage, including evolution data."""
+    """Persist the completed chapter to storage."""
 
     draft = result.get("draft_content", "")
     wb_report = result.get("worldbuilding_report", {})
@@ -549,7 +400,7 @@ def _save_chapter_result(
             chapter_number,
             draft,
             run_id=run_id,
-            origin="evolution" if result.get("evolution_history") else "initial_generation",
+            origin="agent_loop",
             scene_plan=result.get("scene_plan", []),
             scene_drafts=result.get("scene_drafts", []),
         )
@@ -558,26 +409,8 @@ def _save_chapter_result(
             current_version_id=version_record["id"],
             status=RunStatus.WAITING_REVIEW.value,
         )
-    # Commit the durable record as a draft first. Approval is published only
-    # after world state and vector indexing have succeeded.
+
     status = ChapterStatus.DRAFT.value
-
-    # Build evolution summary from state
-    evolution_history = result.get("evolution_history", [])
-    version = 0
-    evolution_summary = "{}"
-    if evolution_history:
-        version = len(evolution_history)
-        evolution_summary = json.dumps(
-            {
-                "total_rounds": len(evolution_history),
-                "best_version": result.get("evolution_best_candidate_version", 0),
-                "termination": result.get("evolution_termination", ""),
-                "score_history": evolution_history,
-            },
-            ensure_ascii=False,
-        )
-
     mgr.save_chapter(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -586,18 +419,15 @@ def _save_chapter_result(
         status=status,
         editor_report=json.dumps(editor_report, ensure_ascii=False),
         continuity_report=json.dumps(continuity_report, ensure_ascii=False),
-        version=version,
-        evolution_summary=evolution_summary,
+        version=0,
+        evolution_summary="{}",
         index=False,
     )
 
-    # Save worldbuilding report to chapter record
     mgr.update_chapter_worldbuilding(project_id, chapter_number, wb_report)
 
     if wb_report:
         if run_id:
-            # V2 runs produce a proposal; only Canon Commit may mutate the
-            # formal entity/relation/foreshadowing tables.
             mgr.create_canon_proposal(
                 project_id,
                 chapter_number,
@@ -607,7 +437,6 @@ def _save_chapter_result(
                 version_id=version_record["id"] if version_record else None,
             )
         else:
-            # Runs without a version record use direct-write persistence.
             mgr.save_world_entities(project_id, wb_report, chapter_number)
             mgr.save_world_relations(project_id, chapter_number, wb_report)
             _save_foreshadowings(mgr, project_id, chapter_number, wb_report)
@@ -619,8 +448,6 @@ def _save_chapter_result(
         return
 
     if approved:
-        # Index before publishing the approved status. A vector-store failure
-        # therefore leaves a retryable draft instead of a false approval.
         mgr.save_chapter(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -629,8 +456,8 @@ def _save_chapter_result(
             status=ChapterStatus.DRAFT.value,
             editor_report=json.dumps(editor_report, ensure_ascii=False),
             continuity_report=json.dumps(continuity_report, ensure_ascii=False),
-            version=version,
-            evolution_summary=evolution_summary,
+            version=0,
+            evolution_summary="{}",
             index=True,
         )
         mgr.save_chapter(
@@ -641,8 +468,8 @@ def _save_chapter_result(
             status=ChapterStatus.APPROVED.value,
             editor_report=json.dumps(editor_report, ensure_ascii=False),
             continuity_report=json.dumps(continuity_report, ensure_ascii=False),
-            version=version,
-            evolution_summary=evolution_summary,
+            version=0,
+            evolution_summary="{}",
             index=False,
         )
         if version_record:
