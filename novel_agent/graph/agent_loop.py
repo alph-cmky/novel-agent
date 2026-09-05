@@ -1,15 +1,11 @@
-"""Agent loop runner — replaces LangGraph with a single Writer tool-calling loop.
+"""Agent loop runner — C5 architecture.
 
-Architecture (experiment/full-agent-loop):
-    Orchestrator → Writer agent loop [
-        generate → analyze_style → humanize_passage → editor_review
-        → check_continuity → worldbuilding_extract → revise → finalize
-    ] → deterministic QualityGate → output
+    Orchestrator → Writer agent loop [generate → analyze_style → humanize_passage]
+    → deterministic QualityGate → Editor → Continuity → Worldbuilding → output
 
-The Writer drives the entire generate-check-revise cycle via tool calls.
-No fixed graph nodes, no evolution subgraph. Bounded by max_rounds.
-
-This is an experiment branch — the production graph (chapter.py) is untouched.
+The Writer loop handles generation + de-AI flavor (analyze_style + humanize_passage).
+Editor/Continuity/Worldbuilding run as fixed independent nodes after the loop.
+If Editor verdict is "rewrite", the loop re-enters with Editor feedback (max 2 retries).
 """
 
 from __future__ import annotations
@@ -18,18 +14,20 @@ import time
 from typing import Any
 
 from novel_agent.agents.base import AgentConfig
+from novel_agent.agents.continuity import ContinuityAgent
+from novel_agent.agents.editor import EditorAgent
 from novel_agent.agents.orchestrator import OrchestratorAgent
+from novel_agent.agents.worldbuilding import WorldbuildingAgent
 from novel_agent.agents.writer import WriterAgent, strip_writer_preamble
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.model_router import TaskClass
 from novel_agent.services.context import ContextCompiler
 from novel_agent.services.quality import QualityService
-from novel_agent.tools.continuity import CheckContinuityTool
-from novel_agent.tools.editor_review import EditorReviewTool
+from novel_agent.style.analyzer import StyleAnalyzer
 from novel_agent.tools.humanize import HumanizeTool
+from novel_agent.tools.search import SearchContextTool
 from novel_agent.tools.style_check import StyleCheckTool
-from novel_agent.tools.worldbuilding_extract import WorldbuildingExtractTool
 
 
 def _config_for(task: TaskClass) -> AgentConfig:
@@ -57,17 +55,18 @@ def _get_chapter_store(persist_dir: str) -> ChapterStore | None:
 async def run_agent_loop(
     state: dict[str, Any],
     *,
-    max_rounds: int = 12,
+    max_rounds: int = 8,
+    max_retries: int = 2,
 ) -> dict[str, Any]:
-    """Run the full agent loop: Orchestrator → Writer loop → QualityGate.
+    """Run the C5 agent loop.
 
     Args:
-        state: Initial state dict (same shape as LangGraph initial_state).
+        state: Initial state dict (same shape as old LangGraph initial_state).
         max_rounds: Max tool-calling rounds for the Writer loop.
+        max_retries: Max Editor-triggered re-entry into the loop.
 
     Returns:
-        Final state dict with draft_content, editor_report, etc.
-        Compatible with what the eval adapter expects from outcome.values.
+        Final state dict compatible with eval adapter expectations.
     """
     persist_dir = state.get("persist_dir", "./novel-data")
     project_id = state.get("project_id", "")
@@ -75,8 +74,9 @@ async def run_agent_loop(
     target_words = state.get("target_chapter_words", 3000)
     narrative_mode = state.get("narrative_mode")
     narrative_perspective = state.get("narrative_perspective", "")
+    outline = state.get("chapter_outline", "")
 
-    # ── 1. Orchestrator (unchanged from graph) ──
+    # ── 1. Orchestrator ──
     orchestrator = OrchestratorAgent(config=_config_for(TaskClass.STRUCTURAL))
 
     previous_chapters: list[dict] = []
@@ -106,7 +106,7 @@ async def run_agent_loop(
     _t0 = time.monotonic()
     strategy = await orchestrator.analyze(
         chapter_number=chapter_number,
-        chapter_outline=state.get("chapter_outline", ""),
+        chapter_outline=outline,
         previous_chapters=previous_chapters,
         story_length=state.get("story_length", "long"),
         target_chapter_words=target_words,
@@ -131,37 +131,22 @@ async def run_agent_loop(
         f"tokens: {orchestrator.input_tokens}/{orchestrator.output_tokens}"
     )
 
-    # ── 2. Writer agent loop ──
+    # ── 2. Writer agent loop (generate + de-AI) ──
     max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
     writer_config = _config_for(TaskClass.CREATIVE)
     writer_config.max_tokens = max_tokens
 
     store = _get_chapter_store(persist_dir)
-    shared: dict[str, Any] = {}
-
     writer_packet = ContextCompiler.for_writer(full_packet) if full_packet else None
 
+    # C5: loop only has generation + de-AI tools.
+    # Editor/Continuity/Worldbuilding are fixed nodes after the loop.
     loop_tools: list = [
         StyleCheckTool(),
         HumanizeTool(config=_config_for(TaskClass.REVIEW)),
-        EditorReviewTool(
-            config=_config_for(TaskClass.REVIEW),
-            narrative_mode=narrative_mode,
-            context_packet=ContextCompiler.for_editor(full_packet) if full_packet else None,
-            shared=shared,
-        ),
-        WorldbuildingExtractTool(
-            config=_config_for(TaskClass.EXTRACTION),
-            existing_entities=[],
-            existing_foreshadowings=unresolved
-            and [{"description": u, "status": "open"} for u in unresolved]
-            or [],
-            narrative_mode=narrative_mode,
-            shared=shared,
-        ),
     ]
     if store and project_id:
-        loop_tools.append(CheckContinuityTool(store, project_id))
+        loop_tools.append(SearchContextTool(store, project_id))
 
     writer = WriterAgent(
         config=writer_config,
@@ -173,17 +158,14 @@ async def run_agent_loop(
         agent_loop_tools=loop_tools,
     )
 
-    _w_t0 = time.monotonic()
     content, _ = await writer.write_with_loop(
         chapter_number=chapter_number,
-        outline=state.get("chapter_outline", ""),
+        outline=outline,
         context_packet=writer_packet,
         target_chapter_words=target_words,
         orchestrator_strategy=strategy,
         max_rounds=max_rounds,
     )
-    _w_latency = time.monotonic() - _w_t0
-
     content = strip_writer_preamble(content)
     print(
         f"  [AgentLoop] Writer: {len(content)} chars, "
@@ -193,35 +175,124 @@ async def run_agent_loop(
 
     # ── 3. Deterministic QualityGate ──
     quality_gate_report = QualityService.check_draft_hard_gates(
-        content,
-        target_words=target_words,
-        chapter_outline=state.get("chapter_outline", ""),
+        content, target_words=target_words, chapter_outline=outline
     )
     print(f"  [AgentLoop] QualityGate: {'PASS' if quality_gate_report['passed'] else 'FAIL'}")
 
-    # ── 4. Assemble final state ──
-    editor_report = shared.get("editor_report") or {"unavailable": True}
-    worldbuilding_report = shared.get("worldbuilding_report") or {}
+    # ── 4. Editor (independent fixed node) ──
+    editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
+    editor_packet = ContextCompiler.for_editor(full_packet) if full_packet else None
 
+    async def _run_editor(draft: str) -> dict:
+        style_report = StyleAnalyzer().analyze(draft).model_dump()
+        report, _ = await editor.review(
+            chapter_number=chapter_number,
+            draft_content=draft,
+            narrative_mode=narrative_mode,
+            style_report=style_report,
+            context_packet=editor_packet,
+        )
+        return report
+
+    _e_t0 = time.monotonic()
+    editor_report = await _run_editor(content)
+    _e_latency = time.monotonic() - _e_t0
+    print(
+        f"  [AgentLoop] Editor: score={editor_report.get('overall_score', '?')}, "
+        f"verdict={editor_report.get('verdict', '?')}"
+    )
+
+    # ── 5. Editor-triggered retry (re-enter loop with feedback) ──
+    retries = 0
+    while editor_report.get("verdict") == "rewrite" and retries < max_retries:
+        retries += 1
+        print(f"  [AgentLoop] Editor retry {retries}/{max_retries}")
+
+        feedback = editor_report.get("issues") or []
+        feedback_text = "\n".join(
+            f"- [{i.get('dimension', '?')}] {i.get('description', '')}" for i in feedback[:5]
+        )
+
+        content, _ = await writer.write_with_loop(
+            chapter_number=chapter_number,
+            outline=outline,
+            context_packet=writer_packet,
+            target_chapter_words=target_words,
+            orchestrator_strategy=strategy,
+            max_rounds=max_rounds,
+            revision_feedback=feedback_text,
+        )
+        content = strip_writer_preamble(content)
+        print(f"  [AgentLoop] Writer retry {retries}: {len(content)} chars")
+
+        _e_t0 = time.monotonic()
+        editor_report = await _run_editor(content)
+        _e_latency += time.monotonic() - _e_t0
+        print(
+            f"  [AgentLoop] Editor retry {retries}: "
+            f"score={editor_report.get('overall_score', '?')}, "
+            f"verdict={editor_report.get('verdict', '?')}"
+        )
+
+    # ── 6. Continuity (independent fixed node) ──
+    continuity = ContinuityAgent(
+        config=_config_for(TaskClass.REVIEW),
+        chapter_store=store,
+        project_id=project_id,
+    )
+    continuity_packet = ContextCompiler.for_continuity(full_packet) if full_packet else None
+    _c_t0 = time.monotonic()
+    continuity_report, _ = await continuity.audit(
+        chapter_number=chapter_number,
+        draft_content=content,
+        narrative_mode=narrative_mode,
+        context_packet=continuity_packet,
+    )
+    _c_latency = time.monotonic() - _c_t0
+    print(f"  [AgentLoop] Continuity: score={continuity_report.get('overall_score', '?')}")
+
+    # ── 7. Worldbuilding (independent fixed node) ──
+    existing_entities = []
+    existing_foreshadowings = (
+        [{"description": u, "status": "open"} for u in unresolved] if unresolved else []
+    )
+    if mgr and project_id:
+        try:
+            existing_entities = mgr.get_world_entities(project_id) or []
+        except Exception:
+            pass
+
+    worldbuilding = WorldbuildingAgent(
+        config=_config_for(TaskClass.EXTRACTION),
+        existing_entities=existing_entities,
+        existing_foreshadowings=existing_foreshadowings,
+    )
+    _wb_t0 = time.monotonic()
+    worldbuilding_report, _ = await worldbuilding.extract(
+        chapter_number=chapter_number,
+        draft_content=content,
+        narrative_mode=narrative_mode,
+    )
+    _wb_latency = time.monotonic() - _wb_t0
+    print(f"  [AgentLoop] Worldbuilding: entities={len(worldbuilding_report.get('entities', []))}")
+
+    # ── 8. Assemble final state ──
     return {
         "draft_content": content,
         "orchestrator_strategy": strategy,
         "context_packet": full_packet,
         "quality_gate_report": quality_gate_report,
         "editor_report": editor_report,
+        "continuity_report": continuity_report,
         "worldbuilding_report": worldbuilding_report,
-        "continuity_report": {},
         "human_approved": None,
         "chapter_number": chapter_number,
         "project_id": project_id,
         "writing_run_id": state.get("writing_run_id", ""),
-        "evolution_termination": "agent_loop",
-        "evolution_history": [],
-        "evolution_candidates": [],
-        "evolution_best_candidate_version": None,
+        "loop_retries": retries,
         "scene_plan": [],
         "scene_drafts": [],
-        # Token accounting (per-role, compatible with eval adapter)
+        # Token accounting (per-role)
         "orchestrator_input_tokens": orchestrator.input_tokens,
         "orchestrator_output_tokens": orchestrator.output_tokens,
         "orchestrator_cached_tokens": orchestrator.cached_tokens,
@@ -233,32 +304,25 @@ async def run_agent_loop(
         "writer_cached_tokens": writer.cached_tokens,
         "writer_reasoning_tokens": writer.reasoning_tokens,
         "writer_model_calls": writer.model_calls,
-        "writer_latency_seconds": _w_latency,
+        "writer_latency_seconds": time.monotonic() - _t0 - _orch_latency,
         "writer_tool_calls": sum(writer.tool_call_counts.values()),
         "writer_search_calls": writer.tool_call_counts.get("search_context", 0),
-        # Other roles unused in agent loop
-        "editor_input_tokens": 0,
-        "editor_output_tokens": 0,
-        "editor_cached_tokens": 0,
-        "editor_reasoning_tokens": 0,
-        "editor_model_calls": 0,
-        "editor_latency_seconds": 0.0,
-        "continuity_input_tokens": 0,
-        "continuity_output_tokens": 0,
-        "continuity_cached_tokens": 0,
-        "continuity_reasoning_tokens": 0,
-        "continuity_model_calls": 0,
-        "continuity_latency_seconds": 0.0,
-        "worldbuilding_input_tokens": 0,
-        "worldbuilding_output_tokens": 0,
-        "worldbuilding_cached_tokens": 0,
-        "worldbuilding_reasoning_tokens": 0,
-        "worldbuilding_model_calls": 0,
-        "worldbuilding_latency_seconds": 0.0,
-        "evolution_input_tokens": 0,
-        "evolution_output_tokens": 0,
-        "evolution_cached_tokens": 0,
-        "evolution_reasoning_tokens": 0,
-        "evolution_model_calls": 0,
-        "evolution_latency_seconds": 0.0,
+        "editor_input_tokens": editor.input_tokens,
+        "editor_output_tokens": editor.output_tokens,
+        "editor_cached_tokens": editor.cached_tokens,
+        "editor_reasoning_tokens": editor.reasoning_tokens,
+        "editor_model_calls": editor.model_calls,
+        "editor_latency_seconds": _e_latency,
+        "continuity_input_tokens": continuity.input_tokens,
+        "continuity_output_tokens": continuity.output_tokens,
+        "continuity_cached_tokens": continuity.cached_tokens,
+        "continuity_reasoning_tokens": continuity.reasoning_tokens,
+        "continuity_model_calls": continuity.model_calls,
+        "continuity_latency_seconds": _c_latency,
+        "worldbuilding_input_tokens": worldbuilding.input_tokens,
+        "worldbuilding_output_tokens": worldbuilding.output_tokens,
+        "worldbuilding_cached_tokens": worldbuilding.cached_tokens,
+        "worldbuilding_reasoning_tokens": worldbuilding.reasoning_tokens,
+        "worldbuilding_model_calls": worldbuilding.model_calls,
+        "worldbuilding_latency_seconds": _wb_latency,
     }

@@ -100,21 +100,18 @@ WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 - 对白自然独立成段。
 """
 
-AGENT_LOOP_SYSTEM_PROMPT = """你是长篇小说章节执行器，在一个自主工具循环中完成章节的生成、自检、去AI味和修订。
+AGENT_LOOP_SYSTEM_PROMPT = """你是长篇小说章节执行器，在一个自主工具循环中完成章节的生成和去AI味。
 
 ## 工作流程
 
 1. **生成草稿**：根据大纲和上下文写出完整章节正文。
 2. **自检AI味**：调用 analyze_style 分析文本。如果发现 issues，调用 humanize_passage 去除AI味，拿到 humanized_text 后用它作为新草稿。
-3. **文学审查**：调用 editor_review 获取8维度评分。如果 verdict 不是 pass，按 issues 修订正文。
-4. **一致性检查**：调用 check_continuity 检查跨章一致性。如有问题，修订。
-5. **设定提取**：内容稳定后，调用 worldbuilding_extract 提取实体和伏笔。
-6. **输出终稿**：所有检查通过后，输出完整的章节正文（不带任何工具调用）。
+3. **复核**：再调 analyze_style 确认改善。如仍有问题可再调 humanize_passage。
+4. **输出终稿**：确认无AI味后，输出完整的章节正文（不带任何工具调用）。
 
 ## 规则
 
 - 检索工具 search_context 仅在需要确认未提供的角色、事件、伏笔时调用，已有上下文不重复检索。
-- 每次修订后重新调用 analyze_style 确认改善。
 - humanize_passage 返回的 humanized_text 是完整正文，直接用作新草稿，不要再缩写。
 - 终稿必须输出完整的全章节正文，不要只输出修改片段、大纲或省略号。
 - 保持剧情、人物、设定不变，只改写法不改故事。
@@ -270,13 +267,16 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 0,
         orchestrator_strategy: dict | None = None,
         max_rounds: int = 12,
+        revision_feedback: str | None = None,
     ) -> tuple[str, TraceStep]:
-        """Agent loop mode: Writer drives the full generate-check-revise cycle.
+        """Agent loop mode: Writer drives generate → analyze_style → humanize → finalize.
 
-        The Writer has tools: search_context, analyze_style, humanize_passage,
-        editor_review, check_continuity, worldbuilding_extract. It decides
-        when to write, check, humanize, and finalize. The loop is bounded by
-        max_rounds. Final output is the complete chapter text.
+        When revision_feedback is provided, the Writer revises an existing draft
+        based on Editor feedback instead of generating from scratch.
+
+        The Writer has tools: search_context, analyze_style, humanize_passage.
+        It decides when to check and humanize. The loop is bounded by max_rounds.
+        Final output is the complete chapter text.
         """
         packet = context_packet or {}
         character_context = packet.get("character_context", "")
@@ -309,13 +309,22 @@ class WriterAgent(BaseAgent):
         if timeline_findings:
             context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
 
-        user_prompt = (
-            f"请根据以下信息，在工具循环中完成第{chapter_number}章的创作和自检：\n\n"
-            + "\n\n".join(context_parts)
-            + "\n\n先生成完整草稿，然后依次调用 analyze_style、humanize_passage（如有AI味）、"
-            "editor_review、check_continuity、worldbuilding_extract 进行自检和修订。"
-            "全部检查通过后，输出完整的章节终稿。"
-        )
+        if revision_feedback:
+            user_prompt = (
+                f"请根据以下信息修订第{chapter_number}章：\n\n"
+                + "\n\n".join(context_parts)
+                + f"\n\n## 编辑反馈（请针对性修订）\n{revision_feedback}"
+                + "\n\n请基于反馈修订正文，然后调用 analyze_style 检查AI味，"
+                "如有问题调用 humanize_passage 去味。输出完整的章节终稿。"
+            )
+        else:
+            user_prompt = (
+                f"请根据以下信息，在工具循环中完成第{chapter_number}章的创作和自检：\n\n"
+                + "\n\n".join(context_parts)
+                + "\n\n先生成完整草稿，然后调用 analyze_style 检查AI味，"
+                "如有AI味调用 humanize_passage 去味，再调 analyze_style 复核。"
+                "确认无问题后，输出完整的章节终稿。"
+            )
         messages.append({"role": "user", "content": user_prompt})
 
         content, trace = await self.run_with_tools(
