@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.parser import strip_none
+from novel_agent.tools.base import BaseTool
 from novel_agent.tools.search import SearchContextTool
 
 _HR_RE = re.compile(r"^(?:---+|\*\*\*+|___+)\s*\n+")
@@ -61,6 +62,7 @@ def _is_writer_meta(block: str) -> bool:
         return True
     return bool(_META_MARK_RE.search(s))
 
+
 WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 
 你的首要目标是保持长篇叙事可靠推进，而不是堆砌辞藻：
@@ -98,6 +100,30 @@ WRITER_SYSTEM_PROMPT = """你是长篇小说章节执行器。
 - 对白自然独立成段。
 """
 
+AGENT_LOOP_SYSTEM_PROMPT = """你是长篇小说章节执行器，在一个自主工具循环中完成章节的生成、自检、去AI味和修订。
+
+## 工作流程
+
+1. **生成草稿**：根据大纲和上下文写出完整章节正文。
+2. **自检AI味**：调用 analyze_style 分析文本。如果发现 issues，调用 humanize_passage 去除AI味，拿到 humanized_text 后用它作为新草稿。
+3. **文学审查**：调用 editor_review 获取8维度评分。如果 verdict 不是 pass，按 issues 修订正文。
+4. **一致性检查**：调用 check_continuity 检查跨章一致性。如有问题，修订。
+5. **设定提取**：内容稳定后，调用 worldbuilding_extract 提取实体和伏笔。
+6. **输出终稿**：所有检查通过后，输出完整的章节正文（不带任何工具调用）。
+
+## 规则
+
+- 检索工具 search_context 仅在需要确认未提供的角色、事件、伏笔时调用，已有上下文不重复检索。
+- 每次修订后重新调用 analyze_style 确认改善。
+- humanize_passage 返回的 humanized_text 是完整正文，直接用作新草稿，不要再缩写。
+- 终稿必须输出完整的全章节正文，不要只输出修改片段、大纲或省略号。
+- 保持剧情、人物、设定不变，只改写法不改故事。
+- 不违反 Canon 事实、角色状态和时间线。
+- 用具体行动、感官和对话呈现，不用空泛总结代替场景。
+- 目标篇幅：__TARGET_WORDS__ 字左右。
+- 只输出章节正文，不输出分析、评分、解释、标题或元信息。
+"""
+
 
 class WriterAgent(BaseAgent):
     name = "writer"
@@ -121,6 +147,7 @@ class WriterAgent(BaseAgent):
         target_chapter_words: int = 3000,
         narrative_mode: str | None = None,
         narrative_perspective: str = "",
+        agent_loop_tools: list[BaseTool] | None = None,
     ):
         super().__init__(config)
         self._chapter_store = chapter_store
@@ -130,6 +157,10 @@ class WriterAgent(BaseAgent):
         self._narrative_perspective = narrative_perspective
         if chapter_store and project_id:
             self.register_tool(SearchContextTool(chapter_store, project_id))
+        if agent_loop_tools:
+            for tool in agent_loop_tools:
+                self.register_tool(tool)
+        self._is_loop_mode = bool(agent_loop_tools)
 
     @property
     def system_prompt(self) -> str:
@@ -142,7 +173,8 @@ class WriterAgent(BaseAgent):
         the prompt, so target words silently never reached the LLM.
         """
         words = override_words or self._target_words or 3000
-        return WRITER_SYSTEM_PROMPT.replace("__TARGET_WORDS__", str(words))
+        prompt = AGENT_LOOP_SYSTEM_PROMPT if self._is_loop_mode else WRITER_SYSTEM_PROMPT
+        return prompt.replace("__TARGET_WORDS__", str(words))
 
     def _build_tool_hint(self) -> str:
         """Search-tool guidance: on-demand retrieval, never a forced pre-step.
@@ -227,6 +259,69 @@ class WriterAgent(BaseAgent):
             messages,
             max_rounds=3,
             action=f"write_chapter_{chapter_number}",
+        )
+        return strip_writer_preamble(content), trace
+
+    async def write_with_loop(
+        self,
+        chapter_number: int,
+        outline: str,
+        context_packet: dict | None = None,
+        target_chapter_words: int = 0,
+        orchestrator_strategy: dict | None = None,
+        max_rounds: int = 12,
+    ) -> tuple[str, TraceStep]:
+        """Agent loop mode: Writer drives the full generate-check-revise cycle.
+
+        The Writer has tools: search_context, analyze_style, humanize_passage,
+        editor_review, check_continuity, worldbuilding_extract. It decides
+        when to write, check, humanize, and finalize. The loop is bounded by
+        max_rounds. Final output is the complete chapter text.
+        """
+        packet = context_packet or {}
+        character_context = packet.get("character_context", "")
+        world_context = packet.get("world_context", "")
+        recent_summary = packet.get("recent_summary", "")
+        unresolved_foreshadowings = packet.get("unresolved_foreshadowings", [])
+        timeline_events = packet.get("timeline_events", [])
+        timeline_findings = packet.get("timeline_findings", [])
+
+        messages = [{"role": "system", "content": self._build_system_prompt(target_chapter_words)}]
+
+        context_parts = [f"## 第{chapter_number}章大纲\n{outline}"]
+        if orchestrator_strategy:
+            strategy_text = self._format_strategy(orchestrator_strategy)
+            if strategy_text:
+                context_parts.insert(0, strategy_text)
+        if character_context:
+            context_parts.append(f"## 相关角色\n{character_context}")
+        if world_context:
+            context_parts.append(f"## 世界观设定\n{world_context}")
+        if recent_summary:
+            context_parts.append(f"## 前文提要\n{recent_summary}")
+        if unresolved_foreshadowings:
+            context_parts.append(
+                "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
+                + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
+            )
+        if timeline_events:
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+        if timeline_findings:
+            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
+
+        user_prompt = (
+            f"请根据以下信息，在工具循环中完成第{chapter_number}章的创作和自检：\n\n"
+            + "\n\n".join(context_parts)
+            + "\n\n先生成完整草稿，然后依次调用 analyze_style、humanize_passage（如有AI味）、"
+            "editor_review、check_continuity、worldbuilding_extract 进行自检和修订。"
+            "全部检查通过后，输出完整的章节终稿。"
+        )
+        messages.append({"role": "user", "content": user_prompt})
+
+        content, trace = await self.run_with_tools(
+            messages,
+            max_rounds=max_rounds,
+            action=f"agent_loop_ch{chapter_number}",
         )
         return strip_writer_preamble(content), trace
 
