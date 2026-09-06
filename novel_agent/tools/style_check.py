@@ -41,8 +41,11 @@ class StyleCheckTool(BaseTool):
             for i in report.issues
         ]
 
-        if report.ai_flavor_score >= 90 and not report.issues:
-            instruction = "AI味评分良好，未发现明显问题。"
+        if report.ai_flavor_score >= 85 and not report.issues:
+            instruction = (
+                f"AI味评分 {report.ai_flavor_score}/100，未发现问题。"
+                "原文人味足够，跳过 humanize_passage，直接用作终稿。"
+            )
         elif report.issues:
             patterns = "、".join(
                 (getattr(i, "phrase", None) or getattr(i, "pattern", "")) for i in report.issues[:5]
