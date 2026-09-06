@@ -14,13 +14,24 @@ _TITLE_RE = re.compile(
     r"^#{1,3}\s*(?:第[一二三四五六七八九十百千万零〇0-9]+章|正文|本章正文)\s*\n+"
 )
 _META_MARK_RE = re.compile(
-    r"未检索到|没有检索到|检索(?:无结果|失败|未命中|未找到)"
+    r"未检索到|没有检索到|检索(?:无结果|失败|未命中|未找到|无更多)"
     r"|未找到.{0,20}(?:细节|记录|内容|结尾|章节)"
     r"|我基于.{0,30}(?:前文|大纲|提要)|基于前文提要"
+    r"|我依据(?:提供|大纲|前文)"
     r"|下面(?:将)?(?:创作|撰写|开始写)第"
     r"|以下(?:是|为)(?:第\d+章|本章)(?:正文)?"
     r"|开始(?:创作|撰写)第\d+章"
+    r"|生成第\d+章(?:草稿|正文)"
+    r"|第\d+章[：:]"
     r"|好的[，,].{0,20}(?:创作|续写|撰写)"
+    # 工具结果泄漏：style/quality gate 复述
+    r"|复核通过|style[_ ]?gate通过|ai[_ ]?flavor评分"
+    r"|(?:AI味|ai_flavor)评分\d+|无issue|无issues"
+    r"|文本约\d+字|略低于\d+目标|内容完整覆盖第"
+    r"|我需要考虑内容完整性"
+    # 字数计算泄漏
+    r"|让我数一下|粗略数下来|这份正文大约"
+    r"|接近目标字数\d+字|让我再补充.{0,15}篇幅"
     # English preambles from agent-loop final output
     r"|the analysis confirms|no issues remain|ai_flavor_score"
     r"|here is the (?:completed )?(?:final )?chapter"
