@@ -1,8 +1,10 @@
 """Single chapter-execution entry for API, CLI, and eval.
 
-Wraps the C5 agent loop (Orchestrator → Writer loop → Editor → Continuity →
-Worldbuilding) and returns a ChapterOutcome compatible with the API layer.
+Wraps the C5/S1 agent loop (Orchestrator → Writer loop → Hard Gate →
+conditional Editor/Continuity → Worldbuilding) and returns a ChapterOutcome
+compatible with the API layer.
 No LangGraph, no checkpoint interrupts — human review is a post-generation step.
+Hard Gate PASS skips Editor+Continuity; FAIL runs them as before.
 """
 
 from __future__ import annotations
