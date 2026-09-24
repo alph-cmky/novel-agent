@@ -2,13 +2,15 @@
 
     Orchestrator → Writer agent loop [generate → analyze_style → humanize_passage]
     → deterministic Hard Gate
-         PASS → SKIP Editor + Continuity (telemetry recorded)
+         PASS + clean timeline → SKIP Editor + Continuity
+         PASS + dead character in this draft → Editor arm
          FAIL → Editor → (verdict=rewrite → re-enter Writer ≤ max_retries) → Continuity
     → Worldbuilding → output for human approve/reject
 
 The Writer loop handles generation + de-AI flavor (analyze_style + humanize_passage).
-Editor/Continuity run only when the Hard Gate fails. Worldbuilding always runs.
-If Editor verdict is "rewrite", the loop re-enters with Editor feedback (max 2 retries).
+Editor and the Continuity LLM run when the hard gate fails, or when this draft
+names a character who already died. A later rewrite that clears both checks
+skips the Continuity LLM. Worldbuilding always runs.
 """
 
 from __future__ import annotations
@@ -25,7 +27,8 @@ from novel_agent.agents.writer import WriterAgent, strip_writer_preamble
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.model_router import TaskClass
-from novel_agent.services.context import ContextCompiler
+from novel_agent.services.context import _FORESHADOW_LIMIT, _PROPERTY_CHARS, ContextCompiler
+from novel_agent.services.continuity import ContinuityService
 from novel_agent.services.quality import QualityService
 from novel_agent.style.analyzer import StyleAnalyzer
 from novel_agent.tools.humanize import HumanizeTool
@@ -79,6 +82,45 @@ def _skipped_continuity_report(reason: str = "hard_gate_passed") -> dict:
     }
 
 
+def _wb_entities(entities: list[dict]) -> list[dict]:
+    from novel_agent.storage.manager import _excerpt
+
+    clipped = []
+    for entity in entities:
+        name = entity.get("name")
+        if not name:
+            continue
+        clipped.append(
+            {
+                "entity_type": entity.get("entity_type"),
+                "name": name,
+                "properties": _excerpt(str(entity.get("properties") or ""), _PROPERTY_CHARS),
+            }
+        )
+    return clipped
+
+
+def _timeline_feedback(report: dict) -> str:
+    lines = []
+    for item in report.get("findings") or []:
+        if item.get("type") != "dead_character_reappeared":
+            continue
+        lines.append(
+            f"- 角色「{item.get('subject', '')}」已在第{item.get('death_chapter', '?')}章死亡，"
+            "本章不得让其活着出场。改写时删掉这个人的在场，不要只改措辞。"
+        )
+    return "\n".join(lines)
+
+
+def _draft_timeline(packet: dict, draft: str, chapter_number: int) -> dict:
+    events = packet.get("timeline_events") or []
+    return ContinuityService.check_draft_against_timeline(
+        events,
+        draft,
+        current_chapter=chapter_number,
+    )
+
+
 async def run_agent_loop(
     state: dict[str, Any],
     *,
@@ -88,7 +130,7 @@ async def run_agent_loop(
     """Run the C5 agent loop with S1 conditional Editor/Continuity.
 
     Args:
-        state: Initial state dict (same shape as old LangGraph initial_state).
+        state: Initial state dict for one chapter run.
             May include ``revision_feedback`` from human reject / resume.
         max_rounds: Max tool-calling rounds for the Writer loop.
         max_retries: Max Editor-triggered re-entry into the loop.
@@ -114,27 +156,28 @@ async def run_agent_loop(
 
     previous_chapters: list[dict] = []
     total_chapters = 0
-    unresolved: list[str] = []
     mgr = None
+    full_packet = dict(state.get("context_packet") or {})
+    unresolved = list(full_packet.get("unresolved_foreshadowings") or [])
     if project_id:
         try:
             from novel_agent.storage.manager import ProjectManager
 
             mgr = ProjectManager(persist_dir)
-            previous_chapters = mgr.get_recent_chapters(project_id, before=chapter_number, limit=5)
-            previous_chapters.reverse()
+            previous_chapters = mgr.get_chapter_numbers(project_id, before=chapter_number)
             total_chapters = mgr.count_chapters(project_id, before=chapter_number)
-            relevant_fs = mgr.get_relevant_foreshadowings(project_id, chapter_number)
-            unresolved = [
-                f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
-                for f in relevant_fs
-            ]
+            if not unresolved:
+                relevant_fs = mgr.get_relevant_foreshadowings(
+                    project_id, chapter_number, limit=_FORESHADOW_LIMIT
+                )
+                unresolved = [
+                    f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
+                    for f in relevant_fs
+                ]
+                if unresolved:
+                    full_packet["unresolved_foreshadowings"] = unresolved
         except Exception as exc:
             print(f"  [AgentLoop] Orchestrator 加载前文失败: {exc}")
-
-    full_packet = dict(state.get("context_packet") or {})
-    if unresolved:
-        full_packet["unresolved_foreshadowings"] = unresolved
 
     _t0 = time.monotonic()
     strategy = await orchestrator.analyze(
@@ -148,7 +191,6 @@ async def run_agent_loop(
         arc_summary="",
         context_packet=ContextCompiler.for_orchestrator(full_packet),
         total_chapters=total_chapters,
-        scene_first=False,
     )
     _orch_latency = time.monotonic() - _t0
 
@@ -219,7 +261,12 @@ async def run_agent_loop(
         content, target_words=target_words, chapter_outline=outline
     )
     gate_passed = bool(quality_gate_report.get("passed"))
-    print(f"  [AgentLoop] QualityGate: {'PASS' if gate_passed else 'FAIL'}")
+    timeline_report = _draft_timeline(full_packet, content, chapter_number)
+    timeline_passed = bool(timeline_report.get("passed"))
+    print(
+        f"  [AgentLoop] QualityGate: {'PASS' if gate_passed else 'FAIL'}; "
+        f"timeline: {'PASS' if timeline_passed else 'FAIL'}"
+    )
 
     editor_skipped = False
     continuity_skipped = False
@@ -241,17 +288,22 @@ async def run_agent_loop(
     continuity_reasoning_tokens = 0
     continuity_model_calls = 0
 
-    if gate_passed:
-        # S1: Hard Gate PASS → skip Editor + Continuity
+    if gate_passed and timeline_passed:
         editor_skipped = True
         continuity_skipped = True
         editor_report = _skipped_editor_report()
         continuity_report = _skipped_continuity_report()
-        print("  [AgentLoop] S1: Hard Gate PASS → skip Editor + Continuity")
+        print("  [AgentLoop] S1: Hard Gate PASS and timeline clean → skip Editor + Continuity")
     else:
         # ── 4. Editor (FAIL path only) ──
         editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
-        editor_packet = ContextCompiler.for_editor(full_packet) if full_packet else None
+        editor_source = dict(full_packet)
+        if not timeline_passed:
+            editor_source["timeline_findings"] = [
+                *(editor_source.get("timeline_findings") or []),
+                *timeline_report.get("findings", []),
+            ]
+        editor_packet = ContextCompiler.for_editor(editor_source) if editor_source else None
 
         async def _run_editor(draft: str) -> dict:
             style_report = StyleAnalyzer().analyze(draft).model_dump()
@@ -273,7 +325,9 @@ async def run_agent_loop(
         )
 
         # ── 5. Editor-triggered retry (re-enter loop with feedback) ──
-        while editor_report.get("verdict") == "rewrite" and retries < max_retries:
+        while retries < max_retries and (
+            editor_report.get("verdict") == "rewrite" or not timeline_passed
+        ):
             retries += 1
             print(f"  [AgentLoop] Editor retry {retries}/{max_retries}")
 
@@ -281,6 +335,9 @@ async def run_agent_loop(
             feedback_text = "\n".join(
                 f"- [{i.get('dimension', '?')}] {i.get('description', '')}" for i in feedback[:5]
             )
+            death_feedback = _timeline_feedback(timeline_report)
+            if death_feedback:
+                feedback_text = f"{death_feedback}\n{feedback_text}".strip()
 
             content, _ = await writer.write_with_loop(
                 chapter_number=chapter_number,
@@ -305,11 +362,14 @@ async def run_agent_loop(
                 content, target_words=target_words, chapter_outline=outline
             )
             gate_passed = bool(quality_gate_report.get("passed"))
+            timeline_report = _draft_timeline(full_packet, content, chapter_number)
+            timeline_passed = bool(timeline_report.get("passed"))
             print(
                 f"  [AgentLoop] QualityGate after rewrite {retries}: "
-                f"{'PASS' if gate_passed else 'FAIL'}"
+                f"{'PASS' if gate_passed else 'FAIL'}; "
+                f"timeline: {'PASS' if timeline_passed else 'FAIL'}"
             )
-            if gate_passed:
+            if gate_passed and timeline_passed:
                 editor_report = {
                     **editor_report,
                     "verdict": "accept",
@@ -332,11 +392,11 @@ async def run_agent_loop(
         editor_reasoning_tokens = editor.reasoning_tokens
         editor_model_calls = editor.model_calls
 
-        # ── 6. Continuity (FAIL path only; skip if rewrite recovered to PASS) ──
-        if gate_passed:
+        # Skip the Continuity LLM only when both checks are clean.
+        if gate_passed and timeline_passed:
             continuity_skipped = True
             continuity_report = _skipped_continuity_report("hard_gate_passed_after_rewrite")
-            print("  [AgentLoop] S1: Hard Gate PASS after rewrite → skip Continuity")
+            print("  [AgentLoop] S1: Hard Gate PASS and timeline clean → skip Continuity")
         else:
             continuity = ContinuityAgent(
                 config=_config_for(TaskClass.REVIEW),
@@ -373,7 +433,9 @@ async def run_agent_loop(
     if mgr and project_id:
         try:
             # Correct manager API (get_world_entities does not exist)
-            existing_entities = mgr.get_all_world_entities(project_id) or []
+            existing_entities = _wb_entities(
+                mgr.get_relevant_world_entities(project_id, content) or []
+            )
         except Exception as exc:
             wb_existing_load_error = f"{type(exc).__name__}: {exc}"
             print(f"  [AgentLoop] Worldbuilding load existing entities failed: {exc}")
@@ -422,6 +484,8 @@ async def run_agent_loop(
         "context_packet": full_packet,
         "quality_gate_report": quality_gate_report,
         "quality_gate_passed": gate_passed,
+        "timeline_report": timeline_report,
+        "timeline_passed": timeline_passed,
         "editor_report": editor_report,
         "continuity_report": continuity_report,
         "editor_skipped": editor_skipped,

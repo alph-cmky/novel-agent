@@ -109,7 +109,7 @@ class TestOptionalFieldDefaults:
         assert cs.get("time_structure") is None
 
     def test_explicit_scene_fields_are_preserved(self):
-        """scene_first 的显式规划字段仍正常通过 schema。"""
+        """模型若仍输出 key_scenes，解析结果保留该字段。"""
         result = parse_validated(
             "orchestrator",
             '{"chapter_strategy": {"key_scenes": ["冲突", "转折"]}}',

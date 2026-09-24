@@ -16,53 +16,72 @@ uv run pytest -q                         # tests
 
 Python 3.12+. Use `uv` for all commands.
 
-## Architecture: Agent Loop
+## Architecture: S1
 
 ```
-Orchestrator → Writer agent loop → deterministic QualityGate → output
+Orchestrator
+  → Writer loop [generate → analyze_style → humanize_passage if needed]
+  → deterministic Hard Gate
+       PASS → deterministic timeline check on this draft
+              critical finding → Editor arm
+              clean → skip Editor and Continuity
+       FAIL → Editor → Writer rewrite ≤ 2 → Continuity
+  → Worldbuilding (always)
+  → output
 ```
 
-Writer drives a single tool-calling loop. It generates, then calls tools to
-self-check and revise, then outputs the final chapter. No fixed graph nodes,
-no evolution subgraph. The loop is bounded by `max_rounds` and deterministic
-guardrails.
+Writer is the only loop driver. Editor, Continuity, and Worldbuilding sit
+outside the loop. They are not Writer tools. Do not put `editor_review`,
+`check_continuity`, or `worldbuilding_extract` back inside the Writer loop.
 
-```
-Writer loop:
-  generate → analyze_style → humanize_passage (if AI flavor) → editor_review
-  → check_continuity → worldbuilding_extract → revise → finalize
-```
+No LangGraph DAG, no evolution subgraph, no scene-first path. The loop is
+bounded by `max_rounds` (runner default 8) and the hard gate.
 
 ### Loop Driver
 
-- Writer is the **only** loop driver. It decides what tools to call and when.
-- Other components (Editor, StyleAnalyzer, WorldbuildingAgent) are **tools**,
-  not agents. They do not drive loops.
-- Do not build nested agent loops (an agent that calls an agent that loops).
-  Keep the loop flat: one driver, many tools.
+- Writer decides when to call `analyze_style`, `humanize_passage`, and
+  `search_context`.
+- Do not build nested agent loops. One driver, tools only inside that loop.
+- Editor and Continuity each do one review call. They do not drive a loop.
+  An Editor `rewrite` verdict re-enters the Writer loop at most twice.
 
 ### Deterministic Guardrails
 
-The LLM drives the loop; deterministic code bounds it.
+The LLM writes; deterministic code decides whether review runs.
 
-- `max_rounds` caps total tool-calling rounds (default 12).
-- `QualityService.check_draft_hard_gates` runs after the loop — empty or
-  grossly short content is rejected regardless of loop outcome.
+- `QualityService.check_draft_hard_gates` runs after the Writer loop. It
+  rejects only an empty draft, length under half the target (1500 when the
+  target is 3000), or a missing outline. Do not raise this threshold to force
+  the Editor arm.
+- On PASS, `ContinuityService.check_timeline` still audits this draft for
+  event order and dead-character reappearance. A critical finding enters the
+  Editor arm. A clean PASS skips both Editor and the Continuity LLM.
+- On FAIL, Editor runs, then Writer may rewrite, then the Continuity LLM
+  audits. If a rewrite later passes the hard gate and the timeline check,
+  skip the Continuity LLM.
 - `strip_writer_preamble` removes meta-commentary from the final output.
-- If the loop exhausts rounds or returns empty, the runner raises — no silent
-  fallback to a partial draft.
+- Empty Writer output raises. Do not store an empty draft as success.
+- Worldbuilding always runs after the review decision.
 
-### Tool Design
+### What each component does
 
-- **Deterministic tools** (`analyze_style`, `check_continuity`) measure and
-  retrieve — 0 LLM calls. They return evidence, not verdicts.
-- **LLM tools** (`humanize_passage`, `editor_review`,
-  `worldbuilding_extract`) do one semantic task each. They do not call other
-  tools or drive loops.
-- Each tool has a clear input schema, returns `ToolResult`, and writes its
-  result to a shared context dict for the runner to extract.
-- Do not add a tool that duplicates another tool's judgment. If two tools
-  measure the same thing, one is redundant.
+- `analyze_style` — deterministic measurement inside the Writer loop. Evidence
+  only, 0 LLM calls.
+- `humanize_passage` — the only prose rewrite for AI flavor. Preserves plot
+  and characters.
+- `search_context` — retrieval inside the Writer loop. It does not judge.
+- Editor — literary judgment on the FAIL arm. Scores and flags issues. It
+  does not rewrite, and it does not repeat `analyze_style`'s checks.
+- Continuity LLM — cross-chapter audit on the FAIL arm only.
+- `ContinuityService` — deterministic timeline audit. Shared by context
+  compilation and the PASS-path gate. Death means the action states a death.
+  Mentions such as 「讨论死亡」 are not deaths.
+- Worldbuilding — extraction after the review decision. Entities, conflicts,
+  foreshadowings. It does not drive the loop.
+- `QualityService` — hard gate after the Writer loop, not inside it.
+
+Do not duplicate a judgment. `analyze_style` measures, `humanize_passage`
+rewrites, Editor judges, `ContinuityService` checks time and death.
 
 ## Critical Rules
 
@@ -78,31 +97,57 @@ The LLM drives the loop; deterministic code bounds it.
 - Treat the current code contract as authoritative; remove historical
   compatibility when verified unused.
 
-## Architecture Boundaries
+## Context
 
-State is workflow state. Storage is durable truth. Context is a derived
-task view.
+State is workflow state. Storage is durable truth. Context is one derived
+packet.
 
 ```
-State → ContextCompiler → task-specific context → Writer loop
+Storage → ContextCompiler.compile → context_packet → Orchestrator and Writer
 ```
 
-- Do not pass raw `NovelState` into the Writer or any tool.
-- Do not reconstruct Context manually inside the loop.
+`compile` is the only place that builds the packet. The loop reads
+`context_packet`. It does not assemble a second packet from raw tables.
+
+- Do not pass raw `NovelState` into the Writer or any review component.
+- Do not reconstruct context inside the loop.
 - Do not add LLM summarization for ordinary context compression.
+- Role projections (`for_writer`, `for_editor`, `for_continuity`,
+  `for_orchestrator`) copy the packet through. Do not give a role a second
+  character budget, and do not clear `world_context`.
+- `compile(..., task=)` does not change the packet. Do not bring task-based
+  shrinking back.
+- Orchestrator `context_needed` may add named characters, world elements, and
+  cross-timeline events. Those additions use the same excerpt, death
+  retention, and foreshadowing cap as `compile`. They must not replace a
+  section with unbounded text or drop a confirmed death that fell outside a
+  raw tail slice.
+
+Compression keeps the fields. It does not blank them.
+
+- Recent prose: last 3 chapters, each a sentence-bounded tail of about 400
+  characters.
+- Events: the 8 chapters before the current one, plus confirmed deaths and
+  that subject's events from the death chapter up to the window. Drop the
+  current chapter and anything after it.
+- Entity properties: tail excerpt of about 160 characters. Names stay.
+- Unresolved foreshadowings: at most 40.
+- Worldbuilding and the Orchestrator use these same caps. Do not load every
+  entity or every open foreshadowing into a prompt.
 
 ## LLM Usage
 
-Before adding an LLM-backed tool ask:
+Before adding an LLM-backed step ask:
 
 1. Can deterministic code solve it? (measurement, retrieval, filtering)
-2. Can an existing tool solve it?
+2. Can an existing tool or service solve it?
 3. Is the additional semantic judgment actually necessary?
 
-Normal chapter generation should remain inexpensive. The loop's LLM cost is
-bounded by `max_rounds` — each round is at most one generation + one tool call.
-Track per-tool token usage; a loop that burns rounds without improving is a
-bug, not a feature.
+Normal chapter generation should stay inexpensive. A PASS chapter pays for
+the Orchestrator, the Writer loop, and Worldbuilding. Editor and the
+Continuity LLM are the FAIL arm, not the default. Each Writer round is at
+most one generation plus one tool call. A loop that burns rounds without
+improving the draft is a bug.
 
 ## Novel Generation
 
@@ -117,32 +162,15 @@ repeating environment, emotion, dialogue, or explanation.
 
 Natural prose is more important than satisfying a stylistic heuristic.
 
-## Tool Layers
-
-- `analyze_style` — deterministic text measurement (0 LLM). Evidence only.
-- `humanize_passage` — LLM rewrite to remove AI writing patterns. Preserves
-  plot and characters; only rewrites prose.
-- `editor_review` — LLM literary judgment (8 dimensions). Scores and flags
-  issues; does not rewrite.
-- `check_continuity` — deterministic retrieval + LLM audit. Cross-chapter
-  consistency.
-- `worldbuilding_extract` — LLM extraction. Entities, conflicts, foreshadowings.
-- `QualityService` — deterministic hard gates. Runs after the loop, not
-  inside it.
-
-Do not duplicate the same judgment across tools. `analyze_style` measures;
-`editor_review` judges; `humanize_passage` rewrites. Each tool has one job.
-
 ## De-AI Flavor
 
-`humanize_passage` is the only tool that rewrites prose to remove AI writing
-patterns. Its prompt is distilled from humanizer-zh and focused on patterns
-that matter for Chinese web fiction.
+`humanize_passage` is the only rewrite that removes AI writing patterns. Its
+prompt is distilled from humanizer-zh and focused on patterns that matter
+for Chinese web fiction.
 
 - `analyze_style` identifies the patterns (deterministic).
 - `humanize_passage` rewrites them (LLM).
-- `editor_review` judges the result (LLM).
 
-Do not add AI-flavor rules to `editor_review` that duplicate `analyze_style`'s
-deterministic checks. Do not add AI-flavor rewriting to the Writer prompt
-that duplicates `humanize_passage`.
+Do not add AI-flavor rules to Editor that duplicate `analyze_style`. Do not
+add AI-flavor rewriting to the Writer prompt that duplicates
+`humanize_passage`.

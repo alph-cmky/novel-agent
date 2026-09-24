@@ -154,6 +154,21 @@ class TestChapterCRUD:
         assert mgr.count_chapters(pid, before=7) == 4
         assert mgr.count_chapters(pid) == 5
 
+    def test_get_chapter_numbers_excludes_drafts_and_failed(self, tmp_path):
+        """只返回章号，升序，不含正文，排除失败章和当前章。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        for n in (1, 3, 4):
+            mgr.save_chapter(pid, n, draft_content=f"第{n}章正文" * 20)
+        mgr.save_chapter(pid, 2, draft_content="失败章正文")
+        mgr.mark_chapter_failed(pid, 2)
+        mgr.save_chapter(pid, 6, draft_content="当前章")
+
+        rows = mgr.get_chapter_numbers(pid, before=6)
+
+        assert rows == [{"chapter_number": 1}, {"chapter_number": 3}, {"chapter_number": 4}]
+        assert all(set(row) == {"chapter_number"} for row in rows)
+
     def test_get_relevant_foreshadowings_ranks_and_filters(self, tmp_path):
         """Phase C: relevance 查询排除 resolved，按 risk → 紧迫度排序，LIMIT 生效。"""
         mgr = _make_manager(tmp_path)
@@ -194,6 +209,36 @@ class TestChapterCRUD:
         assert 10 not in chapters  # 当前章（重写场景的旧事件）不加载
         assert chapters == [9]
         assert events[0]["action"] == "第9章事件"
+
+    def test_get_context_story_events_keeps_deaths_not_mentions(self, tmp_path):
+        """窗口外只补确认死亡及其后事件，讨论死亡和无关旧事不进包。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        mgr.save_story_events(pid, 1, [{"action": "赶路", "subject": "丙"}])
+        mgr.save_story_events(pid, 1, [{"action": "讨论死亡", "subject": "甲"}])
+        mgr.save_story_events(pid, 2, [{"action": "甲去买菜", "subject": "甲"}])
+        mgr.save_story_events(pid, 3, [{"action": "乙战死", "subject": "乙"}])
+        mgr.save_story_events(pid, 5, [{"action": "乙又出现了", "subject": "乙"}])
+        mgr.save_story_events(pid, 15, [{"action": "到达", "subject": "丁"}])
+        mgr.save_story_events(pid, 20, [{"action": "当前章", "subject": "丁"}])
+
+        events = mgr.get_context_story_events(pid, current_chapter=20, window=8)
+
+        assert [event["action"] for event in events] == ["乙战死", "乙又出现了", "到达"]
+
+    def test_build_context_clips_entity_properties(self, tmp_path):
+        """属性超过上限时只留尾部摘录，名字仍在。"""
+        mgr = _make_manager(tmp_path)
+        pid = mgr.init_project(name="p")
+        bio = "甲" * 400
+        entity = {"entity_type": "character", "name": "甲", "properties": {"bio": bio}}
+        mgr.save_world_entities(pid, {"new_entities": [entity]}, 1)
+
+        ctx = mgr.build_context(pid, chapter_number=2, property_chars=160)
+
+        assert ctx["character_context"].startswith("- 甲: …")
+        assert bio not in ctx["character_context"]
+        assert len(ctx["character_context"]) < len(bio)
 
     def test_get_relevant_world_entities_name_match(self, tmp_path):
         """Phase L: 超过 limit 的大项目只返回正文点名的实体。"""

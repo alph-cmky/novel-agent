@@ -212,7 +212,13 @@ class EditorAgent(BaseAgent):
             parts.append(f"## 前文提要\n{packet['recent_summary']}")
         if packet.get("character_context"):
             parts.append(f"## 相关角色\n{packet['character_context']}")
+        if packet.get("world_context"):
+            parts.append(f"## 世界观设定\n{packet['world_context']}")
         if packet.get("unresolved_foreshadowings"):
             fs = packet["unresolved_foreshadowings"]
             parts.append("## 待回收伏笔\n" + "\n".join(f"- {item}" for item in fs))
+        if packet.get("timeline_events"):
+            parts.append(f"## 已发生的关键事件\n{packet['timeline_events']}")
+        if packet.get("timeline_findings"):
+            parts.append(f"## 时间线警告\n{packet['timeline_findings']}")
         return "\n\n".join(parts) if parts else ""

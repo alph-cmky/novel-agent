@@ -18,6 +18,20 @@ from novel_agent.schema.enums import (
 from novel_agent.storage.models import get_db_path, init_db
 
 
+def _excerpt(text: str, limit: int | None) -> str:
+    """Tail excerpt that starts on a sentence boundary when one exists."""
+    if limit is None or len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    for index, char in enumerate(tail):
+        if char not in "。！？\n":
+            continue
+        rest = tail[index + 1 :].lstrip()
+        if len(rest) >= limit // 2:
+            return f"…{rest}"
+    return f"…{tail}"
+
+
 class ProjectManager:
     """Manages the lifecycle of a novel project."""
 
@@ -1257,20 +1271,33 @@ class ProjectManager:
         self,
         project_id: str,
         before: int,
-        limit: int = 5,
+        limit: int | None = 5,
     ) -> list[dict]:
         """Most recent chapters before a chapter number, newest first.
 
-        Ordered by chapter_number DESC in SQL so long projects don't load the
-        full chapter table into Python just to slice the tail.
+        ``limit=None`` returns every earlier non-failed chapter.
         """
+        query = (
+            "SELECT * FROM chapters WHERE project_id = ? AND chapter_number < ? "
+            "AND status != 'failed' ORDER BY chapter_number DESC"
+        )
+        params: list = [project_id, before]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_chapter_numbers(self, project_id: str, before: int) -> list[dict]:
+        """Earlier chapter numbers only, ascending. Does not load draft text."""
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM chapters WHERE project_id = ? AND chapter_number < ? "
-                "AND status != 'failed' ORDER BY chapter_number DESC LIMIT ?",
-                (project_id, before, limit),
+                "SELECT chapter_number FROM chapters WHERE project_id = ? "
+                "AND chapter_number < ? AND status != 'failed' ORDER BY chapter_number",
+                (project_id, before),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [{"chapter_number": row["chapter_number"]} for row in rows]
 
     def count_chapters(self, project_id: str, before: int | None = None) -> int:
         """Count stored (non-failed) chapters, optionally only before a chapter number."""
@@ -1338,12 +1365,15 @@ class ProjectManager:
         self,
         project_id: str,
         chapter_number: int,
-        max_recent_chapters: int = 3,
+        max_recent_chapters: int | None = 3,
         max_entities: int | None = None,
+        excerpt_chars: int | None = None,
+        property_chars: int | None = None,
     ) -> dict[str, str]:
-        """Build context for writing a chapter: recent summary + character/world info."""
-        # SQL-bounded window read — get_all_chapters would load every draft
-        # in the project just to keep the last few summaries.
+        """Build context for writing a chapter: recent summary + character/world info.
+
+        ``excerpt_chars`` keeps only the tail of each chapter draft.
+        """
         recent = list(
             reversed(
                 self.get_recent_chapters(
@@ -1353,16 +1383,15 @@ class ProjectManager:
                 )
             )
         )
+        if max_recent_chapters is not None:
+            recent = recent[-max_recent_chapters:]
 
-        # Recent summary from last N chapters
         recent_summary_parts = []
-        for c in recent[-max_recent_chapters:]:
+        for c in recent:
             draft = c.get("draft_content", "")
             if draft:
                 recent_summary_parts.append(
-                    f"第{c['chapter_number']}章: {draft[:300]}..."
-                    if len(draft) > 300
-                    else f"第{c['chapter_number']}章: {draft}"
+                    f"第{c['chapter_number']}章: {_excerpt(draft, excerpt_chars)}"
                 )
         recent_summary = "\n\n".join(recent_summary_parts) if recent_summary_parts else ""
 
@@ -1384,11 +1413,19 @@ class ProjectManager:
             ).fetchall()
 
         character_context = (
-            "\n".join(f"- {c['name']}: {c['properties']}" for c in chars) if chars else ""
+            "\n".join(
+                f"- {c['name']}: {_excerpt(str(c['properties']), property_chars)}" for c in chars
+            )
+            if chars
+            else ""
         )
 
         world_context = (
-            "\n".join(f"- [{e['entity_type']}] {e['name']}: {e['properties']}" for e in world_ents)
+            "\n".join(
+                f"- [{e['entity_type']}] {e['name']}: "
+                f"{_excerpt(str(e['properties']), property_chars)}"
+                for e in world_ents
+            )
             if world_ents
             else ""
         )
@@ -1403,8 +1440,10 @@ class ProjectManager:
         self,
         snapshot: dict,
         chapter_number: int,
-        max_recent_chapters: int = 3,
+        max_recent_chapters: int | None = 3,
         max_entities: int | None = None,
+        excerpt_chars: int | None = None,
+        property_chars: int | None = None,
     ) -> dict[str, str]:
         """Build context only from the immutable Canon snapshot payload."""
         payload = snapshot.get("payload", snapshot)
@@ -1413,14 +1452,14 @@ class ProjectManager:
             for chapter in payload.get("chapters", [])
             if chapter.get("chapter_number", 0) < chapter_number
         ]
+        if max_recent_chapters is not None:
+            chapters = chapters[-max_recent_chapters:]
         recent_parts = []
-        for chapter in chapters[-max_recent_chapters:]:
+        for chapter in chapters:
             draft = chapter.get("draft_content", "")
             if draft:
                 recent_parts.append(
-                    f"第{chapter['chapter_number']}章: {draft[:300]}..."
-                    if len(draft) > 300
-                    else f"第{chapter['chapter_number']}章: {draft}"
+                    f"第{chapter['chapter_number']}章: {_excerpt(draft, excerpt_chars)}"
                 )
         characters = [
             entity
@@ -1439,10 +1478,12 @@ class ProjectManager:
         return {
             "recent_summary": "\n\n".join(recent_parts),
             "character_context": "\n".join(
-                f"- {entity['name']}: {entity['properties']}" for entity in characters
+                f"- {entity['name']}: {_excerpt(str(entity['properties']), property_chars)}"
+                for entity in characters
             ),
             "world_context": "\n".join(
-                f"- [{entity['entity_type']}] {entity['name']}: {entity['properties']}"
+                f"- [{entity['entity_type']}] {entity['name']}: "
+                f"{_excerpt(str(entity['properties']), property_chars)}"
                 for entity in world_entities
             ),
         }
@@ -1813,50 +1854,106 @@ class ProjectManager:
         self,
         project_id: str,
         current_chapter: int,
-        limit: int = 25,
+        limit: int | None = None,
     ) -> list[dict]:
         """Unresolved foreshadowings ranked by deterministic relevance.
 
         Priority: risk level → urgency (distance to expected resolution) →
-        planting recency. SQL-side filter + rank, so long projects never read
-        the full foreshadowings table into the context packet.
+        planting recency. ``limit=None`` returns every unresolved row.
         """
+        query = (
+            "SELECT * FROM foreshadowings WHERE project_id = ? "
+            "AND status IN ('open', 'planted', 'hinted', 'advanced') "
+            "ORDER BY "
+            "CASE risk_level WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, "
+            "CASE WHEN expected_resolve_chapter IS NOT NULL "
+            "     THEN ABS(expected_resolve_chapter - ?) ELSE 99999 END, "
+            "planted_chapter DESC, created_at DESC"
+        )
+        params: list = [project_id, current_chapter]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM foreshadowings WHERE project_id = ? "
-                "AND status IN ('open', 'planted', 'hinted', 'advanced') "
-                "ORDER BY "
-                "CASE risk_level WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, "
-                "CASE WHEN expected_resolve_chapter IS NOT NULL "
-                "     THEN ABS(expected_resolve_chapter - ?) ELSE 99999 END, "
-                "planted_chapter DESC, created_at DESC "
-                "LIMIT ?",
-                (project_id, current_chapter, limit),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
     def get_relevant_story_events(
         self,
         project_id: str,
         current_chapter: int,
-        window: int = 30,
-        limit: int = 90,
+        window: int | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
-        """Events from the recent chapter window, ascending order.
+        """Events before the current chapter, ascending order.
 
-        Bounded SQL read (chapters within ``window`` back, LIMIT rows) instead
-        of the full story_events table. Distant history (e.g. a death planted
-        100 chapters ago) is intentionally out of the v1 window.
+        ``window=None`` includes every earlier chapter. ``limit=None`` returns
+        every matching row.
         """
+        query = "SELECT * FROM story_events WHERE project_id = ? AND chapter_number < ?"
+        params: list = [project_id, current_chapter]
+        if window is not None:
+            query += " AND chapter_number >= ?"
+            params.append(max(current_chapter - window, 0))
+        query += " ORDER BY chapter_number DESC, created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM story_events WHERE project_id = ? "
-                "AND chapter_number >= ? AND chapter_number < ? "
-                "ORDER BY chapter_number DESC, created_at DESC LIMIT ?",
-                (project_id, max(current_chapter - window, 0), current_chapter, limit),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         rows.reverse()
         return [dict(r) for r in rows]
+
+    def get_context_story_events(
+        self,
+        project_id: str,
+        current_chapter: int,
+        window: int = 8,
+    ) -> list[dict]:
+        """Recent events plus confirmed deaths and what those subjects do afterward.
+
+        Does not load the full event table. Candidate deaths are a LIKE prefilter;
+        ``is_death_action`` drops mentions such as 「讨论死亡」.
+        """
+        from novel_agent.services.continuity import is_death_action
+
+        recent = self.get_relevant_story_events(
+            project_id, current_chapter, window=window
+        )
+        cutoff = max(current_chapter - window, 0)
+        with self._conn() as conn:
+            candidates = conn.execute(
+                "SELECT * FROM story_events WHERE project_id = ? "
+                "AND chapter_number < ? AND ("
+                "action LIKE '%死亡%' OR action LIKE '%死去%' OR action LIKE '%战死%' "
+                "OR action LIKE '%身死%' OR action LIKE '%毙命%' "
+                "OR lower(action) LIKE '%died%' OR lower(action) LIKE '%dies%'"
+                ")",
+                (project_id, cutoff),
+            ).fetchall()
+        deaths = [dict(row) for row in candidates if is_death_action(row["action"])]
+        extra: list[dict] = []
+        with self._conn() as conn:
+            for death in deaths:
+                subject = str(death.get("subject") or "").strip()
+                if not subject:
+                    continue
+                rows = conn.execute(
+                    "SELECT * FROM story_events WHERE project_id = ? AND subject = ? "
+                    "AND chapter_number > ? AND chapter_number < ?",
+                    (
+                        project_id,
+                        subject,
+                        int(death.get("chapter_number") or 0),
+                        cutoff,
+                    ),
+                ).fetchall()
+                extra.extend(dict(row) for row in rows)
+        merged: dict[str, dict] = {}
+        for event in [*deaths, *extra, *recent]:
+            key = str(event.get("id") or f"{event.get('chapter_number')}:{event.get('action')}")
+            merged[key] = event
+        return sorted(merged.values(), key=lambda event: int(event.get("chapter_number") or 0))
 
     # ── Project helpers ───────────────────────────────
 

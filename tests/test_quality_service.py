@@ -20,29 +20,6 @@ def test_quality_gate_accepts_target_length_with_outline():
     assert result["violations"] == []
 
 
-def test_story_checker_detects_missing_scene_and_required_fact():
-    result = QualityService.check_story_integrity(
-        "第一场正文",
-        scene_plan=[{"scene_index": 1}, {"scene_index": 2}],
-        scene_drafts=["第一场正文"],
-        required_facts=["火种"],
-    )
-
-    assert result["passed"] is False
-    assert "scene_count_mismatch" in result["violations"]
-    assert "required_fact_missing" in result["violations"]
-
-
-def test_story_checker_flags_explicit_canon_conflict_only():
-    result = QualityService.check_story_integrity(
-        "北墙由黑曜石砌成，青石已经开裂。",
-        canon_conflicts=[{"severity": "critical", "keywords": ["黑曜石", "青石"]}],
-    )
-
-    assert result["passed"] is False
-    assert result["findings"][0]["severity"] == "critical"
-
-
 def test_quality_service_keeps_hard_gate_output_shape():
     result = QualityService.check_draft_hard_gates(
         "正文" * 600,

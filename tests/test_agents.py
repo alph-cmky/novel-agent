@@ -118,6 +118,9 @@ class TestOrchestratorPromptHelpers:
             )
         prompt = mocked.call_args.args[0][1]["content"]
         assert "已完成章节数：100章" in prompt
+        assert "第98章" in prompt
+        assert "第100章" in prompt
+        assert "第96章" not in prompt
 
     def test_analyze_consumes_recent_summary_from_packet(self):
         """Phase 2: packet 的 recent_summary（前情摘要）进入 Orchestrator prompt。"""
@@ -227,20 +230,8 @@ class TestOrchestratorPromptHelpers:
             text = OrchestratorAgent._build_mode_instruction(mode)
             assert "同时输出完整" not in text, f"{mode} still demands all fields"
 
-    def test_scene_instruction_prunes_key_scenes_when_not_scene_first(self):
-        """Phase D: 整章模式明确不要求 key_scenes/scene_composition。"""
-        plain = OrchestratorAgent._build_scene_instruction(scene_first=False)
-        scene = OrchestratorAgent._build_scene_instruction(scene_first=True)
-        assert "不需要输出 key_scenes" in plain
-        assert "必须将本章拆解为 3-4 个分镜场景" in scene
-        assert "scene_composition" in scene
-        # Phase 4: 拆场 schema 结构只在 scene_first 指令中出现
-        assert "场景名·地点·冲突核心·情绪落点" in scene
-        assert "primary_scene_type" in scene
-        assert "场景名·地点" not in plain
-
-    def test_analyze_scene_first_reaches_user_prompt(self):
-        """analyze(scene_first=True) 将拆场要求注入 user prompt。"""
+    def test_analyze_asks_for_a_whole_chapter(self):
+        """整章生成，不要求拆成分镜。"""
         agent = OrchestratorAgent()
         with patch.object(
             agent,
@@ -252,26 +243,12 @@ class TestOrchestratorPromptHelpers:
                     chapter_number=1,
                     chapter_outline="大纲",
                     previous_chapters=[],
-                    scene_first=True,
                 )
             )
         user = mocked.call_args.args[0][1]["content"]
-        assert "scene_first 拆场模式" in user
-
-        with patch.object(
-            agent,
-            "run_with_tools",
-            new=AsyncMock(return_value=("{}", None)),
-        ) as mocked:
-            asyncio.run(
-                agent.analyze(
-                    chapter_number=1,
-                    chapter_outline="大纲",
-                    previous_chapters=[],
-                )
-            )
-        user = mocked.call_args.args[0][1]["content"]
-        assert "整章生成模式" in user
+        assert "整章生成" in user
+        assert "不需要输出 key_scenes" in user
+        assert "scene_first" not in user
 
     def test_perspective_hint_first_person(self):
         text = OrchestratorAgent._build_perspective_hint("first_person")
@@ -306,11 +283,6 @@ class TestModeAwarePrompt:
         for fragment in ("unit_number", "current_pov", "场景名·地点", "primary_scene_type"):
             assert fragment not in user, f"linear prompt carries {fragment}"
 
-    def test_scene_first_prompt_includes_scene_schema(self):
-        _, user = self._capture_prompt(previous_chapters=[], scene_first=True)
-        assert "场景名·地点·冲突核心·情绪落点" in user
-        assert "primary_scene_type" in user
-
     def test_unit_arc_prompt_includes_unit_arc_schema(self):
         _, user = self._capture_prompt(previous_chapters=[], narrative_mode="unit_arc")
         assert "unit_number" in user
@@ -326,7 +298,7 @@ class TestModeAwarePrompt:
     def test_conditional_schemas_not_duplicated_in_system_prompt(self):
         """禁止 Schema 复制：条件字段结构只出现在 user prompt 一侧。"""
         system, _ = self._capture_prompt(
-            previous_chapters=[], narrative_mode="unit_arc", scene_first=True
+            previous_chapters=[], narrative_mode="unit_arc"
         )
         for fragment in (
             "unit_number",

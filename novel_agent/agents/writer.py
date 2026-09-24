@@ -246,7 +246,7 @@ class WriterAgent(BaseAgent):
         Args:
             chapter_number: Current chapter number.
             outline: Chapter outline / plot points.
-            context_packet: Projected context from ContextCompiler.for_writer().
+            context_packet: Compiled context packet. Role projections do not re-budget it.
             target_chapter_words: Override per-chapter word count (0 = use default).
             improvement_plan: Structured plan from evolution or human feedback.
             evolution_version: Current evolution version (for prompt wording).
@@ -282,9 +282,9 @@ class WriterAgent(BaseAgent):
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
         if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
+            context_parts.append(f"## 时间线警告\n{timeline_findings}")
 
         tool_hint = self._build_tool_hint()
         user_prompt = (
@@ -347,9 +347,9 @@ class WriterAgent(BaseAgent):
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
         if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
+            context_parts.append(f"## 时间线警告\n{timeline_findings}")
 
         if revision_feedback:
             user_prompt = (
@@ -417,9 +417,9 @@ class WriterAgent(BaseAgent):
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events[-10:]}")
+            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
         if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings[:10]}")
+            context_parts.append(f"## 时间线警告\n{timeline_findings}")
 
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"
@@ -472,7 +472,7 @@ class WriterAgent(BaseAgent):
             context_parts.append(f"## 当前角色\n{character_context}")
         if unresolved_foreshadowings:
             context_parts.append(
-                "## 待回收伏笔\n" + "\n".join(f"- {item}" for item in unresolved_foreshadowings[:5])
+                "## 待回收伏笔\n" + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
 
         user_prompt = (

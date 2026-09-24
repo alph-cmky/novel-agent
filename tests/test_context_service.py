@@ -1,6 +1,43 @@
 from unittest.mock import MagicMock
 
-from novel_agent.services.context import ContextCompiler
+from novel_agent.services.context import ContextCompiler, _compress_events
+from novel_agent.services.continuity import ContinuityService
+from novel_agent.storage.manager import _excerpt
+
+
+def test_compress_events_keeps_reappearance_outside_the_window():
+    events = [
+        {"chapter_number": 1, "subject": "甲", "action": "甲死亡"},
+        {"chapter_number": 2, "subject": "乙", "action": "赶路"},
+        {"chapter_number": 5, "subject": "甲", "action": "甲又出现了"},
+        {"chapter_number": 12, "subject": "乙", "action": "到达"},
+        {"chapter_number": 15, "subject": "甲", "action": "当前章旧事件"},
+    ]
+    kept = _compress_events(events, chapter_number=15)
+    actions = [event["action"] for event in kept]
+    assert actions == ["甲死亡", "甲又出现了", "到达"]
+    findings = ContinuityService.check_timeline(kept, [], current_chapter=15)["findings"]
+    assert any(item["type"] == "dead_character_reappeared" for item in findings)
+
+
+def test_discussing_death_does_not_keep_that_characters_history():
+    events = [
+        {"chapter_number": 1, "subject": "甲", "action": "讨论死亡"},
+        {"chapter_number": 3, "subject": "甲", "action": "赶路"},
+        {"chapter_number": 12, "subject": "乙", "action": "到达"},
+    ]
+    kept = _compress_events(events, chapter_number=15)
+    assert [event["action"] for event in kept] == ["到达"]
+    findings = ContinuityService.check_timeline(events, [], current_chapter=15)["findings"]
+    assert not any(item["type"] == "dead_character_reappeared" for item in findings)
+
+
+def test_excerpt_starts_after_a_sentence_boundary():
+    text = "甲" * 100 + "。乙" * 200
+    excerpt = _excerpt(text, 400)
+    assert excerpt.startswith("…")
+    assert excerpt[1] == "乙"
+    assert len(excerpt) <= 401
 
 
 def test_context_packet_single_contract():
@@ -10,13 +47,13 @@ def test_context_packet_single_contract():
         "world_context": "- 北墙: 黑曜石",
         "recent_summary": "第1章：主角出城",
     }
-    manager.get_relevant_story_events.return_value = []
+    manager.get_context_story_events.return_value = []
     manager.get_relevant_foreshadowings.return_value = [
         {"description": "神秘信物", "planted_chapter": 1, "status": "open"},
         {"description": "已解决", "planted_chapter": 1, "status": "resolved"},
     ]
 
-    packet = ContextCompiler(manager, max_context_chars=1000).compile("p", 2)
+    packet = ContextCompiler(manager).compile("p", 2)
 
     assert packet.unresolved_foreshadowings == ["[第1章] 神秘信物"]
     # to_state() 只产出 context_packet 单键 —— 不再有平铺字段 / hash / observability
@@ -33,30 +70,38 @@ def test_compile_uses_task_aware_retrieval_not_full_reads():
     manager = MagicMock()
     manager.build_context.return_value = {}
     manager.get_relevant_foreshadowings.return_value = []
-    manager.get_relevant_story_events.return_value = []
+    manager.get_context_story_events.return_value = []
 
     ContextCompiler(manager).compile("p", 5)
 
-    manager.get_relevant_foreshadowings.assert_called_once_with("p", 5)
-    manager.get_relevant_story_events.assert_called_once_with("p", 5)
+    manager.get_relevant_foreshadowings.assert_called_once_with("p", 5, limit=40)
+    manager.get_context_story_events.assert_called_once_with("p", 5, window=8)
+    manager.get_relevant_story_events.assert_not_called()
     manager.get_foreshadowings.assert_not_called()
     manager.get_story_events.assert_not_called()
 
 
-def test_compile_for_orchestrator_bounds_entity_reads():
-    """Writing runs request a bounded initial packet before context_needed retrieval."""
+def test_compile_does_not_cap_entity_or_chapter_reads():
+    """compile 不给实体和前文设额度。"""
     manager = MagicMock()
     manager.build_context.return_value = {}
     manager.get_relevant_foreshadowings.return_value = []
-    manager.get_relevant_story_events.return_value = []
+    manager.get_context_story_events.return_value = []
 
     ContextCompiler(manager).compile("p", 5, task="orchestrator")
 
-    manager.build_context.assert_called_once_with("p", 5, max_recent_chapters=3, max_entities=20)
+    manager.build_context.assert_called_once_with(
+        "p",
+        5,
+        max_recent_chapters=3,
+        max_entities=None,
+        excerpt_chars=400,
+        property_chars=160,
+    )
 
 
-def test_compile_for_orchestrator_bounds_snapshot_entities_and_events():
-    """Snapshot-backed runs also avoid placing the full canon in the initial packet."""
+def test_compile_snapshot_keeps_full_canon():
+    """快照路径保留实体，伏笔截到上限，事件只留窗口。"""
     manager = MagicMock()
     manager.get_canon_snapshot.return_value = {
         "payload": {
@@ -66,7 +111,7 @@ def test_compile_for_orchestrator_bounds_snapshot_entities_and_events():
             ],
             "foreshadowings": [
                 {"status": "open", "description": f"伏笔{i}", "planted_chapter": i}
-                for i in range(30)
+                for i in range(50)
             ],
             "story_events": [{"chapter_number": i, "action": f"事件{i}"} for i in range(100)],
             "chapters": [],
@@ -84,35 +129,22 @@ def test_compile_for_orchestrator_bounds_snapshot_entities_and_events():
         manager.get_canon_snapshot.return_value,
         50,
         max_recent_chapters=3,
-        max_entities=20,
+        max_entities=None,
+        excerpt_chars=400,
+        property_chars=160,
     )
-    assert len(packet.timeline_events) == 30
-    assert len(packet.unresolved_foreshadowings) == 25
+    assert len(packet.timeline_events) == 8
+    assert packet.timeline_events[0]["chapter_number"] == 42
+    assert packet.timeline_events[-1]["chapter_number"] == 49
+    assert len(packet.unresolved_foreshadowings) == 40
 
 
-def test_for_orchestrator_bounds_world_context_not_full_dump():
-    """Phase 2: Orchestrator 规划不吃全量世界观——world_context 硬性 1/4 预算。"""
+def test_for_orchestrator_passes_compiled_packet_through():
+    """角色投影不再二次切额度，compile 已有的字段原样交给 Orchestrator。"""
     packet = {
         "character_context": "甲: 主角",
         "world_context": "设定" * 4000,
         "recent_summary": "前情",
-        "unresolved_foreshadowings": [],
-        "timeline_events": [],
-        "timeline_findings": [],
-    }
-
-    projected = ContextCompiler.for_orchestrator(packet)
-
-    assert len(projected["world_context"]) <= 1000 + 30  # bound + compact marker
-    assert len(projected["character_context"]) <= 2000 + 30
-    assert projected["recent_summary"] == "前情"
-
-
-def test_for_orchestrator_keeps_planning_inputs_capped():
-    """Phase 2: 规划输入（前情摘要/伏笔/事件）保留但封顶。"""
-    packet = {
-        "character_context": "甲",
-        "recent_summary": "第1章：出城",
         "unresolved_foreshadowings": [f"伏笔{i}" for i in range(30)],
         "timeline_events": [{"event": f"事件{i}"} for i in range(30)],
         "timeline_findings": [f"警告{i}" for i in range(30)],
@@ -120,11 +152,13 @@ def test_for_orchestrator_keeps_planning_inputs_capped():
 
     projected = ContextCompiler.for_orchestrator(packet)
 
-    assert len(projected["unresolved_foreshadowings"]) == 10
-    assert len(projected["timeline_events"]) == 8
-    assert len(projected["timeline_findings"]) == 5
+    assert projected["world_context"] == packet["world_context"]
+    assert projected["character_context"] == packet["character_context"]
+    assert projected["recent_summary"] == "前情"
+    assert projected["unresolved_foreshadowings"] == packet["unresolved_foreshadowings"]
+    assert projected["timeline_events"] == packet["timeline_events"]
+    assert projected["timeline_findings"] == packet["timeline_findings"]
     assert projected["timeline_events"][-1] == {"event": "事件29"}
-    assert projected["recent_summary"] == "第1章：出城"
 
 
 def test_apply_context_needed_folds_orchestrator_demands_into_packet():
@@ -161,14 +195,12 @@ def test_apply_context_needed_folds_orchestrator_demands_into_packet():
         chapter_number=5,
     )
 
-    # Character context is replaced with queried entities, not appended hints
     assert "- 甲: 主角，冷静" in enriched["character_context"]
-    assert "旧角色" not in enriched["character_context"]
+    assert "旧角色" in enriched["character_context"]
     assert "[视角特定信息: 乙不知道甲的身份]" in enriched["character_context"]
 
-    # World context is replaced with queried world entities
     assert "[location] 北墙秘道: 隐藏通道" in enriched["world_context"]
-    assert "旧设定" not in enriched["world_context"]
+    assert "旧设定" in enriched["world_context"]
 
     # Cross-timeline events are merged into timeline_events
     assert any(e.get("action") == "坠崖" for e in enriched["timeline_events"])
@@ -178,6 +210,35 @@ def test_apply_context_needed_folds_orchestrator_demands_into_packet():
 
     # 原 packet 不被原地修改
     assert "旧角色" in packet["character_context"]
+
+
+def test_apply_context_needed_clips_properties_and_keeps_deaths():
+    manager = MagicMock()
+    manager.get_entities_by_names.return_value = [
+        {"name": "甲", "entity_type": "character", "properties": "甲" * 400}
+    ]
+    manager.get_story_events_by_subjects.return_value = [
+        {"id": "death", "subject": "甲", "action": "甲死亡", "chapter_number": 1},
+        {"id": "errand", "subject": "丙", "action": "买菜", "chapter_number": 2},
+    ]
+    packet = {
+        "timeline_events": [
+            {"id": f"e{n}", "subject": "乙", "action": "赶路", "chapter_number": n}
+            for n in range(20, 50)
+        ]
+    }
+    enriched = ContextCompiler(manager).apply_context_needed(
+        packet,
+        {"characters": ["甲"], "cross_timeline_references": ["甲"]},
+        project_id="p",
+        chapter_number=50,
+    )
+    assert enriched["character_context"].startswith("- 甲: …")
+    assert "甲" * 400 not in enriched["character_context"]
+    actions = [event["action"] for event in enriched["timeline_events"]]
+    assert "甲死亡" in actions
+    assert "买菜" not in actions
+    assert "赶路" in actions
 
 
 def test_apply_context_needed_empty_declaration_is_noop():
@@ -207,8 +268,7 @@ class TestContextNeededRetrieval:
         result = compiler.apply_context_needed(
             packet, {"characters": ["甲"]}, project_id="p", chapter_number=1
         )
-        # Old content replaced, not appended
-        assert "旧" not in result["character_context"]
+        assert "旧" in result["character_context"]
         assert "甲: 主角" in result["character_context"]
         manager.get_entities_by_names.assert_called_once_with("p", ["甲"], entity_type="character")
 
@@ -223,7 +283,7 @@ class TestContextNeededRetrieval:
         result = compiler.apply_context_needed(
             packet, {"world_elements": ["北墙"]}, project_id="p", chapter_number=1
         )
-        assert "旧设定" not in result["world_context"]
+        assert "旧设定" in result["world_context"]
         assert "[location] 北墙: 黑曜石城墙" in result["world_context"]
 
     def test_cross_timeline_merges_into_timeline_events(self):
@@ -270,7 +330,7 @@ class TestContextNeededRetrieval:
         manager.get_story_events_by_subjects.assert_not_called()
 
 
-def test_context_packet_bounds_each_section():
+def test_context_packet_keeps_full_sections():
     manager = MagicMock()
     manager.build_context.return_value = {
         "character_context": "角色" * 1000,
@@ -279,17 +339,17 @@ def test_context_packet_bounds_each_section():
     }
     manager.get_all_world_entities.return_value = []
     manager.get_relevant_foreshadowings.return_value = []
-    manager.get_relevant_story_events.return_value = []
+    manager.get_context_story_events.return_value = []
 
-    packet = ContextCompiler(manager, max_context_chars=300).compile("p", 1)
+    packet = ContextCompiler(manager).compile("p", 1)
 
-    assert len(packet.character_context) <= 101
-    assert len(packet.world_context) <= 101
-    assert len(packet.recent_summary) <= 101
+    assert packet.character_context == "角色" * 1000
+    assert packet.world_context == "设定" * 1000
+    assert packet.recent_summary == "摘要" * 1000
 
 
 class TestTaskAwareProjections:
-    """Phase 3: for_writer / for_editor / for_continuity."""
+    """角色投影原样传递 compile 后的包，不再按角色切额度。"""
 
     def _big_packet(self) -> dict:
         return {
@@ -301,11 +361,9 @@ class TestTaskAwareProjections:
             "timeline_findings": [{"finding": f"发现{i}"} for i in range(10)],
         }
 
-    def test_for_writer_world_context_is_empty_string(self):
-        """Writer projection 显式返回 world_context='' 防止 Writer fallback。"""
+    def test_for_writer_keeps_world_context(self):
         projected = ContextCompiler.for_writer(self._big_packet())
-        assert "world_context" in projected
-        assert projected["world_context"] == ""
+        assert projected["world_context"] == self._big_packet()["world_context"]
 
     def test_for_writer_all_keys_present(self):
         """所有 6 个 key 都存在，Writer.get() 不回退到旧 State。"""
@@ -320,36 +378,25 @@ class TestTaskAwareProjections:
         ):
             assert key in projected, f"missing key: {key}"
 
-    def test_for_writer_caps_character_context(self):
-        projected = ContextCompiler.for_writer(self._big_packet())
-        assert len(projected["character_context"]) <= 1667 + 30
+    def test_projections_do_not_truncate(self):
+        packet = self._big_packet()
+        for project in (
+            ContextCompiler.for_writer,
+            ContextCompiler.for_editor,
+            ContextCompiler.for_continuity,
+            ContextCompiler.for_orchestrator,
+        ):
+            projected = project(packet)
+            assert projected["character_context"] == packet["character_context"]
+            assert projected["world_context"] == packet["world_context"]
+            assert projected["recent_summary"] == packet["recent_summary"]
+            assert projected["unresolved_foreshadowings"] == packet["unresolved_foreshadowings"]
+            assert projected["timeline_events"] == packet["timeline_events"]
+            assert projected["timeline_findings"] == packet["timeline_findings"]
 
-    def test_for_writer_limits_foreshadowings_to_5(self):
-        projected = ContextCompiler.for_writer(self._big_packet())
-        assert len(projected["unresolved_foreshadowings"]) == 5
-
-    def test_for_writer_limits_timeline_events_to_5(self):
-        projected = ContextCompiler.for_writer(self._big_packet())
-        assert len(projected["timeline_events"]) == 5
-
-    def test_for_editor_only_keeps_3_fields(self):
-        projected = ContextCompiler.for_editor(self._big_packet())
-        assert "world_context" not in projected
-        assert "timeline_events" not in projected
-        assert len(projected["unresolved_foreshadowings"]) == 3
-
-    def test_for_continuity_keeps_timeline_and_drops_world(self):
-        projected = ContextCompiler.for_continuity(self._big_packet())
-        assert "world_context" not in projected
-        assert len(projected["timeline_events"]) == 10
-        assert len(projected["unresolved_foreshadowings"]) == 8
-
-    def test_for_extension_only_keeps_chars_and_foreshadowings(self):
-        """Extension projection 只返回 character_context + 3 条伏笔。"""
-        projected = ContextCompiler.for_extension(self._big_packet())
-        assert "character_context" in projected
-        assert "unresolved_foreshadowings" in projected
-        assert len(projected["unresolved_foreshadowings"]) == 3
-        assert "world_context" not in projected
-        assert "recent_summary" not in projected
-        assert "timeline_events" not in projected
+    def test_missing_fields_stay_empty(self):
+        projected = ContextCompiler.for_writer({})
+        assert projected["world_context"] == ""
+        assert projected["character_context"] == ""
+        assert projected["unresolved_foreshadowings"] == []
+        assert projected["timeline_events"] == []

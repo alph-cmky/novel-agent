@@ -171,7 +171,7 @@ class ContinuityAgent(BaseAgent):
         events = packet.get("timeline_events") or []
         if events:
             lines = ["## 已发生的关键事件"]
-            for ev in events[-10:]:
+            for ev in events:
                 desc = ev.get("description") or ev.get("summary") or str(ev)
                 ch = ev.get("chapter_number", "?")
                 lines.append(f"- [第{ch}章] {desc}")
@@ -180,7 +180,7 @@ class ContinuityAgent(BaseAgent):
         findings = packet.get("timeline_findings") or []
         if findings:
             lines = ["## 时间线警告"]
-            for f in findings[:5]:
+            for f in findings:
                 lines.append(f"- {f.get('description', f) if isinstance(f, dict) else f}")
             parts.append("\n".join(lines))
 
@@ -191,5 +191,11 @@ class ContinuityAgent(BaseAgent):
         char_ctx = packet.get("character_context") or ""
         if char_ctx:
             parts.append(f"## 角色当前状态\n{char_ctx}")
+        world_ctx = packet.get("world_context") or ""
+        if world_ctx:
+            parts.append(f"## 世界观设定\n{world_ctx}")
+        recent = packet.get("recent_summary") or ""
+        if recent:
+            parts.append(f"## 前文提要\n{recent}")
 
         return "\n\n".join(parts) if parts else ""

@@ -2,7 +2,7 @@
 
 `analyze_style` is a deterministic tool (0 LLM) exposed to the Writer loop.
 It measures prose; it does not prescribe prose mechanically. Style findings
-are evidence for the Writer and `editor_review`, not verdicts.
+are evidence for the Writer, not verdicts.
 
 Distinguish narrative / dialogue / mixed paragraphs. Support common Chinese
 quotation marks (`""`, `「」`, `『』`, `""`). Pure dialogue must not be

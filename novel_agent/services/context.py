@@ -1,9 +1,10 @@
-"""Build an auditable, bounded context packet for chapter agents."""
+"""Build an auditable context packet for chapter agents."""
 
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from novel_agent.services.continuity import ContinuityService
+from novel_agent.services.continuity import ContinuityService, is_death_action
+from novel_agent.storage.manager import _excerpt
 
 
 @dataclass(frozen=True)
@@ -22,19 +23,72 @@ class ContextPacket:
         return {"context_packet": asdict(self)}
 
 
-class ContextCompiler:
-    """Compile structured and recent project memory into one packet."""
+_RECENT_CHAPTERS = 3
+_EXCERPT_CHARS = 400
+_EVENT_WINDOW = 8
+_PROPERTY_CHARS = 160
+_FORESHADOW_LIMIT = 40
 
-    def __init__(
-        self,
-        manager,
-        *,
-        recent_chapters: int = 3,
-        max_context_chars: int = 24000,
-    ):
+
+def _merge_context_lines(existing: str, lines: list[str]) -> str:
+    """Keep compiled lines and add a named entry only when that name is absent."""
+    kept = existing
+    for line in lines:
+        name = line.split(":", 1)[0].split("]")[-1].strip(" -")
+        if name and name in kept:
+            continue
+        kept = f"{kept}\n{line}" if kept else line
+    return kept
+
+
+def _event_chapter(event: dict) -> int:
+    try:
+        return int(event.get("chapter_number") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _death_chapter(event: dict) -> int | None:
+    subject = str(event.get("subject") or "").strip()
+    if subject and is_death_action(str(event.get("action") or "")):
+        return _event_chapter(event)
+    return None
+
+
+def _compress_events(events: list[dict], chapter_number: int) -> list[dict]:
+    """Keep the recent window, real deaths, and events after those deaths.
+
+    Metaphorical mentions such as 「讨论死亡」 are not deaths. Events from before
+    a death stay out of the packet unless they fall inside the recent window.
+    """
+    prior = [event for event in events if _event_chapter(event) < chapter_number]
+    died_at: dict[str, int] = {}
+    for event in prior:
+        chapter = _death_chapter(event)
+        subject = str(event.get("subject") or "").strip()
+        if chapter is None or not subject:
+            continue
+        died_at[subject] = min(died_at.get(subject, chapter), chapter)
+    cutoff = chapter_number - _EVENT_WINDOW
+    kept = []
+    for event in prior:
+        subject = str(event.get("subject") or "").strip()
+        chapter = _event_chapter(event)
+        after_death = subject in died_at and chapter >= died_at[subject]
+        if chapter >= cutoff or after_death:
+            kept.append(event)
+    return kept
+
+
+class ContextCompiler:
+    """Compile structured memory plus a short recent-prose excerpt.
+
+    Character and world text stay whole. Earlier chapter drafts are not copied
+    into the packet; only the last few chapters' endings are.
+    """
+
+    def __init__(self, manager):
         self.manager = manager
-        self.recent_chapters = max(recent_chapters, 0)
-        self.max_context_chars = max(max_context_chars, 1)
 
     def compile(
         self,
@@ -43,150 +97,88 @@ class ContextCompiler:
         snapshot_id: str | None = None,
         task: str = "full",
     ) -> ContextPacket:
-        # The run starts with an Orchestrator view. It only needs a bounded
-        # canon sample; context_needed performs the precise retrieval later.
-        entity_limit = 20 if task == "orchestrator" else None
+        del task  # projections no longer shrink the packet by role
         snapshot = self.manager.get_canon_snapshot(snapshot_id) if snapshot_id else None
         if snapshot:
             context = self.manager.build_context_from_snapshot(
                 snapshot,
                 chapter_number,
-                max_recent_chapters=self.recent_chapters,
-                max_entities=entity_limit,
+                max_recent_chapters=_RECENT_CHAPTERS,
+                max_entities=None,
+                excerpt_chars=_EXCERPT_CHARS,
+                property_chars=_PROPERTY_CHARS,
             )
             payload = snapshot["payload"]
-            foreshadowings = payload.get("foreshadowings", [])
-            events = payload.get("story_events", [])
-            if task == "orchestrator":
-                foreshadowings = [
-                    item
-                    for item in foreshadowings
-                    if item.get("status") in {"open", "planted", "hinted", "advanced"}
-                ][:25]
-                events = events[-90:]
+            foreshadowings = payload.get("foreshadowings", [])[:_FORESHADOW_LIMIT]
+            events = _compress_events(payload.get("story_events", []), chapter_number)
         else:
             context = self.manager.build_context(
                 project_id,
                 chapter_number,
-                max_recent_chapters=self.recent_chapters,
-                max_entities=entity_limit,
+                max_recent_chapters=_RECENT_CHAPTERS,
+                max_entities=None,
+                excerpt_chars=_EXCERPT_CHARS,
+                property_chars=_PROPERTY_CHARS,
             )
-            # Task-aware retrieval: bounded, relevance-ranked reads —
-            # no full foreshadowings/story_events table scan.
-            foreshadowings = self.manager.get_relevant_foreshadowings(project_id, chapter_number)
-            events = self.manager.get_relevant_story_events(project_id, chapter_number)
+            foreshadowings = self.manager.get_relevant_foreshadowings(
+                project_id, chapter_number, limit=_FORESHADOW_LIMIT
+            )
+            events = self.manager.get_context_story_events(
+                project_id, chapter_number, window=_EVENT_WINDOW
+            )
         timeline_findings = ContinuityService.check_timeline(
             events,
             foreshadowings,
             current_chapter=chapter_number,
         )["findings"]
-        unresolved = [
-            f"[第{item.get('planted_chapter', '?')}章] {item.get('description', '')}"
-            for item in foreshadowings
-            if item.get("status") in {"open", "planted", "hinted", "advanced"}
-        ]
-        section_budget = max(self.max_context_chars // 3, 1)
-        character_context = ContextCompiler.bound(
-            context.get("character_context", ""), section_budget
-        )
-        world_context = ContextCompiler.bound(context.get("world_context", ""), section_budget)
-        recent_summary = ContextCompiler.bound(context.get("recent_summary", ""), section_budget)
-        unresolved = [item for item in unresolved if item.strip()][:40]
+        unresolved = []
+        for item in foreshadowings:
+            if item.get("status") not in {"open", "planted", "hinted", "advanced"}:
+                continue
+            text = f"[第{item.get('planted_chapter', '?')}章] {item.get('description', '')}".strip()
+            if text:
+                unresolved.append(text)
         return ContextPacket(
             project_id=project_id,
             chapter_number=chapter_number,
-            character_context=character_context,
-            world_context=world_context,
-            recent_summary=recent_summary,
+            character_context=context.get("character_context", ""),
+            world_context=context.get("world_context", ""),
+            recent_summary=context.get("recent_summary", ""),
             unresolved_foreshadowings=unresolved,
-            timeline_events=events[-30:],
+            timeline_events=list(events),
             timeline_findings=timeline_findings,
         )
 
-    @staticmethod
-    def bound(text: str, limit: int) -> str:
-        if len(text) <= limit:
-            return text
-        marker = "\n[context compacted]\n"
-        available = max(limit - len(marker), 0)
-        head = available // 2
-        tail = available - head
-        return text[:head] + marker + text[-tail:]
+    # ── Task projections ──────────────────────────────────
+    # Copy the compiled packet. Roles do not get a separate quota.
 
-    # ── Task-aware projections ────────────────────────────
+    @staticmethod
+    def project(packet: dict) -> dict:
+        """Copy the compiled packet. Missing fields stay empty, present fields stay whole."""
+        return {
+            "character_context": packet.get("character_context") or "",
+            "world_context": packet.get("world_context") or "",
+            "recent_summary": packet.get("recent_summary") or "",
+            "unresolved_foreshadowings": list(packet.get("unresolved_foreshadowings") or []),
+            "timeline_events": list(packet.get("timeline_events") or []),
+            "timeline_findings": list(packet.get("timeline_findings") or []),
+        }
 
     @staticmethod
     def for_orchestrator(packet: dict) -> dict:
-        """Minimal context for Orchestrator planning.
-
-        Planning needs storyline inputs: recent summaries, active characters,
-        open foreshadowings and recent timeline facts. Full worldbuilding is
-        not required to decide strategy — a tight excerpt keeps the plan
-        consistent with canon at a fraction of the size (≈2-4K tokens).
-        """
-        return {
-            "character_context": ContextCompiler.bound(packet.get("character_context", ""), 2000),
-            "world_context": ContextCompiler.bound(packet.get("world_context", ""), 1000),
-            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), 2000),
-            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:10],
-            "timeline_events": (packet.get("timeline_events") or [])[-8:],
-            "timeline_findings": (packet.get("timeline_findings") or [])[:5],
-        }
+        return ContextCompiler.project(packet)
 
     @staticmethod
     def for_writer(packet: dict) -> dict:
-        """Minimal context for Writer: chars + summary + foreshadowings + events.
-
-        world_context is explicitly empty — Writer does not need full worldbuilding.
-        All keys are present so Writer can read them without nil-checks.
-        """
-        char_budget = 5000 // 3
-        return {
-            "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), char_budget
-            ),
-            "world_context": "",
-            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), char_budget),
-            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:5],
-            "timeline_events": (packet.get("timeline_events") or [])[-5:],
-            "timeline_findings": (packet.get("timeline_findings") or [])[:3],
-        }
+        return ContextCompiler.project(packet)
 
     @staticmethod
-    def for_extension(packet: dict) -> dict:
-        """Minimal context for Narrative Extension: active chars + top foreshadowings only.
-
-        No world_context, no recent_summary, no timeline — only what the
-        continuation needs to stay on-plot.
-        """
-        return {
-            "character_context": ContextCompiler.bound(packet.get("character_context", ""), 1500),
-            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:3],
-        }
-
-    @staticmethod
-    def for_editor(packet: dict, budget_chars: int = 5000) -> dict:
-        """Minimal context for Editor: brief summary + active chars for consistency."""
-        char_budget = budget_chars // 2
-        return {
-            "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), char_budget
-            ),
-            "recent_summary": ContextCompiler.bound(packet.get("recent_summary", ""), char_budget),
-            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:3],
-        }
+    def for_editor(packet: dict) -> dict:
+        return ContextCompiler.project(packet)
 
     @staticmethod
     def for_continuity(packet: dict) -> dict:
-        """Minimal context for Continuity: structured events + findings + foreshadowings."""
-        return {
-            "timeline_events": (packet.get("timeline_events") or [])[-10:],
-            "timeline_findings": (packet.get("timeline_findings") or [])[:5],
-            "unresolved_foreshadowings": (packet.get("unresolved_foreshadowings") or [])[:8],
-            "character_context": ContextCompiler.bound(
-                packet.get("character_context", ""), 4000 // 3
-            ),
-        }
+        return ContextCompiler.project(packet)
 
     def apply_context_needed(
         self,
@@ -213,9 +205,15 @@ class ContextCompiler:
             chars = self.manager.get_entities_by_names(
                 project_id, char_names, entity_type="character"
             )
-            char_lines = [f"- {c['name']}: {c['properties']}" for c in chars if c.get("name")]
+            char_lines = [
+                f"- {c['name']}: {_excerpt(str(c.get('properties') or ''), _PROPERTY_CHARS)}"
+                for c in chars
+                if c.get("name")
+            ]
             if char_lines:
-                packet["character_context"] = "\n".join(char_lines)
+                packet["character_context"] = _merge_context_lines(
+                    packet.get("character_context") or "", char_lines
+                )
 
         # ── World element retrieval: query matching non-character entities ──
         world_names = context_needed.get("world_elements", [])
@@ -224,12 +222,15 @@ class ContextCompiler:
             # Exclude characters — they're handled above
             world_ents = [e for e in world_ents if e.get("entity_type") != "character"]
             world_lines = [
-                f"- [{e['entity_type']}] {e['name']}: {e['properties']}"
+                f"- [{e['entity_type']}] {e['name']}: "
+                f"{_excerpt(str(e.get('properties') or ''), _PROPERTY_CHARS)}"
                 for e in world_ents
                 if e.get("name")
             ]
             if world_lines:
-                packet["world_context"] = "\n".join(world_lines)
+                packet["world_context"] = _merge_context_lines(
+                    packet.get("world_context") or "", world_lines
+                )
 
         # ── Cross-timeline retrieval: query events by subject ──
         cross_timeline = context_needed.get("cross_timeline_references", [])
@@ -241,11 +242,12 @@ class ContextCompiler:
                 existing_keys = {
                     e.get("id") or e.get("action", "") for e in existing if isinstance(e, dict)
                 }
+                added = []
                 for ev in cross_events:
                     key = ev.get("id") or ev.get("action", "")
                     if key not in existing_keys:
-                        existing.append(ev)
-                packet["timeline_events"] = existing[-30:]
+                        added.append(ev)
+                packet["timeline_events"] = existing + _compress_events(added, chapter_number)
 
         # ── POV metadata: text annotation (not entity retrieval) ──
         persp_specific = context_needed.get("perspective_specific", "")

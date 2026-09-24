@@ -1,8 +1,7 @@
-"""Orchestrator Agent — narrative analysis and pipeline context assembly.
+"""Orchestrator Agent — narrative analysis and context demand.
 
-Before each chapter, it analyzes the current narrative position and decides
-what the chapter needs. Routing decisions are handled by the LangGraph
-conditional edges in graph/chapter.py.
+Before each chapter, it analyzes the current narrative position and declares
+what the chapter needs. The S1 runner decides review; this agent does not route.
 """
 
 from novel_agent.agents.base import AgentConfig, BaseAgent
@@ -20,7 +19,7 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 
 - 每章必输：narrative_stage、stage_analysis、chapter_strategy（storylines、pacing、foreshadowings_to_address、suggested_chapter_words）、context_needed
 - ending_type：仅当本章确需特定结尾类型（如 cliffhanger）时输出，省略即自然收束
-- key_scenes / scene_composition / unit_arc / pov_config：仅当用户消息的拆场或模式指令要求时输出
+- unit_arc / pov_config：仅当用户消息的模式指令要求时输出
 - 其余可选字段仅在确有内容时输出，无内容省略：
   time_structure（非线性叙事）、climax_sequence（climax 阶段）、stage_boundary（阶段边界章）、ending_tone（接近书末/卷末）、storyline_intersection（多线交汇章）、character_arcs（角色里程碑）、character_emotional_state（出场角色显著情绪变化）、tension_profile（紧张度明显起伏）、foreshadowing_management（仅高风险或临近回收的伏笔）
 
@@ -31,7 +30,7 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 """
 
 # Conditional schemas — appear exactly once, in the user prompt, and only
-# for the mode / scene_first flag the current chapter actually uses.
+# for the narrative mode the current chapter actually uses.
 BASE_OUTPUT_SCHEMA = (
     "输出 schema（本章必输字段）：\n"
     "{\n"
@@ -63,13 +62,9 @@ POV_CONFIG_SCHEMA = (
     '"access_level": "surface|moderate|deep", "knowledge_gap": "视角信息差"}'
 )
 
-KEY_SCENES_SCHEMA = '  "key_scenes": ["场景名·地点·冲突核心·情绪落点", ...]  // 3-4 个分镜'
-
-SCENE_COMPOSITION_SCHEMA = (
-    '  "scene_composition": {"primary_scene_type": '
-    '"action|dialogue|introspection|description|transition|mixed", '
-    '"scene_breakdown": "场景构成", "recent_dominance": "近章主导类型", '
-    '"diversity_warning": "同质化警告"}'
+_WHOLE_CHAPTER = (
+    "本章为整章生成：不需要输出 key_scenes 与 scene_composition，"
+    "将场景安排融入 storylines 的 key_events 中。\n"
 )
 
 
@@ -95,23 +90,19 @@ class OrchestratorAgent(BaseAgent):
         arc_summary: str = "",
         context_packet: dict | None = None,
         total_chapters: int = 0,
-        scene_first: bool = False,
     ) -> dict:
         """Analyze narrative position and decide chapter strategy.
 
         Args:
-            previous_chapters: Recent chapters (ascending) — a tail slice, not
-                the full history.
+            previous_chapters: Earlier chapters in ascending order.
             total_chapters: Total completed chapters; falls back to
                 len(previous_chapters) when not provided.
-            scene_first: Whether this chapter is generated scene-by-scene;
-                controls whether key_scenes / scene_composition are required.
 
         Returns a dict with narrative_stage, chapter_strategy, context_needed.
         """
         total = total_chapters or len(previous_chapters)
 
-        recent = previous_chapters[-3:] if len(previous_chapters) > 3 else previous_chapters
+        recent = previous_chapters[-3:]
         recent_titles = ", ".join(f"第{c.get('chapter_number', '?')}章" for c in recent)
 
         length_label = {
@@ -129,8 +120,8 @@ class OrchestratorAgent(BaseAgent):
         timeline_findings = packet.get("timeline_findings", [])
         unresolved = unresolved_foreshadowings or []
         foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
-        timeline_context = "\n".join(str(item) for item in (timeline_events or [])[-10:])
-        timeline_warnings = "\n".join(str(item) for item in (timeline_findings or [])[:10])
+        timeline_context = "\n".join(str(item) for item in (timeline_events or []))
+        timeline_warnings = "\n".join(str(item) for item in (timeline_findings or []))
 
         # Skip-when-empty: absent sections stay absent, no placeholder noise.
         summary_section = f"## 前情摘要\n{recent_summary}\n\n" if recent_summary else ""
@@ -145,7 +136,7 @@ class OrchestratorAgent(BaseAgent):
 
         mode_instruction = self._build_mode_instruction(narrative_mode)
         persp_hint = self._build_perspective_hint(narrative_perspective)
-        scene_instruction = self._build_scene_instruction(scene_first)
+        scene_instruction = _WHOLE_CHAPTER
 
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -222,21 +213,6 @@ class OrchestratorAgent(BaseAgent):
             return f"{base}本章 chapter_strategy 必须额外输出（结构如下）：\n{POV_CONFIG_SCHEMA}\n"
         # linear and other modes: no conditional fields, just the mode itself.
         return base
-
-    @staticmethod
-    def _build_scene_instruction(scene_first: bool) -> str:
-        """Scene-first conditional schema — user prompt only."""
-        if scene_first:
-            return (
-                "本章为 scene_first 拆场模式：必须将本章拆解为 3-4 个分镜场景，"
-                "chapter_strategy 额外输出（结构如下）：\n"
-                f"{KEY_SCENES_SCHEMA}\n"
-                f"{SCENE_COMPOSITION_SCHEMA}\n"
-            )
-        return (
-            "本章为整章生成模式：不需要输出 key_scenes 与 scene_composition，"
-            "将场景安排融入 storylines 的 key_events 中。\n"
-        )
 
     @staticmethod
     def _build_perspective_hint(perspective: str) -> str:
