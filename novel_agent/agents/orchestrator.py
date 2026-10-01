@@ -6,6 +6,7 @@ what the chapter needs. The S1 runner decides review; this agent does not route.
 
 from novel_agent.agents.base import AgentConfig, BaseAgent
 from novel_agent.schema.validator import parse_validated
+from novel_agent.services.context import format_timeline_events, format_timeline_findings
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书的创作方向和节奏。
 
@@ -17,7 +18,9 @@ ORCHESTRATOR_SYSTEM_PROMPT = """你是一个小说主编，负责统筹整本书
 
 ## 输出契约
 
-- 每章必输：narrative_stage、stage_analysis、chapter_strategy（storylines、pacing、foreshadowings_to_address、suggested_chapter_words）、context_needed
+- 每章必输：narrative_stage、stage_analysis、chapter_strategy（storylines、pacing、foreshadowings_to_address、suggested_chapter_words）、context_needed、discourse_contract、beats
+- discourse_contract 声明本章的叙事决定，不要写成文笔要求：theme 用 implicit（旁白不解释主题）或 stated_once；causal 用 loose_end（留下未收的线）或 single_track；ending 用 action、interruption 或 unresolved，不要默认 acceptance；time 用 linear 或 flashback；moral 用 ambiguous 或 clear
+- beats 是本章节拍，每条写 must_happen、must_not_explain、participants。节拍只写本章大纲里还没发生的事，不要把前情摘要末尾的动作再排一次。节拍服务整章，不拆成独立成稿
 - ending_type：仅当本章确需特定结尾类型（如 cliffhanger）时输出，省略即自然收束
 - unit_arc / pov_config：仅当用户消息的模式指令要求时输出
 - 其余可选字段仅在确有内容时输出，无内容省略：
@@ -46,7 +49,12 @@ BASE_OUTPUT_SCHEMA = (
     "  },\n"
     '  "context_needed": {"characters": ["本章涉及的已有角色"], '
     '"world_elements": ["本章涉及的世界观设定"], "recent_reference": "需要回顾的前文内容", '
-    '"cross_timeline_references": [], "perspective_specific": ""}\n'
+    '"cross_timeline_references": [], "perspective_specific": ""},\n'
+    '  "discourse_contract": {"theme": "implicit", "causal": "loose_end", '
+    '"ending": "action", "time": "linear", "moral": "ambiguous"},\n'
+    '  "beats": [{"id": "b1", "must_happen": "必须发生的事", '
+    '"must_not_explain": "旁白不能说破的事", "participants": ["角色"], '
+    '"time_position": "linear"}]\n'
     "}\n"
 )
 
@@ -120,11 +128,16 @@ class OrchestratorAgent(BaseAgent):
         timeline_findings = packet.get("timeline_findings", [])
         unresolved = unresolved_foreshadowings or []
         foreshadowing_context = "\n".join(f"- {item}" for item in unresolved)
-        timeline_context = "\n".join(str(item) for item in (timeline_events or []))
-        timeline_warnings = "\n".join(str(item) for item in (timeline_findings or []))
+        timeline_context = format_timeline_events(timeline_events or [])
+        timeline_warnings = format_timeline_findings(timeline_findings or [])
 
         # Skip-when-empty: absent sections stay absent, no placeholder noise.
-        summary_section = f"## 前情摘要\n{recent_summary}\n\n" if recent_summary else ""
+        summary_section = (
+            f"## 前情摘要\n{recent_summary}\n"
+            "不要把这段里的收束安排进本章节拍。\n\n"
+            if recent_summary
+            else ""
+        )
         characters_section = f"## 已有角色\n{character_context}\n\n" if character_context else ""
         world_section = f"## 世界观设定\n{world_context}\n\n" if world_context else ""
         chapters_section = f"## 已有章节\n{recent_titles}\n\n" if recent_titles else ""

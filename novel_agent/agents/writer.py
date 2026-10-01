@@ -6,8 +6,44 @@ from collections.abc import AsyncIterator
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.parser import strip_none
+from novel_agent.services.context import format_timeline_events, format_timeline_findings
 from novel_agent.tools.base import BaseTool
 from novel_agent.tools.search import SearchContextTool
+
+_RECENT_SUMMARY_NOTE = (
+    "这段只用于衔接已经发生的事。"
+    "前文提要末尾的动作，本章不要再做一次。用本章新发生的事收束。"
+)
+
+
+def _format_discourse(strategy: dict) -> str:
+    """Render the book policy, chapter contract, and beats for the writer."""
+    policy = strategy.get("book_policy") or ""
+    contract = strategy.get("discourse_contract") or {}
+    beats = strategy.get("beats") or []
+    if not policy and not contract and not beats:
+        return ""
+    lines = ["## 话语合同"]
+    if policy:
+        lines.append(str(policy))
+    if isinstance(contract, dict) and contract:
+        lines.append(
+            "本章："
+            f"主题={contract.get('theme', 'implicit')}，"
+            f"因果={contract.get('causal', 'loose_end')}，"
+            f"结尾={contract.get('ending', 'action')}，"
+            f"时间={contract.get('time', 'linear')}，"
+            f"道德={contract.get('moral', 'ambiguous')}。"
+        )
+        lines.append("旁白不解释主题。章末用动作、打断或未决收束，不要让主角想通了。")
+    for beat in beats:
+        if not isinstance(beat, dict):
+            continue
+        must = beat.get("must_happen") or ""
+        hidden = beat.get("must_not_explain") or ""
+        if must or hidden:
+            lines.append(f"- 节拍：{must}。不要说破：{hidden}")
+    return "\n".join(lines)
 
 _HR_RE = re.compile(r"^(?:---+|\*\*\*+|___+)\s*\n+")
 _TITLE_RE = re.compile(
@@ -75,7 +111,7 @@ def strip_writer_preamble(text: str) -> str:
         if nxt == current:
             break
         current = nxt
-    return _strip_english_preamble(current)
+    return _strip_english_preamble(current).replace("**", "")
 
 
 def _is_writer_meta(block: str) -> bool:
@@ -275,16 +311,17 @@ class WriterAgent(BaseAgent):
         if world_context:
             context_parts.append(f"## 世界观设定\n{world_context}")
         if recent_summary:
-            context_parts.append(f"## 前文提要\n{recent_summary}")
+            context_parts.append(f"## 前文提要\n{recent_summary}\n{_RECENT_SUMMARY_NOTE}")
         if unresolved_foreshadowings:
             context_parts.append(
                 "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
-        if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings}")
+            context_parts.append("## 已发生的关键事件\n" + format_timeline_events(timeline_events))
+        timeline_warnings = format_timeline_findings(timeline_findings)
+        if timeline_warnings:
+            context_parts.append("## 时间线警告\n" + timeline_warnings)
 
         tool_hint = self._build_tool_hint()
         user_prompt = (
@@ -340,18 +377,27 @@ class WriterAgent(BaseAgent):
         if world_context:
             context_parts.append(f"## 世界观设定\n{world_context}")
         if recent_summary:
-            context_parts.append(f"## 前文提要\n{recent_summary}")
+            context_parts.append(f"## 前文提要\n{recent_summary}\n{_RECENT_SUMMARY_NOTE}")
         if unresolved_foreshadowings:
             context_parts.append(
                 "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
-        if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings}")
+            context_parts.append("## 已发生的关键事件\n" + format_timeline_events(timeline_events))
+        timeline_warnings = format_timeline_findings(timeline_findings)
+        if timeline_warnings:
+            context_parts.append("## 时间线警告\n" + timeline_warnings)
 
-        if revision_feedback:
+        if not self._tools:
+            if revision_feedback:
+                closing = f"\n\n## 修改意见\n{revision_feedback}\n\n按这一份意见重写整章正文。"
+            else:
+                closing = "\n\n直接输出完整章节正文。不要检索，不要改措辞，不要解释。"
+            user_prompt = (
+                f"请写第{chapter_number}章的正文：\n\n" + "\n\n".join(context_parts) + closing
+            )
+        elif revision_feedback:
             user_prompt = (
                 f"请根据以下信息修订第{chapter_number}章：\n\n"
                 + "\n\n".join(context_parts)
@@ -410,16 +456,17 @@ class WriterAgent(BaseAgent):
         if world_context:
             context_parts.append(f"## 世界观设定\n{world_context}")
         if recent_summary:
-            context_parts.append(f"## 前文提要\n{recent_summary}")
+            context_parts.append(f"## 前文提要\n{recent_summary}\n{_RECENT_SUMMARY_NOTE}")
         if unresolved_foreshadowings:
             context_parts.append(
                 "## 待回收伏笔（不得无故遗忘或提前泄露）\n"
                 + "\n".join(f"- {item}" for item in unresolved_foreshadowings)
             )
         if timeline_events:
-            context_parts.append(f"## 已发生的关键事件\n{timeline_events}")
-        if timeline_findings:
-            context_parts.append(f"## 时间线警告\n{timeline_findings}")
+            context_parts.append("## 已发生的关键事件\n" + format_timeline_events(timeline_events))
+        timeline_warnings = format_timeline_findings(timeline_findings)
+        if timeline_warnings:
+            context_parts.append("## 时间线警告\n" + timeline_warnings)
 
         user_prompt = (
             f"请根据以下信息创作第{chapter_number}章：\n\n"
@@ -510,6 +557,9 @@ class WriterAgent(BaseAgent):
             cs = {}
         cs = strip_none(cs)
         parts = []
+        contract_lines = _format_discourse(strategy)
+        if contract_lines:
+            parts.append(contract_lines)
 
         # ── Stage context (from top-level strategy, not chapter_strategy) ──
         stage = strategy.get("narrative_stage", "")

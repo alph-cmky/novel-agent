@@ -63,11 +63,31 @@ class ContextNeeded(BaseModel):
     perspective_specific: str = ""
 
 
+class DiscourseContract(BaseModel):
+    """Per-chapter narrative decisions checked after the draft exists."""
+
+    theme: str = "implicit"
+    causal: str = "loose_end"
+    ending: str = "action"
+    time: str = "linear"
+    moral: str = "ambiguous"
+
+
+class Beat(BaseModel):
+    id: str = ""
+    must_happen: str = ""
+    must_not_explain: str = ""
+    participants: list[str] = Field(default_factory=list)
+    time_position: str = "linear"
+
+
 class OrchestratorReport(BaseModel):
     narrative_stage: str = "development"
     stage_analysis: str = ""
     chapter_strategy: ChapterStrategy = Field(default_factory=ChapterStrategy)
     context_needed: ContextNeeded = Field(default_factory=ContextNeeded)
+    discourse_contract: DiscourseContract = Field(default_factory=DiscourseContract)
+    beats: list[Beat] = Field(default_factory=list)
 
 
 # ── Editor ────────────────────────────────────────────

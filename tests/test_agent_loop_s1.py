@@ -110,7 +110,6 @@ def _run(state: dict[str, Any], p: dict) -> dict:
         patch("novel_agent.graph.agent_loop.QualityService.check_draft_hard_gates", p["gate"]),
         patch("novel_agent.graph.agent_loop._config_for", p["_config_for"]),
         patch("novel_agent.graph.agent_loop._get_chapter_store", p["_get_chapter_store"]),
-        patch("novel_agent.graph.agent_loop.StyleCheckTool", MagicMock()),
         patch("novel_agent.graph.agent_loop.HumanizeTool", MagicMock()),
     ):
         return asyncio.run(run_agent_loop(state, max_rounds=2, max_retries=2))
@@ -131,13 +130,11 @@ def test_hard_gate_pass_skips_editor_and_continuity():
     assert result["quality_gate_passed"] is True
     assert result["editor_skipped"] is True
     assert result["continuity_skipped"] is True
-    assert result["editor_report"].get("skipped") is True
-    assert result["continuity_report"].get("skipped") is True
+    assert result["contract_passed"] is True
+    assert result["surface_applied"] is False
     assert p["EditorAgent"].call_count == 0
     assert p["ContinuityAgent"].call_count == 0
     assert p["writer"].write_with_loop.await_count == 1
-    assert p["editor"].review.await_count == 0
-    assert p["continuity"].audit.await_count == 0
     assert result["timeline_passed"] is True
 
 
@@ -190,8 +187,10 @@ def test_short_dead_name_inside_a_word_stays_on_the_pass_path():
     )
 
     assert result["timeline_passed"] is True
+    assert result["contract_passed"] is True
     assert result["editor_skipped"] is True
     assert p["EditorAgent"].call_count == 0
+    assert p["writer"].write_with_loop.await_count == 1
 
 
 def test_hard_gate_fail_invokes_editor_and_continuity():
@@ -269,7 +268,6 @@ def test_worldbuilding_uses_relevant_entities_and_keeps_packet_foreshadowings():
         patch("novel_agent.graph.agent_loop.QualityService.check_draft_hard_gates", p["gate"]),
         patch("novel_agent.graph.agent_loop._config_for", p["_config_for"]),
         patch("novel_agent.graph.agent_loop._get_chapter_store", p["_get_chapter_store"]),
-        patch("novel_agent.graph.agent_loop.StyleCheckTool", MagicMock()),
         patch("novel_agent.graph.agent_loop.HumanizeTool", MagicMock()),
         patch("novel_agent.storage.manager.ProjectManager", return_value=mgr),
     ):

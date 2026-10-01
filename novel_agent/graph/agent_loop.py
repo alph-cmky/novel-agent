@@ -1,20 +1,19 @@
-"""Agent loop runner — C5 architecture with S1 conditional review.
+"""Chapter runner — discourse contract, then one review board.
 
-    Orchestrator → Writer agent loop [generate → analyze_style → humanize_passage]
-    → deterministic Hard Gate
-         PASS + clean timeline → SKIP Editor + Continuity
-         PASS + dead character in this draft → Editor arm
-         FAIL → Editor → (verdict=rewrite → re-enter Writer ≤ max_retries) → Continuity
-    → Worldbuilding → output for human approve/reject
+    Orchestrator (beats + discourse contract)
+    → Writer writes the chapter, no tools
+    → deterministic Hard Gate (fail rewrites before the board)
+    → review board: timeline, discourse contract, Editor, Continuity
+    → one revision brief, Writer rewrites ≤ max_retries
+    → surface humanize only after structure, and only for clustered patterns
+    → Worldbuilding → output
 
-The Writer loop handles generation + de-AI flavor (analyze_style + humanize_passage).
-Editor and the Continuity LLM run when the hard gate fails, or when this draft
-names a character who already died. A later rewrite that clears both checks
-skips the Continuity LLM. Worldbuilding always runs.
+Writer is the only prose author. Reviewers do not rewrite.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -27,13 +26,23 @@ from novel_agent.agents.writer import WriterAgent, strip_writer_preamble
 from novel_agent.config import DEFAULT_MAX_TOKENS
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.model_router import TaskClass
-from novel_agent.services.context import _FORESHADOW_LIMIT, _PROPERTY_CHARS, ContextCompiler
+from novel_agent.services.context import (
+    _FORESHADOW_LIMIT,
+    _PROPERTY_CHARS,
+    ContextCompiler,
+    _prefer_foreshadowings,
+    closing_repeats,
+)
 from novel_agent.services.continuity import ContinuityService
+from novel_agent.services.discourse import (
+    check_discourse_contract,
+    direct_revision,
+    ensure_discourse,
+    needs_rewrite,
+)
 from novel_agent.services.quality import QualityService
 from novel_agent.style.analyzer import StyleAnalyzer
 from novel_agent.tools.humanize import HumanizeTool
-from novel_agent.tools.search import SearchContextTool
-from novel_agent.tools.style_check import StyleCheckTool
 
 
 class EmptyDraftError(RuntimeError):
@@ -83,7 +92,7 @@ def _skipped_continuity_report(reason: str = "hard_gate_passed") -> dict:
 
 
 def _wb_entities(entities: list[dict]) -> list[dict]:
-    from novel_agent.storage.manager import _excerpt
+    from novel_agent.storage.manager import _property_text
 
     clipped = []
     for entity in entities:
@@ -94,7 +103,7 @@ def _wb_entities(entities: list[dict]) -> list[dict]:
             {
                 "entity_type": entity.get("entity_type"),
                 "name": name,
-                "properties": _excerpt(str(entity.get("properties") or ""), _PROPERTY_CHARS),
+                "properties": _property_text(entity.get("properties") or "", _PROPERTY_CHARS),
             }
         )
     return clipped
@@ -119,6 +128,37 @@ def _draft_timeline(packet: dict, draft: str, chapter_number: int) -> dict:
         draft,
         current_chapter=chapter_number,
     )
+
+
+def _style_dump(draft: str) -> dict:
+    report = StyleAnalyzer().analyze(draft)
+    if hasattr(report, "model_dump"):
+        data = report.model_dump()
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _clustered_surface(style: dict) -> bool:
+    """Surface rewrite only when the same pattern repeats. One hit is not enough.
+
+    Paired dashes are a rhythm mark in this prose, not a cluster. The humanizer
+    is told to keep them, so they must not open a rewrite.
+    """
+    issues = style.get("issues") or []
+    banned_kinds = 0
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        label = f"{issue.get('pattern') or ''}{issue.get('phrase') or ''}"
+        if "破折号" in label or label.strip() == "——":
+            continue
+        count = int(issue.get("count") or 0)
+        kind = issue.get("type")
+        if kind in {"banned_phrase", "sentence_pattern", "cliche"} and count >= 2:
+            return True
+        if kind == "banned_phrase" and count >= 1:
+            banned_kinds += 1
+    return banned_kinds >= 3
 
 
 async def run_agent_loop(
@@ -167,8 +207,10 @@ async def run_agent_loop(
             previous_chapters = mgr.get_chapter_numbers(project_id, before=chapter_number)
             total_chapters = mgr.count_chapters(project_id, before=chapter_number)
             if not unresolved:
-                relevant_fs = mgr.get_relevant_foreshadowings(
-                    project_id, chapter_number, limit=_FORESHADOW_LIMIT
+                relevant_fs = _prefer_foreshadowings(
+                    mgr.get_relevant_foreshadowings(project_id, chapter_number, limit=None),
+                    _FORESHADOW_LIMIT,
+                    full_packet.get("timeline_events") or [],
                 )
                 unresolved = [
                     f"[第{f.get('planted_chapter', '?')}章] {f.get('description', '')}"
@@ -193,6 +235,7 @@ async def run_agent_loop(
         total_chapters=total_chapters,
     )
     _orch_latency = time.monotonic() - _t0
+    strategy = ensure_discourse(strategy)
 
     context_needed = strategy.get("context_needed", {})
     if context_needed and mgr and project_id:
@@ -206,77 +249,97 @@ async def run_agent_loop(
         f"tokens: {orchestrator.input_tokens}/{orchestrator.output_tokens}"
     )
 
-    # ── 2. Writer agent loop (generate + de-AI) ──
+    # ── 2. Writer writes the chapter. Tools stay outside this call. ──
     max_tokens = max(DEFAULT_MAX_TOKENS, int(target_words * 3))
     writer_config = _config_for(TaskClass.CREATIVE)
     writer_config.max_tokens = max_tokens
 
     store = _get_chapter_store(persist_dir)
     writer_packet = ContextCompiler.for_writer(full_packet) if full_packet else None
-
-    # C5: loop only has generation + de-AI tools.
-    # Editor/Continuity are conditional (S1); Worldbuilding is a fixed node after.
-    loop_tools: list = [
-        StyleCheckTool(),
-        HumanizeTool(config=_config_for(TaskClass.REVIEW)),
-    ]
-    if store and project_id:
-        loop_tools.append(SearchContextTool(store, project_id))
+    contract = strategy.get("discourse_contract") or {}
 
     writer = WriterAgent(
         config=writer_config,
-        chapter_store=store,
-        project_id=project_id,
         target_chapter_words=target_words,
         narrative_mode=narrative_mode,
         narrative_perspective=narrative_perspective,
-        agent_loop_tools=loop_tools,
     )
 
-    content, _ = await writer.write_with_loop(
-        chapter_number=chapter_number,
-        outline=outline,
-        context_packet=writer_packet,
-        target_chapter_words=target_words,
-        orchestrator_strategy=strategy,
-        max_rounds=max_rounds,
-        revision_feedback=revision_feedback,
-    )
-    content = strip_writer_preamble(content)
+    async def _write(feedback: str | None) -> str:
+        drafted, _ = await writer.write_with_loop(
+            chapter_number=chapter_number,
+            outline=outline,
+            context_packet=writer_packet,
+            target_chapter_words=target_words,
+            orchestrator_strategy=strategy,
+            max_rounds=1,
+            revision_feedback=feedback,
+        )
+        drafted = strip_writer_preamble(drafted)
+        if not drafted.strip():
+            raise EmptyDraftError(
+                f"Writer returned empty draft for chapter {chapter_number}"
+            )
+        return drafted
+
+    content = await _write(revision_feedback)
     print(
         f"  [AgentLoop] Writer: {len(content)} chars, "
-        f"tokens: {writer.input_tokens}/{writer.output_tokens}, "
-        f"tools: {writer.tool_call_counts}"
-        + (f", revision_feedback={'yes' if revision_feedback else 'no'}")
+        f"tokens: {writer.input_tokens}/{writer.output_tokens}"
     )
 
-    if not content.strip():
-        raise EmptyDraftError(
-            f"Writer returned empty draft for chapter {chapter_number} "
-            f"(after tool loop; refusing to treat empty as a successful chapter)"
+    def _gate(text: str) -> tuple[dict, bool]:
+        report = QualityService.check_draft_hard_gates(
+            text, target_words=target_words, chapter_outline=outline
+        )
+        return report, bool(report.get("passed"))
+
+    quality_gate_report, gate_passed = _gate(content)
+    retries = 0
+    revision_brief = ""
+    while not gate_passed and retries < max_retries:
+        retries += 1
+        revision_brief = direct_revision(gate_report=quality_gate_report)
+        print(f"  [AgentLoop] Hard gate retry {retries}/{max_retries}")
+        content = await _write(revision_brief)
+        quality_gate_report, gate_passed = _gate(content)
+        print(
+            f"  [AgentLoop] QualityGate after retry {retries}: "
+            f"{'PASS' if gate_passed else 'FAIL'}"
         )
 
-    # ── 3. Deterministic Hard Gate (real gate under S1) ──
-    quality_gate_report = QualityService.check_draft_hard_gates(
-        content, target_words=target_words, chapter_outline=outline
-    )
-    gate_passed = bool(quality_gate_report.get("passed"))
-    timeline_report = _draft_timeline(full_packet, content, chapter_number)
-    timeline_passed = bool(timeline_report.get("passed"))
-    print(
-        f"  [AgentLoop] QualityGate: {'PASS' if gate_passed else 'FAIL'}; "
-        f"timeline: {'PASS' if timeline_passed else 'FAIL'}"
-    )
+    previous_draft = ""
+    if mgr is not None and project_id and chapter_number > 1:
+        earlier = mgr.get_chapter(project_id, chapter_number - 1) or {}
+        if isinstance(earlier, dict):
+            previous_draft = str(earlier.get("draft_content") or "")
+    if previous_draft and closing_repeats(previous_draft, content):
+        print("  [AgentLoop] Closing repeats the previous chapter → rewrite once")
+        echo_brief = (
+            "章末还在重复上一章末尾的动作。"
+            "用本章新发生的事重写最后一段，前面的情节保持不变。"
+        )
+        rewritten = await _write(echo_brief)
+        rewritten_report, rewritten_passed = _gate(rewritten)
+        if rewritten_passed:
+            content = rewritten
+            quality_gate_report = rewritten_report
+            gate_passed = True
+            revision_brief = echo_brief
+            print(f"  [AgentLoop] Closing rewrite kept: {len(content)} chars")
+        else:
+            print("  [AgentLoop] Closing rewrite missed the hard gate; kept the earlier draft")
 
+    timeline_report = _draft_timeline(full_packet, content, chapter_number)
+    contract_report = check_discourse_contract(content, contract)
+    timeline_passed = bool(timeline_report.get("passed"))
+    contract_passed = bool(contract_report.get("passed"))
     editor_skipped = False
     continuity_skipped = False
-    editor_report: dict
-    continuity_report: dict
-    retries = 0
+    editor_report: dict = {}
+    continuity_report: dict = {}
     _e_latency = 0.0
     _c_latency = 0.0
-
-    # Token counters for skipped path (agents not constructed)
     editor_input_tokens = 0
     editor_output_tokens = 0
     editor_cached_tokens = 0
@@ -288,136 +351,145 @@ async def run_agent_loop(
     continuity_reasoning_tokens = 0
     continuity_model_calls = 0
 
-    if gate_passed and timeline_passed:
+    def _deterministic_clean() -> bool:
+        return gate_passed and timeline_passed and contract_passed
+
+    if _deterministic_clean():
         editor_skipped = True
         continuity_skipped = True
-        editor_report = _skipped_editor_report()
-        continuity_report = _skipped_continuity_report()
-        print("  [AgentLoop] S1: Hard Gate PASS and timeline clean → skip Editor + Continuity")
-    else:
-        # ── 4. Editor (FAIL path only) ──
-        editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
-        editor_source = dict(full_packet)
-        if not timeline_passed:
-            editor_source["timeline_findings"] = [
-                *(editor_source.get("timeline_findings") or []),
-                *timeline_report.get("findings", []),
-            ]
-        editor_packet = ContextCompiler.for_editor(editor_source) if editor_source else None
-
-        async def _run_editor(draft: str) -> dict:
-            style_report = StyleAnalyzer().analyze(draft).model_dump()
-            report, _ = await editor.review(
-                chapter_number=chapter_number,
-                draft_content=draft,
-                narrative_mode=narrative_mode,
-                style_report=style_report,
-                context_packet=editor_packet,
-            )
-            return report
-
-        _e_t0 = time.monotonic()
-        editor_report = await _run_editor(content)
-        _e_latency = time.monotonic() - _e_t0
+        editor_report = _skipped_editor_report("deterministic_checks_passed")
+        continuity_report = _skipped_continuity_report("deterministic_checks_passed")
         print(
-            f"  [AgentLoop] Editor: score={editor_report.get('overall_score', '?')}, "
-            f"verdict={editor_report.get('verdict', '?')}"
+            "  [AgentLoop] Gate, timeline, and contract PASS "
+            "→ skip Editor + Continuity"
+        )
+    else:
+        editor = EditorAgent(config=_config_for(TaskClass.REVIEW))
+        continuity = ContinuityAgent(
+            config=_config_for(TaskClass.REVIEW),
+            chapter_store=store,
+            project_id=project_id,
         )
 
-        # ── 5. Editor-triggered retry (re-enter loop with feedback) ──
-        while retries < max_retries and (
-            editor_report.get("verdict") == "rewrite" or not timeline_passed
+        async def _board(draft: str) -> tuple[dict, dict, dict, dict]:
+            nonlocal _e_latency, _c_latency
+            timeline = _draft_timeline(full_packet, draft, chapter_number)
+            contract_report = check_discourse_contract(draft, contract)
+            editor_source = dict(full_packet)
+            if not timeline.get("passed"):
+                editor_source["timeline_findings"] = [
+                    *(editor_source.get("timeline_findings") or []),
+                    *(timeline.get("findings") or []),
+                ]
+            editor_packet = (
+                ContextCompiler.for_editor(editor_source) if editor_source else None
+            )
+            continuity_packet = (
+                ContextCompiler.for_continuity(full_packet) if full_packet else None
+            )
+            style_report = _style_dump(draft)
+
+            async def _edit() -> dict:
+                nonlocal _e_latency
+                started = time.monotonic()
+                report, _ = await editor.review(
+                    chapter_number=chapter_number,
+                    draft_content=draft,
+                    narrative_mode=narrative_mode,
+                    style_report=style_report,
+                    context_packet=editor_packet,
+                )
+                _e_latency += time.monotonic() - started
+                return report
+
+            async def _audit() -> dict:
+                nonlocal _c_latency
+                started = time.monotonic()
+                report, _ = await continuity.audit(
+                    chapter_number=chapter_number,
+                    draft_content=draft,
+                    narrative_mode=narrative_mode,
+                    context_packet=continuity_packet,
+                )
+                _c_latency += time.monotonic() - started
+                return report
+
+            edited, audited = await asyncio.gather(_edit(), _audit())
+            return timeline, contract_report, edited, audited
+
+        (
+            timeline_report,
+            contract_report,
+            editor_report,
+            continuity_report,
+        ) = await _board(content)
+        timeline_passed = bool(timeline_report.get("passed"))
+        contract_passed = bool(contract_report.get("passed"))
+        print(
+            f"  [AgentLoop] Board: gate={'PASS' if gate_passed else 'FAIL'}, "
+            f"timeline={'PASS' if timeline_passed else 'FAIL'}, "
+            f"contract={'PASS' if contract_passed else 'FAIL'}, "
+            f"editor={editor_report.get('verdict', '?')}"
+        )
+
+        while retries < max_retries and needs_rewrite(
+            gate_passed=gate_passed,
+            timeline_report=timeline_report,
+            contract_report=contract_report,
+            editor_report=editor_report,
+            continuity_report=continuity_report,
         ):
             retries += 1
-            print(f"  [AgentLoop] Editor retry {retries}/{max_retries}")
-
-            feedback = editor_report.get("issues") or []
-            feedback_text = "\n".join(
-                f"- [{i.get('dimension', '?')}] {i.get('description', '')}" for i in feedback[:5]
+            revision_brief = direct_revision(
+                gate_report=quality_gate_report,
+                timeline_report=timeline_report,
+                contract_report=contract_report,
+                editor_report=editor_report,
+                continuity_report=continuity_report,
             )
-            death_feedback = _timeline_feedback(timeline_report)
-            if death_feedback:
-                feedback_text = f"{death_feedback}\n{feedback_text}".strip()
-
-            content, _ = await writer.write_with_loop(
-                chapter_number=chapter_number,
-                outline=outline,
-                context_packet=writer_packet,
-                target_chapter_words=target_words,
-                orchestrator_strategy=strategy,
-                max_rounds=max_rounds,
-                revision_feedback=feedback_text,
-            )
-            content = strip_writer_preamble(content)
-            print(f"  [AgentLoop] Writer retry {retries}: {len(content)} chars")
-
-            if not content.strip():
-                raise EmptyDraftError(
-                    f"Writer returned empty draft on Editor rewrite retry "
-                    f"{retries}/{max_retries} for chapter {chapter_number}"
-                )
-
-            # Re-check hard gate after rewrite; if now PASS, stop review loop
-            quality_gate_report = QualityService.check_draft_hard_gates(
-                content, target_words=target_words, chapter_outline=outline
-            )
-            gate_passed = bool(quality_gate_report.get("passed"))
-            timeline_report = _draft_timeline(full_packet, content, chapter_number)
+            print(f"  [AgentLoop] Revision {retries}/{max_retries}")
+            content = await _write(revision_brief)
+            quality_gate_report, gate_passed = _gate(content)
+            (
+                timeline_report,
+                contract_report,
+                editor_report,
+                continuity_report,
+            ) = await _board(content)
             timeline_passed = bool(timeline_report.get("passed"))
-            print(
-                f"  [AgentLoop] QualityGate after rewrite {retries}: "
-                f"{'PASS' if gate_passed else 'FAIL'}; "
-                f"timeline: {'PASS' if timeline_passed else 'FAIL'}"
-            )
-            if gate_passed and timeline_passed:
-                editor_report = {
-                    **editor_report,
-                    "verdict": "accept",
-                    "note": "hard_gate_passed_after_rewrite",
-                }
-                break
-
-            _e_t0 = time.monotonic()
-            editor_report = await _run_editor(content)
-            _e_latency += time.monotonic() - _e_t0
-            print(
-                f"  [AgentLoop] Editor retry {retries}: "
-                f"score={editor_report.get('overall_score', '?')}, "
-                f"verdict={editor_report.get('verdict', '?')}"
-            )
+            contract_passed = bool(contract_report.get("passed"))
 
         editor_input_tokens = editor.input_tokens
         editor_output_tokens = editor.output_tokens
         editor_cached_tokens = editor.cached_tokens
         editor_reasoning_tokens = editor.reasoning_tokens
         editor_model_calls = editor.model_calls
+        continuity_input_tokens = continuity.input_tokens
+        continuity_output_tokens = continuity.output_tokens
+        continuity_cached_tokens = continuity.cached_tokens
+        continuity_reasoning_tokens = continuity.reasoning_tokens
+        continuity_model_calls = continuity.model_calls
 
-        # Skip the Continuity LLM only when both checks are clean.
-        if gate_passed and timeline_passed:
-            continuity_skipped = True
-            continuity_report = _skipped_continuity_report("hard_gate_passed_after_rewrite")
-            print("  [AgentLoop] S1: Hard Gate PASS and timeline clean → skip Continuity")
+    surface_applied = False
+    style = _style_dump(content)
+    if _clustered_surface(style):
+        phrases = [
+            str(issue.get("phrase"))
+            for issue in (style.get("issues") or [])
+            if isinstance(issue, dict) and issue.get("phrase")
+        ]
+        tool = HumanizeTool(config=_config_for(TaskClass.REVIEW))
+        result = await tool.execute(text=content, focus_patterns="、".join(phrases[:8]))
+        rewritten = ""
+        if getattr(result, "success", False):
+            rewritten = str((getattr(result, "data", None) or {}).get("humanized_text") or "")
+        rewritten = strip_writer_preamble(rewritten).strip()
+        if rewritten and len(rewritten) >= int(len(content) * 0.75):
+            content = rewritten
+            surface_applied = True
+            print(f"  [AgentLoop] Surface humanize kept: {len(content)} chars")
         else:
-            continuity = ContinuityAgent(
-                config=_config_for(TaskClass.REVIEW),
-                chapter_store=store,
-                project_id=project_id,
-            )
-            continuity_packet = ContextCompiler.for_continuity(full_packet) if full_packet else None
-            _c_t0 = time.monotonic()
-            continuity_report, _ = await continuity.audit(
-                chapter_number=chapter_number,
-                draft_content=content,
-                narrative_mode=narrative_mode,
-                context_packet=continuity_packet,
-            )
-            _c_latency = time.monotonic() - _c_t0
-            continuity_input_tokens = continuity.input_tokens
-            continuity_output_tokens = continuity.output_tokens
-            continuity_cached_tokens = continuity.cached_tokens
-            continuity_reasoning_tokens = continuity.reasoning_tokens
-            continuity_model_calls = continuity.model_calls
-            print(f"  [AgentLoop] Continuity: score={continuity_report.get('overall_score', '?')}")
+            print("  [AgentLoop] Surface humanize discarded")
 
     if not content.strip():
         raise EmptyDraftError(
@@ -486,6 +558,10 @@ async def run_agent_loop(
         "quality_gate_passed": gate_passed,
         "timeline_report": timeline_report,
         "timeline_passed": timeline_passed,
+        "contract_report": contract_report,
+        "contract_passed": contract_passed,
+        "revision_brief": revision_brief,
+        "surface_applied": surface_applied,
         "editor_report": editor_report,
         "continuity_report": continuity_report,
         "editor_skipped": editor_skipped,
