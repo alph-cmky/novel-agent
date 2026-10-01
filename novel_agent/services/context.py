@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from novel_agent.services.continuity import ContinuityService, is_death_action
-from novel_agent.storage.manager import _excerpt
+from novel_agent.storage.manager import _property_text
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,8 @@ _EXCERPT_CHARS = 400
 _EVENT_WINDOW = 8
 _PROPERTY_CHARS = 160
 _FORESHADOW_LIMIT = 40
+_CHARACTER_LIMIT = 16
+_WORLD_ENTITY_LIMIT = 24
 
 
 def _merge_context_lines(existing: str, lines: list[str]) -> str:
@@ -80,11 +82,172 @@ def _compress_events(events: list[dict], chapter_number: int) -> list[dict]:
     return kept
 
 
+def closing_repeats(previous: str, draft: str) -> bool:
+    """True when this chapter's closing window reuses the previous one."""
+    previous_grams = _content_grams(_closing_window(previous))
+    draft_grams = _content_grams(_closing_window(draft))
+    if len(previous_grams) < 8 or not draft_grams:
+        return False
+    shared = previous_grams & draft_grams
+    return len(shared) >= 8 and len(shared) / len(previous_grams) >= 0.25
+
+
+def _closing_window(text: str, limit: int = 180) -> str:
+    stripped = (text or "").strip()
+    if len(stripped) <= limit:
+        return stripped
+    tail = stripped[-limit:]
+    for index, char in enumerate(tail):
+        if char not in "。！？\n":
+            continue
+        rest = tail[index + 1 :].strip()
+        if len(rest) >= limit // 2:
+            return rest
+    return tail.strip()
+
+
+def _content_grams(text: str, size: int = 4) -> set[str]:
+    compact = "".join((text or "").split())
+    grams: set[str] = set()
+    for index in range(len(compact) - size + 1):
+        gram = compact[index : index + size]
+        if all("\u4e00" <= char <= "\u9fff" for char in gram):
+            grams.add(gram)
+    return grams
+
+
+def format_timeline_event(event: dict | str) -> str:
+    """One prompt line. Drop ids, evidence, and timestamps."""
+    if not isinstance(event, dict):
+        return f"- {event}"
+    chapter = event.get("chapter_number", "?")
+    subject = str(event.get("subject") or "")
+    action = str(event.get("action") or event.get("description") or event.get("summary") or "")
+    obj = str(event.get("object") or event.get("object_value") or "")
+    location = str(event.get("location") or "")
+    body = " ".join(part for part in (subject, action, obj) if part)
+    if location:
+        body = f"{body} @{location}".strip()
+    return f"- [第{chapter}章] {body}".rstrip()
+
+
+def format_timeline_events(events: list) -> str:
+    return "\n".join(format_timeline_event(event) for event in events or [])
+
+
+_SKIPPED_FINDING_TYPES = {"overdue_foreshadowing", "dormant_foreshadowing"}
+
+
+def format_timeline_finding(finding: dict | str) -> str:
+    """One warning line. Foreshadowing status is already in the open-thread list."""
+    if not isinstance(finding, dict):
+        return f"- {finding}"
+    kind = str(finding.get("type") or "")
+    if kind in _SKIPPED_FINDING_TYPES:
+        return ""
+    if kind == "dead_character_reappeared":
+        subject = finding.get("subject") or "角色"
+        death = finding.get("death_chapter", "?")
+        return f"- {subject}已在第{death}章死亡，不要再让其出场"
+    if kind == "event_order_violation":
+        return "- 已记录事件的章节顺序不一致"
+    subject = str(finding.get("subject") or finding.get("description") or "")
+    if kind and subject:
+        return f"- {kind}: {subject}"
+    return f"- {subject or kind}" if subject or kind else ""
+
+
+def format_timeline_findings(findings: list) -> str:
+    lines = [format_timeline_finding(item) for item in findings or []]
+    return "\n".join(line for line in lines if line)
+
+
+def _planted_chapter(row: dict) -> int:
+    try:
+        return int(row.get("planted_chapter") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _event_text(events: list) -> str:
+    parts: list[str] = []
+    for event in events or []:
+        if not isinstance(event, dict):
+            parts.append(str(event))
+            continue
+        parts.append(str(event.get("subject") or ""))
+        parts.append(str(event.get("action") or ""))
+        parts.append(str(event.get("object") or event.get("object_value") or ""))
+    return "\n".join(part for part in parts if part)
+
+
+def _phrase_overlap(description: str, text: str, size: int = 4) -> bool:
+    if len(description) < size or len(text) < size:
+        return False
+    for index in range(len(description) - size + 1):
+        gram = description[index : index + size]
+        if not any(ch.isalnum() or "\u4e00" <= ch <= "\u9fff" for ch in gram):
+            continue
+        if gram in text:
+            return True
+    return False
+
+
+def _prefer_foreshadowings(rows: list[dict], limit: int | None, events: list) -> list[dict]:
+    """Keep the earliest open threads, then ones that still touch recent events.
+
+    A risk sort plus a newest-first limit drops the opening threads once later
+    chapters plant enough new ones.
+    """
+    open_rows = [
+        row
+        for row in rows
+        if str(row.get("status") or "open") in {"open", "planted", "hinted", "advanced"}
+    ]
+    ordered = sorted(open_rows, key=_planted_chapter)
+    if limit is None or len(ordered) <= limit:
+        return ordered
+    chosen = ordered[: limit // 2]
+    chosen_ids = {id(row) for row in chosen}
+    text = _event_text(events)
+    live = [
+        row
+        for row in ordered
+        if id(row) not in chosen_ids and _phrase_overlap(str(row.get("description") or ""), text)
+    ]
+    live.sort(key=_planted_chapter, reverse=True)
+    for row in live:
+        if len(chosen) >= limit:
+            break
+        chosen.append(row)
+        chosen_ids.add(id(row))
+    for row in ordered:
+        if len(chosen) >= limit:
+            break
+        if id(row) in chosen_ids:
+            continue
+        chosen.append(row)
+    return chosen
+
+
+def _mention_text(events: list[dict], foreshadowings: list[dict]) -> str:
+    """Names the entity cap must keep: recent actions and open threads."""
+    parts: list[str] = []
+    for event in events:
+        parts.append(str(event.get("subject") or ""))
+        parts.append(str(event.get("action") or ""))
+        parts.append(str(event.get("object") or ""))
+    for item in foreshadowings:
+        parts.append(str(item.get("description") or ""))
+    return "\n".join(part for part in parts if part)
+
+
 class ContextCompiler:
     """Compile structured memory plus a short recent-prose excerpt.
 
-    Character and world text stay whole. Earlier chapter drafts are not copied
-    into the packet; only the last few chapters' endings are.
+    Character and world rows are capped. Names in the recent excerpt stay.
+    Earlier chapter drafts are not copied into the packet; only the last few
+    chapters' endings are.
     """
 
     def __init__(self, manager):
@@ -100,31 +263,39 @@ class ContextCompiler:
         del task  # projections no longer shrink the packet by role
         snapshot = self.manager.get_canon_snapshot(snapshot_id) if snapshot_id else None
         if snapshot:
+            payload = snapshot["payload"]
+            events = _compress_events(payload.get("story_events", []), chapter_number)
+            foreshadowings = _prefer_foreshadowings(
+                payload.get("foreshadowings", []), _FORESHADOW_LIMIT, events
+            )
             context = self.manager.build_context_from_snapshot(
                 snapshot,
                 chapter_number,
                 max_recent_chapters=_RECENT_CHAPTERS,
-                max_entities=None,
+                max_entities=_WORLD_ENTITY_LIMIT,
+                max_characters=_CHARACTER_LIMIT,
                 excerpt_chars=_EXCERPT_CHARS,
                 property_chars=_PROPERTY_CHARS,
+                mention_text=_mention_text(events, foreshadowings),
             )
-            payload = snapshot["payload"]
-            foreshadowings = payload.get("foreshadowings", [])[:_FORESHADOW_LIMIT]
-            events = _compress_events(payload.get("story_events", []), chapter_number)
         else:
+            events = self.manager.get_context_story_events(
+                project_id, chapter_number, window=_EVENT_WINDOW
+            )
+            foreshadowings = _prefer_foreshadowings(
+                self.manager.get_relevant_foreshadowings(project_id, chapter_number, limit=None),
+                _FORESHADOW_LIMIT,
+                events,
+            )
             context = self.manager.build_context(
                 project_id,
                 chapter_number,
                 max_recent_chapters=_RECENT_CHAPTERS,
-                max_entities=None,
+                max_entities=_WORLD_ENTITY_LIMIT,
+                max_characters=_CHARACTER_LIMIT,
                 excerpt_chars=_EXCERPT_CHARS,
                 property_chars=_PROPERTY_CHARS,
-            )
-            foreshadowings = self.manager.get_relevant_foreshadowings(
-                project_id, chapter_number, limit=_FORESHADOW_LIMIT
-            )
-            events = self.manager.get_context_story_events(
-                project_id, chapter_number, window=_EVENT_WINDOW
+                mention_text=_mention_text(events, foreshadowings),
             )
         timeline_findings = ContinuityService.check_timeline(
             events,
@@ -135,7 +306,9 @@ class ContextCompiler:
         for item in foreshadowings:
             if item.get("status") not in {"open", "planted", "hinted", "advanced"}:
                 continue
-            text = f"[第{item.get('planted_chapter', '?')}章] {item.get('description', '')}".strip()
+            text = (
+                f"[第{item.get('planted_chapter', '?')}章] {item.get('description', '')}".strip()
+            )
             if text:
                 unresolved.append(text)
         return ContextPacket(
@@ -206,7 +379,7 @@ class ContextCompiler:
                 project_id, char_names, entity_type="character"
             )
             char_lines = [
-                f"- {c['name']}: {_excerpt(str(c.get('properties') or ''), _PROPERTY_CHARS)}"
+                f"- {c['name']}: {_property_text(c.get('properties') or '', _PROPERTY_CHARS)}"
                 for c in chars
                 if c.get("name")
             ]
@@ -223,7 +396,7 @@ class ContextCompiler:
             world_ents = [e for e in world_ents if e.get("entity_type") != "character"]
             world_lines = [
                 f"- [{e['entity_type']}] {e['name']}: "
-                f"{_excerpt(str(e.get('properties') or ''), _PROPERTY_CHARS)}"
+                f"{_property_text(e.get('properties') or '', _PROPERTY_CHARS)}"
                 for e in world_ents
                 if e.get("name")
             ]

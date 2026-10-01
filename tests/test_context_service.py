@@ -1,8 +1,8 @@
 from unittest.mock import MagicMock
 
-from novel_agent.services.context import ContextCompiler, _compress_events
+from novel_agent.services.context import ContextCompiler, _compress_events, closing_repeats
 from novel_agent.services.continuity import ContinuityService
-from novel_agent.storage.manager import _excerpt
+from novel_agent.storage.manager import _excerpt, _excerpt_before_closing
 
 
 def test_compress_events_keeps_reappearance_outside_the_window():
@@ -40,6 +40,23 @@ def test_excerpt_starts_after_a_sentence_boundary():
     assert len(excerpt) <= 401
 
 
+def test_recent_excerpt_stops_before_the_closing_window():
+    story = "苏迟核对名单，在表格末行写下待查。" * 80
+    closing = "她把手机翻过去，屏幕朝下扣在桌上。窗外电线又往下滴了一滴水。"
+    excerpt = _excerpt_before_closing(story + closing, 400)
+    assert "翻过去" not in excerpt
+    assert "待查" in excerpt
+
+
+def test_closing_repeats_flags_the_same_pose_only():
+    pose = "声音从半截卷闸门下面拐进来，落在折叠桌上。窗外电线又往下滴了一滴水。"
+    previous = ("前文情节。" * 40) + pose
+    same = ("这一章的新事。" * 40) + pose + "她没有抬头。"
+    fresh = ("这一章的新事。" * 40) + "她走出巷口，洒水车从面前开过去，鸽子从屋檐上飞起来。"
+    assert closing_repeats(previous, same)
+    assert not closing_repeats(previous, fresh)
+
+
 def test_context_packet_single_contract():
     manager = MagicMock()
     manager.build_context.return_value = {
@@ -66,7 +83,7 @@ def test_context_packet_single_contract():
 
 
 def test_compile_uses_task_aware_retrieval_not_full_reads():
-    """Phase C: compile 走 relevance 查询，禁止全表读取 foreshadowings/story_events。"""
+    """未回收伏笔先全部取出，再在 Python 里留下早期线和近期相关线。"""
     manager = MagicMock()
     manager.build_context.return_value = {}
     manager.get_relevant_foreshadowings.return_value = []
@@ -74,15 +91,15 @@ def test_compile_uses_task_aware_retrieval_not_full_reads():
 
     ContextCompiler(manager).compile("p", 5)
 
-    manager.get_relevant_foreshadowings.assert_called_once_with("p", 5, limit=40)
+    manager.get_relevant_foreshadowings.assert_called_once_with("p", 5, limit=None)
     manager.get_context_story_events.assert_called_once_with("p", 5, window=8)
     manager.get_relevant_story_events.assert_not_called()
     manager.get_foreshadowings.assert_not_called()
     manager.get_story_events.assert_not_called()
 
 
-def test_compile_does_not_cap_entity_or_chapter_reads():
-    """compile 不给实体和前文设额度。"""
+def test_compile_caps_entity_counts_and_keeps_recent_excerpt():
+    """compile 限制人物和世界条目数量，前文仍只留结尾。"""
     manager = MagicMock()
     manager.build_context.return_value = {}
     manager.get_relevant_foreshadowings.return_value = []
@@ -94,10 +111,47 @@ def test_compile_does_not_cap_entity_or_chapter_reads():
         "p",
         5,
         max_recent_chapters=3,
-        max_entities=None,
+        max_entities=24,
+        max_characters=16,
         excerpt_chars=400,
         property_chars=160,
+        mention_text="",
     )
+
+
+def test_prefer_foreshadowings_keeps_early_spine_and_recent_overlap():
+    from novel_agent.services.context import _prefer_foreshadowings
+
+    rows = [
+        {
+            "description": "别接龙王的单，别问第十八任去哪了",
+            "planted_chapter": 1,
+            "status": "open",
+        }
+    ]
+    rows += [
+        {
+            "description": f"灰尘方块痕迹编号{index:02d}",
+            "planted_chapter": index,
+            "status": "open",
+        }
+        for index in range(2, 25)
+    ]
+    rows.append(
+        {
+            "description": "照壁胶痕与离职报告的折法相同",
+            "planted_chapter": 30,
+            "status": "open",
+        }
+    )
+    events = [{"action": "苏迟发现照壁胶痕和离职报告折法相同"}]
+
+    chosen = _prefer_foreshadowings(rows, 10, events)
+    descriptions = [row["description"] for row in chosen]
+
+    assert len(chosen) == 10
+    assert descriptions[0].startswith("别接龙王的单")
+    assert any("照壁胶痕" in item for item in descriptions)
 
 
 def test_compile_snapshot_keeps_full_canon():
@@ -125,14 +179,11 @@ def test_compile_snapshot_keeps_full_canon():
 
     packet = ContextCompiler(manager).compile("p", 50, task="orchestrator", snapshot_id="snapshot")
 
-    manager.build_context_from_snapshot.assert_called_once_with(
-        manager.get_canon_snapshot.return_value,
-        50,
-        max_recent_chapters=3,
-        max_entities=None,
-        excerpt_chars=400,
-        property_chars=160,
-    )
+    kwargs = manager.build_context_from_snapshot.call_args.kwargs
+    assert kwargs["max_entities"] == 24
+    assert kwargs["max_characters"] == 16
+    assert "事件42" in kwargs["mention_text"]
+    assert "伏笔0" in kwargs["mention_text"]
     assert len(packet.timeline_events) == 8
     assert packet.timeline_events[0]["chapter_number"] == 42
     assert packet.timeline_events[-1]["chapter_number"] == 49
@@ -233,8 +284,9 @@ def test_apply_context_needed_clips_properties_and_keeps_deaths():
         project_id="p",
         chapter_number=50,
     )
-    assert enriched["character_context"].startswith("- 甲: …")
+    assert enriched["character_context"].startswith("- 甲: 甲")
     assert "甲" * 400 not in enriched["character_context"]
+    assert len(enriched["character_context"]) <= len("- 甲: ") + 160
     actions = [event["action"] for event in enriched["timeline_events"]]
     assert "甲死亡" in actions
     assert "买菜" not in actions

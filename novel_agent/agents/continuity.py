@@ -4,6 +4,7 @@ from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.schema.validator import OutputValidator
+from novel_agent.services.context import format_timeline_event, format_timeline_findings
 from novel_agent.tools.continuity import CheckContinuityTool
 
 CONTINUITY_TOOL_SECTION = """## 工具
@@ -172,17 +173,12 @@ class ContinuityAgent(BaseAgent):
         if events:
             lines = ["## 已发生的关键事件"]
             for ev in events:
-                desc = ev.get("description") or ev.get("summary") or str(ev)
-                ch = ev.get("chapter_number", "?")
-                lines.append(f"- [第{ch}章] {desc}")
+                lines.append(format_timeline_event(ev))
             parts.append("\n".join(lines))
 
-        findings = packet.get("timeline_findings") or []
-        if findings:
-            lines = ["## 时间线警告"]
-            for f in findings:
-                lines.append(f"- {f.get('description', f) if isinstance(f, dict) else f}")
-            parts.append("\n".join(lines))
+        timeline_warnings = format_timeline_findings(packet.get("timeline_findings") or [])
+        if timeline_warnings:
+            parts.append("## 时间线警告\n" + timeline_warnings)
 
         foreshadowings = packet.get("unresolved_foreshadowings") or []
         if foreshadowings:

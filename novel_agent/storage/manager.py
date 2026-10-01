@@ -32,6 +32,116 @@ def _excerpt(text: str, limit: int | None) -> str:
     return f"…{tail}"
 
 
+def _without_closing(text: str) -> str:
+    """Drop the last paragraph, or the last sentence when the chapter is one block."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    parts = [part.strip() for part in stripped.split("\n\n") if part.strip()]
+    if len(parts) >= 2:
+        return "\n\n".join(parts[:-1])
+    earlier = -1
+    for mark in "。！？":
+        index = stripped.rfind(mark)
+        if index <= 0:
+            continue
+        previous = max(stripped.rfind(item, 0, index) for item in "。！？")
+        earlier = max(earlier, previous)
+    if earlier > 0:
+        return stripped[: earlier + 1]
+    return ""
+
+
+def _body_before_closing(text: str, limit: int | None) -> str:
+    """Chapter body with the closing window removed."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    if limit is None or len(stripped) <= limit:
+        return _without_closing(stripped)
+    head = stripped[:-limit].rstrip()
+    if len(head) < 80:
+        return _without_closing(stripped)
+    return head
+
+
+def _excerpt_before_closing(text: str, limit: int | None) -> str:
+    """Sentence-bounded tail of the body before the closing window."""
+    body = _body_before_closing(text, limit)
+    if not body:
+        return ""
+    return _excerpt(body, limit)
+
+
+def _property_text(raw, limit: int | None) -> str:
+    """Head of an entity card. Later keys are one-off updates, not the identity."""
+    obj = raw if isinstance(raw, dict) else None
+    text = "" if raw is None else str(raw)
+    if obj is None and isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            obj = parsed
+    if isinstance(obj, dict):
+        parts = []
+        for key, value in obj.items():
+            if value is None or value == "":
+                continue
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            parts.append(f"{key}：{value}")
+        text = "；".join(parts)
+    if limit is None or len(text) <= limit:
+        return text
+    head = text[:limit]
+    for sep in ("；", "，", "。"):
+        index = head.rfind(sep)
+        if index >= limit // 2:
+            return head[:index]
+    return head
+
+
+def _appearance(row) -> int:
+    try:
+        if "first_appearance_chapter" in row.keys():
+            value = row["first_appearance_chapter"]
+        else:
+            value = row.get("first_appearance_chapter")
+        return int(value or 0)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return 0
+
+
+def _row_name(row) -> str:
+    if "name" in row.keys():
+        return str(row["name"] or "")
+    return str(row.get("name") or "")
+
+
+def _prefer_named(rows, limit: int | None, text: str):
+    """Keep names mentioned in the hint text, then the earliest rows, up to limit.
+
+    Leftover slots go to the stable cast, not the newest one-off entries.
+    """
+    if limit is None:
+        return list(rows)
+    chosen = []
+    rest = []
+    for row in rows:
+        name = _row_name(row)
+        if name and name in text:
+            chosen.append(row)
+        else:
+            rest.append(row)
+    chosen.sort(key=_appearance)
+    rest.sort(key=_appearance)
+    if len(chosen) >= limit:
+        return chosen[:limit]
+    return chosen + rest[: limit - len(chosen)]
+
+
 class ProjectManager:
     """Manages the lifecycle of a novel project."""
 
@@ -1367,12 +1477,16 @@ class ProjectManager:
         chapter_number: int,
         max_recent_chapters: int | None = 3,
         max_entities: int | None = None,
+        max_characters: int | None = None,
         excerpt_chars: int | None = None,
         property_chars: int | None = None,
+        mention_text: str = "",
     ) -> dict[str, str]:
         """Build context for writing a chapter: recent summary + character/world info.
 
         ``excerpt_chars`` keeps only the tail of each chapter draft.
+        ``max_entities`` caps non-character rows. ``max_characters`` caps people.
+        Names that appear in the recent excerpt are kept first.
         """
         recent = list(
             reversed(
@@ -1391,42 +1505,46 @@ class ProjectManager:
             draft = c.get("draft_content", "")
             if draft:
                 recent_summary_parts.append(
-                    f"第{c['chapter_number']}章: {_excerpt(draft, excerpt_chars)}"
+                    f"第{c['chapter_number']}章: "
+                    f"{_excerpt_before_closing(draft, excerpt_chars)}"
                 )
         recent_summary = "\n\n".join(recent_summary_parts) if recent_summary_parts else ""
 
         # Character context from world_entities
         with self._conn() as conn:
-            limit = " LIMIT ?" if max_entities is not None else ""
-            params = (
-                (project_id, max(max_entities, 0)) if max_entities is not None else (project_id,)
-            )
             chars = conn.execute(
                 "SELECT * FROM world_entities WHERE project_id = ? AND entity_type = 'character' "
-                "ORDER BY first_appearance_chapter DESC, name" + limit,
-                params,
+                "ORDER BY first_appearance_chapter DESC, name",
+                (project_id,),
             ).fetchall()
             world_ents = conn.execute(
                 "SELECT * FROM world_entities WHERE project_id = ? AND entity_type != 'character' "
-                "ORDER BY first_appearance_chapter DESC, name" + limit,
-                params,
+                "ORDER BY first_appearance_chapter DESC, name",
+                (project_id,),
             ).fetchall()
 
+        character_rows = _prefer_named(
+            chars,
+            max_characters if max_characters is not None else max_entities,
+            f"{recent_summary}\n{mention_text}",
+        )
+        world_rows = _prefer_named(world_ents, max_entities, f"{recent_summary}\n{mention_text}")
         character_context = (
             "\n".join(
-                f"- {c['name']}: {_excerpt(str(c['properties']), property_chars)}" for c in chars
+                f"- {c['name']}: {_property_text(c['properties'], property_chars)}"
+                for c in character_rows
             )
-            if chars
+            if character_rows
             else ""
         )
 
         world_context = (
             "\n".join(
                 f"- [{e['entity_type']}] {e['name']}: "
-                f"{_excerpt(str(e['properties']), property_chars)}"
-                for e in world_ents
+                f"{_property_text(e['properties'], property_chars)}"
+                for e in world_rows
             )
-            if world_ents
+            if world_rows
             else ""
         )
 
@@ -1442,8 +1560,10 @@ class ProjectManager:
         chapter_number: int,
         max_recent_chapters: int | None = 3,
         max_entities: int | None = None,
+        max_characters: int | None = None,
         excerpt_chars: int | None = None,
         property_chars: int | None = None,
+        mention_text: str = "",
     ) -> dict[str, str]:
         """Build context only from the immutable Canon snapshot payload."""
         payload = snapshot.get("payload", snapshot)
@@ -1459,7 +1579,8 @@ class ProjectManager:
             draft = chapter.get("draft_content", "")
             if draft:
                 recent_parts.append(
-                    f"第{chapter['chapter_number']}章: {_excerpt(draft, excerpt_chars)}"
+                    f"第{chapter['chapter_number']}章: "
+                    f"{_excerpt_before_closing(draft, excerpt_chars)}"
                 )
         characters = [
             entity
@@ -1471,19 +1592,25 @@ class ProjectManager:
             for entity in payload.get("entities", [])
             if entity.get("entity_type") != "character"
         ]
-        if max_entities is not None:
-            entity_limit = max(max_entities, 0)
-            characters = characters[:entity_limit]
-            world_entities = world_entities[:entity_limit]
+        recent_summary = "\n\n".join(recent_parts)
+        if max_entities is not None or max_characters is not None:
+            characters = _prefer_named(
+                characters,
+                max_characters if max_characters is not None else max_entities,
+                f"{recent_summary}\n{mention_text}",
+            )
+            world_entities = _prefer_named(
+                world_entities, max_entities, f"{recent_summary}\n{mention_text}"
+            )
         return {
-            "recent_summary": "\n\n".join(recent_parts),
+            "recent_summary": recent_summary,
             "character_context": "\n".join(
-                f"- {entity['name']}: {_excerpt(str(entity['properties']), property_chars)}"
+                f"- {entity['name']}: {_property_text(entity['properties'], property_chars)}"
                 for entity in characters
             ),
             "world_context": "\n".join(
                 f"- [{entity['entity_type']}] {entity['name']}: "
-                f"{_excerpt(str(entity['properties']), property_chars)}"
+                f"{_property_text(entity['properties'], property_chars)}"
                 for entity in world_entities
             ),
         }

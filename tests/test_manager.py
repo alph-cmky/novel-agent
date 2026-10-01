@@ -227,18 +227,23 @@ class TestChapterCRUD:
         assert [event["action"] for event in events] == ["乙战死", "乙又出现了", "到达"]
 
     def test_build_context_clips_entity_properties(self, tmp_path):
-        """属性超过上限时只留尾部摘录，名字仍在。"""
+        """属性超过上限时留开头的稳定字段，名字仍在。"""
         mgr = _make_manager(tmp_path)
         pid = mgr.init_project(name="p")
-        bio = "甲" * 400
-        entity = {"entity_type": "character", "name": "甲", "properties": {"bio": bio}}
+        late = "乙" * 400
+        entity = {
+            "entity_type": "character",
+            "name": "甲",
+            "properties": {"身份": "巡查", "近况": late},
+        }
         mgr.save_world_entities(pid, {"new_entities": [entity]}, 1)
 
         ctx = mgr.build_context(pid, chapter_number=2, property_chars=160)
+        text = ctx["character_context"]
 
-        assert ctx["character_context"].startswith("- 甲: …")
-        assert bio not in ctx["character_context"]
-        assert len(ctx["character_context"]) < len(bio)
+        assert text.startswith("- 甲: 身份：巡查")
+        assert late not in text
+        assert len(text) <= len("- 甲: ") + 160
 
     def test_get_relevant_world_entities_name_match(self, tmp_path):
         """Phase L: 超过 limit 的大项目只返回正文点名的实体。"""

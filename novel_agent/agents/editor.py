@@ -11,6 +11,7 @@ Evolution composite 与外部 Judge 评分同构，消除维度错位导致的�
 from novel_agent.agents.base import AgentConfig, BaseAgent, TraceStep
 from novel_agent.schema.parser import parse_json_response
 from novel_agent.schema.validator import OutputValidator
+from novel_agent.services.context import format_timeline_events, format_timeline_findings
 
 EDITOR_SYSTEM_PROMPT = """你是一个极其严苛的网文金牌主审编辑，负责把控正文质量，绝不给面子分，必须依据扣分阶梯真实客观打分。
 
@@ -218,7 +219,8 @@ class EditorAgent(BaseAgent):
             fs = packet["unresolved_foreshadowings"]
             parts.append("## 待回收伏笔\n" + "\n".join(f"- {item}" for item in fs))
         if packet.get("timeline_events"):
-            parts.append(f"## 已发生的关键事件\n{packet['timeline_events']}")
-        if packet.get("timeline_findings"):
-            parts.append(f"## 时间线警告\n{packet['timeline_findings']}")
+            parts.append("## 已发生的关键事件\n" + format_timeline_events(packet["timeline_events"]))
+        timeline_warnings = format_timeline_findings(packet.get("timeline_findings") or [])
+        if timeline_warnings:
+            parts.append("## 时间线警告\n" + timeline_warnings)
         return "\n\n".join(parts) if parts else ""
